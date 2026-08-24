@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Oil &amp; Gas Dashboard</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Vue 3 CDN (ESM build) -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+  <!-- App entry — must be a module for ES imports to work.
+       Vue is loaded as a global (window.Vue) from the CDN script above,
+       so components can reference Vue.ref, Vue.reactive, etc. directly. -->
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

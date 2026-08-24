@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Local config overrides (keep config.json defaults, ignore personal copies)
+oilgas-config.json
+
+# Logs
+*.log
