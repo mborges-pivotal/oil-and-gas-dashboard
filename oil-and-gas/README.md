@@ -5,16 +5,42 @@ A browser-only single-page app (SPA) for tracking oil prices, gas prices, O&G st
 ## Quick Start
 
 ```bash
-# Serve the directory (any static server works)
+./run.sh
+```
+
+This starts both the static server and the local Yahoo Finance CORS relay
+together, and always serves from this directory regardless of where you run
+it from — safer than running `npx serve .` by hand, which serves the wrong
+directory (and 404s on everything) if run one level too high, e.g. from the
+repo root instead of here. On macOS you can also just double-click
+`run.command`.
+
+<details>
+<summary>Manual / without run.sh</summary>
+
+```bash
+# Serve the directory (any static server works) — run from THIS directory
 npx serve .
 
 # Or with Python
 python3 -m http.server 8080
+
+# Also start the local Yahoo Finance CORS relay (needed for Oil Prices + Stocks tabs)
+node local-proxy.js
 ```
+</details>
 
 Then open `http://localhost:3000` (or 8080) in your browser.
 
 > **Note:** The app must be served over HTTP — not opened as `file://` — because ES module imports require a server origin.
+
+> **Note:** `query1.finance.yahoo.com` doesn't send CORS headers, so browser
+> requests to it always fail directly. `local-proxy.js` is a small,
+> dependency-free Node relay (listens on port 8787) that fetches Yahoo
+> Finance server-side instead of depending on a public CORS-bypass proxy
+> (those are unreliable and are often blocked by corporate network
+> filtering). Without it running, Oil Prices and Stocks will show
+> "Unavailable".
 
 ## Features
 

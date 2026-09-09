@@ -55,7 +55,13 @@ export default {
       return `${days}d ago`;
     }
 
-    return { articles, loading, feedErrors, lastUpdated, feeds, refresh, relativeTime, formatDate };
+    // Some feed-provided image URLs 404 or block hotlinking — hide the
+    // broken image instead of showing the browser's broken-image icon.
+    function onImageError(e) {
+      e.target.closest('a').style.display = 'none';
+    }
+
+    return { articles, loading, feedErrors, lastUpdated, feeds, refresh, relativeTime, formatDate, onImageError };
   },
   template: `
     <div>
@@ -82,24 +88,35 @@ export default {
 
       <!-- Loading -->
       <template v-if="loading">
-        <div v-for="i in 6" :key="i" style="padding:12px 0;border-bottom:1px solid var(--border)">
-          <div class="skeleton" style="width:40%;height:12px;margin-bottom:6px"></div>
-          <div class="skeleton" style="width:80%;height:14px;margin-bottom:4px"></div>
-          <div class="skeleton" style="width:90%;height:12px"></div>
+        <div class="news-grid">
+          <div class="news-card" v-for="i in 6" :key="i">
+            <div class="skeleton news-card-image"></div>
+            <div class="news-card-body">
+              <div class="skeleton" style="width:40%;height:12px;margin-bottom:8px"></div>
+              <div class="skeleton" style="width:90%;height:14px;margin-bottom:4px"></div>
+              <div class="skeleton" style="width:70%;height:14px;margin-bottom:8px"></div>
+              <div class="skeleton" style="width:100%;height:12px"></div>
+            </div>
+          </div>
         </div>
       </template>
 
-      <!-- Article list -->
-      <div class="news-list" v-else-if="articles.length">
-        <div class="news-item" v-for="(article, i) in articles" :key="article.link || i">
-          <div class="news-meta">
-            <span class="source-badge">{{ article.source }}</span>
-            <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
+      <!-- Article grid -->
+      <div class="news-grid" v-else-if="articles.length">
+        <div class="news-card" v-for="(article, i) in articles" :key="article.link || i">
+          <a v-if="article.image" :href="article.link" target="_blank" rel="noopener">
+            <img class="news-card-image" :src="article.image" alt="" loading="lazy" @error="onImageError" />
+          </a>
+          <div class="news-card-body">
+            <div class="news-meta">
+              <span class="source-badge">{{ article.source }}</span>
+              <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
+            </div>
+            <div class="news-title">
+              <a :href="article.link" target="_blank" rel="noopener">{{ article.title }}</a>
+            </div>
+            <div class="news-snippet" v-if="article.description">{{ article.description }}</div>
           </div>
-          <div class="news-title">
-            <a :href="article.link" target="_blank" rel="noopener">{{ article.title }}</a>
-          </div>
-          <div class="news-snippet" v-if="article.description">{{ article.description }}</div>
         </div>
       </div>
 

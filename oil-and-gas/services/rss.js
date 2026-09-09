@@ -18,7 +18,9 @@ const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Fetch a single RSS feed and return a normalized array of article objects.
- * Each item: { title, link, pubDate: ISO string, description, source }
+ * Each item: { title, link, pubDate: ISO string, description, image, source }
+ * `image` is a URL string, or null when the feed doesn't provide one — most
+ * feeds (OilPrice.com, Rigzone, EIA) don't include article images at all.
  *
  * @param {string} feedUrl    RSS feed URL
  * @param {string} sourceName Human-readable source label
@@ -43,21 +45,32 @@ export async function fetchFeed(feedUrl, sourceName, proxy = 'rss2json') {
 }
 
 async function fetchViaRss2Json(feedUrl, sourceName) {
-  const url = `${RSS2JSON}?rss_url=${encodeURIComponent(feedUrl)}&count=20`;
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
-  const json = await res.json();
-  if (json.status !== 'ok') {
-    // Fallback to allorigins on rss2json error
+  // No `count` param: rss2json's free tier now rejects it outright (422,
+  // "you need a valid api key"). The default (~10 items) is fine here.
+  const url = `${RSS2JSON}?rss_url=${encodeURIComponent(feedUrl)}`;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    // rss2json returns a non-2xx status for its own errors (invalid feed,
+    // upstream fetch failure, etc.), not a 200 with status:"error" — so the
+    // fallback below must cover both cases, not just a parsed error body.
+    if (!res.ok) throw new Error(`rss2json HTTP ${res.status}`);
+    const json = await res.json();
+    if (json.status !== 'ok') throw new Error(json.message || 'rss2json returned an error');
+    return (json.items ?? []).map(item => ({
+      title: item.title ?? '',
+      link: item.link ?? '',
+      pubDate: item.pubDate ? new Date(item.pubDate).toISOString() : '',
+      description: stripHtml(item.description ?? '').slice(0, 200),
+      image: (item.thumbnail && item.thumbnail.trim())
+        || (item.enclosure?.type?.startsWith('image') ? item.enclosure.link : null)
+        || extractImageFromHtml(item.content || item.description)
+        || null,
+      source: sourceName,
+    }));
+  } catch {
+    // Fallback to allorigins on any rss2json failure
     return fetchViaAllorigins(feedUrl, sourceName);
   }
-  return (json.items ?? []).map(item => ({
-    title: item.title ?? '',
-    link: item.link ?? '',
-    pubDate: item.pubDate ? new Date(item.pubDate).toISOString() : '',
-    description: stripHtml(item.description ?? '').slice(0, 200),
-    source: sourceName,
-  }));
 }
 
 async function fetchViaAllorigins(feedUrl, sourceName) {
@@ -70,12 +83,19 @@ async function fetchViaAllorigins(feedUrl, sourceName) {
   const items = Array.from(doc.getElementsByTagName('item'));
   return items.slice(0, 20).map(item => {
     const get = tag => item.getElementsByTagName(tag)[0]?.textContent ?? '';
+    const getAttr = (tag, attr) => item.getElementsByTagName(tag)[0]?.getAttribute(attr) ?? '';
     const pubDate = get('pubDate');
+    const description = get('description');
     return {
       title: get('title'),
       link: get('link') || get('guid'),
       pubDate: pubDate ? new Date(pubDate).toISOString() : '',
-      description: stripHtml(get('description')).slice(0, 200),
+      description: stripHtml(description).slice(0, 200),
+      image: getAttr('enclosure', 'url')
+        || getAttr('media:content', 'url')
+        || getAttr('media:thumbnail', 'url')
+        || extractImageFromHtml(description)
+        || null,
       source: sourceName,
     };
   });
@@ -83,6 +103,12 @@ async function fetchViaAllorigins(feedUrl, sourceName) {
 
 function stripHtml(str) {
   return str.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function extractImageFromHtml(html) {
+  if (!html) return null;
+  const match = html.match(/<img[^>]+src=["']([^"'>]+)["']/i);
+  return match ? match[1] : null;
 }
 
 /**

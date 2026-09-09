@@ -1,28 +1,60 @@
 /**
  * Yahoo Finance unofficial API service.
- * Uses query1.finance.yahoo.com with allorigins.win as CORS fallback.
+ * Uses query1.finance.yahoo.com with a local CORS relay as fallback
+ * (see local-proxy.js — run `node local-proxy.js` alongside `serve`).
+ * Public CORS-bypass proxies (allorigins.win, etc.) were dropped: they're
+ * unreliable as a service and are often blocked outright by corporate
+ * network filtering as "proxy/anonymizer" sites.
  */
 
 const BASE = 'https://query1.finance.yahoo.com';
-const PROXY = 'https://api.allorigins.win/raw?url=';
+const DEFAULT_LOCAL_PROXY_URL = 'http://localhost:8787/proxy?url=';
+
+// Configurable from Settings — see configureYahooFinance().
+let corsProxyMode = 'local';               // 'local' | 'none'
+let localProxyUrl = DEFAULT_LOCAL_PROXY_URL;
+
+/**
+ * Configure how this service works around Yahoo Finance's missing CORS
+ * headers. Called from app.js whenever config loads or is saved.
+ *
+ * @param {object} settings
+ * @param {'local'|'none'} [settings.corsProxy]  'local' routes through the
+ *   local relay (local-proxy.js); 'none' makes direct-only requests, which
+ *   will fail in-browser unless something else on the network allows it.
+ * @param {string} [settings.localProxyUrl]  Relay endpoint, including the
+ *   trailing `?url=` (or `&url=`) query prefix.
+ */
+export function configureYahooFinance(settings = {}) {
+  corsProxyMode = settings.corsProxy === 'none' ? 'none' : 'local';
+  localProxyUrl = settings.localProxyUrl || DEFAULT_LOCAL_PROXY_URL;
+}
 
 async function fetchWithFallback(url) {
+  // Cache-bust: some proxies/shared caches (notably Safari's cross-origin
+  // subresource cache) can still return a 304 here despite no-store, and
+  // response.ok is false for 304 — a unique query param prevents any
+  // intermediary from matching this request to a prior response.
+  const bustedUrl = url + (url.includes('?') ? '&' : '?') + '_ts=' + Date.now();
   try {
-    const res = await fetch(url, { cache: 'no-store' });
+    const res = await fetch(bustedUrl, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
-  } catch {
-    // CORS fallback via allorigins proxy
-    const proxied = PROXY + encodeURIComponent(url);
+  } catch (directErr) {
+    if (corsProxyMode === 'none') {
+      throw new Error(`Direct request failed and no proxy is configured (Settings → Yahoo Finance CORS Proxy): ${directErr.message}`);
+    }
+    // CORS fallback via the local relay (node local-proxy.js)
+    const proxied = localProxyUrl + encodeURIComponent(bustedUrl);
     const res = await fetch(proxied, { cache: 'no-store' });
-    if (!res.ok) throw new Error(`Proxy HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Local proxy HTTP ${res.status}. Is 'node local-proxy.js' running?`);
     return res.json();
   }
 }
 
 /**
  * Fetch current quote data for a single symbol.
- * Returns: { symbol, shortName, price, previousClose, change, pctChange, currency }
+ * Returns: { symbol, shortName, price, previousClose, change, pctChange, volume, currency }
  */
 export async function fetchQuote(symbol) {
   const url = `${BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
@@ -41,29 +73,27 @@ export async function fetchQuote(symbol) {
     previousClose: prev,
     change,
     pctChange,
+    volume: meta.regularMarketVolume ?? null,
     currency: meta.currency ?? 'USD',
   };
 }
 
 /**
- * Fetch batch quotes for multiple symbols using the v7 endpoint.
- * Returns an array of quote objects.
+ * Fetch quotes for multiple symbols.
+ *
+ * Uses the v8/finance/chart endpoint (one request per symbol) rather than
+ * the v7/finance/quote batch endpoint: Yahoo now gates v7/finance/quote
+ * behind crumb/cookie auth and it returns 401 without it, while v8 stays
+ * open. A single bad symbol won't fail the whole batch.
+ *
+ * Returns an array of quote objects (only for symbols that succeeded).
  */
 export async function fetchBatchQuotes(symbols) {
   if (!symbols.length) return [];
-  const joined = symbols.map(encodeURIComponent).join(',');
-  const url = `${BASE}/v7/finance/quote?symbols=${joined}&fields=regularMarketPrice,regularMarketChangePercent,regularMarketChange,regularMarketVolume,shortName,currency`;
-  const data = await fetchWithFallback(url);
-  const results = data?.quoteResponse?.result ?? [];
-  return results.map(q => ({
-    symbol: q.symbol,
-    shortName: q.shortName ?? q.symbol,
-    price: q.regularMarketPrice ?? null,
-    change: q.regularMarketChange ?? null,
-    pctChange: q.regularMarketChangePercent ?? null,
-    volume: q.regularMarketVolume ?? null,
-    currency: q.currency ?? 'USD',
-  }));
+  const settled = await Promise.allSettled(symbols.map(fetchQuote));
+  return settled
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
 }
 
 /**

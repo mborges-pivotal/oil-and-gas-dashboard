@@ -303,13 +303,35 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 /* ============================================================
    News
    ============================================================ */
-.news-list { display: flex; flex-direction: column; gap: 1px; }
-.news-item {
-  padding: 12px 0;
-  border-bottom: 1px solid var(--border);
+.news-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
 }
-.news-item:last-child { border-bottom: none; }
-.news-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.news-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color var(--transition);
+}
+.news-card:hover { border-color: var(--text-muted); }
+.news-card-image {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+  background: var(--surface-2);
+}
+.news-card-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  padding: 12px 14px 14px;
+}
+.news-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .source-badge {
   font-size: 10px;
   font-weight: 600;
@@ -322,8 +344,19 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   color: var(--text-muted);
 }
 .news-date { font-size: 11px; color: var(--text-muted); }
-.news-title { font-size: 14px; font-weight: 500; margin-bottom: 3px; }
-.news-snippet { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+.news-title { font-size: 14px; font-weight: 600; line-height: 1.35; margin-bottom: 6px; }
+.news-title a { color: var(--text); text-decoration: none; }
+.news-title a:hover { color: var(--accent-hover); text-decoration: underline; }
+.news-snippet {
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 /* ============================================================
    Documents / Accordion
@@ -378,8 +411,70 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   padding: 16px 20px;
   margin-bottom: 24px;
 }
-.crack-spread-card .crack-value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+.crack-spread-card .crack-value { font-size: 28px; font-weight: 700; }
 .crack-spread-card .crack-formula { font-size: 11px; color: var(--text-muted); margin-top: 6px; }
+.crack-value-row { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.crack-indicator-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.crack-indicator-dot.tier-modest { background: var(--text-muted); }
+.crack-indicator-dot.tier-healthy { background: var(--positive); }
+.crack-indicator-dot.tier-very-strong { background: var(--warning); }
+.crack-indicator-dot.tier-extremely-strong { background: var(--negative); }
+.crack-tier-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.crack-tier-label.tier-modest { color: var(--text-muted); }
+.crack-tier-label.tier-healthy { color: var(--positive); }
+.crack-tier-label.tier-very-strong { color: var(--warning); }
+.crack-tier-label.tier-extremely-strong { color: var(--negative); }
+
+/* ============================================================
+   Historical Price Chart
+   ============================================================ */
+.chart-filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.range-btn-group { display: flex; gap: 4px; }
+.range-btn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.range-btn:hover { background: var(--border); }
+.range-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.history-chart-wrap { position: relative; }
+.history-chart-svg { width: 100%; height: auto; display: block; }
+.chart-gridline { stroke: var(--border); stroke-width: 1; }
+.chart-axis-label { fill: var(--text-muted); font-size: 10px; }
+.chart-line { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-end-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.chart-crosshair { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.chart-hover-dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.chart-tooltip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.chart-tooltip-value { font-size: 13px; font-weight: 700; color: var(--text); }
+.chart-tooltip-date { font-size: 10px; color: var(--text-muted); }
 
 /* ============================================================
    Utility

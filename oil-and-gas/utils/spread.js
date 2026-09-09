@@ -24,3 +24,22 @@ export function calcCrackSpread(gasPriceUSDgal, dieselPriceUSDgal, crudePriceUSD
   const diesel_bbl = dieselPriceUSDgal * GALS_PER_BBL;
   return (2 * gasoline_bbl + 1 * diesel_bbl - 3 * crudePriceUSDbbl) / 3;
 }
+
+// Fallback for configs saved before crackSpreadThresholds existed.
+export const DEFAULT_CRACK_SPREAD_THRESHOLDS = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
+
+/**
+ * Classify a 3-2-1 crack spread (USD/bbl) into a strength tier using
+ * user-configurable boundaries.
+ *
+ * @param {number} value USD/bbl crack spread
+ * @param {{modestMax:number, healthyMax:number, veryStrongMax:number}} [thresholds]
+ * @returns {{slug: string, label: string}}
+ */
+export function classifyCrackSpread(value, thresholds = DEFAULT_CRACK_SPREAD_THRESHOLDS) {
+  const { modestMax, healthyMax, veryStrongMax } = thresholds;
+  if (value <= modestMax) return { slug: 'modest', label: 'Normal / Modest' };
+  if (value <= healthyMax) return { slug: 'healthy', label: 'Healthy' };
+  if (value <= veryStrongMax) return { slug: 'very-strong', label: 'Very Strong' };
+  return { slug: 'extremely-strong', label: 'Extremely Strong' };
+}

@@ -3,10 +3,15 @@
  *
  * All endpoints are free, no API key required.
  * CORS: data.sec.gov and efts.sec.gov return Access-Control-Allow-Origin: *
+ * www.sec.gov (used below for the ticker→CIK lookup) does NOT — browser
+ * fetches to it always fail with a generic "Failed to fetch", so it falls
+ * back through the local relay (local-proxy.js), same as Yahoo Finance.
  *
  * Rate limit: SEC enforces 10 req/sec per IP.
  * We add a 150ms minimum stagger between company fetches in the component.
  */
+
+const LOCAL_PROXY = 'http://localhost:8787/proxy?url=';
 
 // In-memory session cache
 let cikMap = null;                          // ticker (upper) → cik (number)
@@ -18,9 +23,18 @@ const submissionsCache = new Map();         // cik_str → submissions data
  */
 export async function loadCIKMap() {
   if (cikMap) return cikMap;
-  const res = await fetch('https://www.sec.gov/files/company_tickers.json', { cache: 'force-cache' });
-  if (!res.ok) throw new Error(`EDGAR CIK map HTTP ${res.status}`);
-  const json = await res.json();
+  const url = 'https://www.sec.gov/files/company_tickers.json';
+  let json;
+  try {
+    const res = await fetch(url, { cache: 'force-cache' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    json = await res.json();
+  } catch {
+    // CORS fallback via the local relay (node local-proxy.js)
+    const res = await fetch(LOCAL_PROXY + encodeURIComponent(url), { cache: 'no-store' });
+    if (!res.ok) throw new Error(`EDGAR CIK map: local proxy HTTP ${res.status}. Is 'node local-proxy.js' running?`);
+    json = await res.json();
+  }
   cikMap = {};
   for (const entry of Object.values(json)) {
     cikMap[entry.ticker.toUpperCase()] = entry.cik_str;

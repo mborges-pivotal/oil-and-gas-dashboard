@@ -14,7 +14,7 @@ export async function loadConfig() {
     }
   }
   // Fetch defaults from bundled config.json
-  const res = await fetch('./config.json');
+  const res = await fetch('./config.json', { cache: 'no-store' });
   const defaults = await res.json();
   saveConfig(defaults);
   return defaults;

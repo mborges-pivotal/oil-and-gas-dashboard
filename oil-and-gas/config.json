@@ -1,17 +1,25 @@
 {
   "eiaApiKey": "",
   "stocks": {
-    "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG"]
+    "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG", "NOV", "KMI"]
   },
   "oilIndexes": {
     "symbols": ["BZ=F", "CL=F", "NG=F", "HO=F", "RB=F"],
     "defaultSpreadA": "BZ=F",
     "defaultSpreadB": "CL=F"
   },
+  "yahooFinance": {
+    "corsProxy": "local",
+    "localProxyUrl": "http://localhost:8787/proxy?url="
+  },
+  "crackSpreadThresholds": {
+    "modestMax": 15,
+    "healthyMax": 25,
+    "veryStrongMax": 35
+  },
   "news": {
     "feeds": [
-      { "name": "Reuters Business", "url": "https://feeds.reuters.com/reuters/businessNews" },
-      { "name": "EIA News", "url": "https://www.eia.gov/rss/news.xml" },
+      { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml" },
       { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main" },
       { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx" }
     ],

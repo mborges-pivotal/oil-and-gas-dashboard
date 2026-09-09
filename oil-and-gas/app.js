@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig, exportConfig } from './utils/config.js';
+import { configureYahooFinance } from './services/yahooFinance.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import OilPricesComponent from './components/OilPrices.js';
@@ -16,6 +17,13 @@ const SettingsPanel = {
   setup(props, { emit }) {
     // Work on a deep clone so changes aren't live until saved
     const local = reactive(JSON.parse(JSON.stringify(props.config)));
+    // Configs saved before this setting existed won't have this section
+    if (!local.yahooFinance) {
+      local.yahooFinance = { corsProxy: 'local', localProxyUrl: 'http://localhost:8787/proxy?url=' };
+    }
+    if (!local.crackSpreadThresholds) {
+      local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
+    }
 
     // Stock ticker add
     const newTicker = ref('');
@@ -101,6 +109,51 @@ const SettingsPanel = {
         </div>
       </div>
 
+      <!-- Yahoo Finance CORS Proxy -->
+      <div class="settings-section">
+        <h3>Yahoo Finance CORS Proxy</h3>
+        <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+          Yahoo Finance doesn't send CORS headers, so the browser can't call it directly.
+          By default this app routes through a small local relay — run
+          <code>node local-proxy.js</code> alongside the static server. Switch to
+          "Direct only" to skip that extra step, but Oil Prices and Stocks will show
+          "Unavailable" unless something else on your network allows direct access.
+        </p>
+        <div class="settings-row">
+          <label style="display:inline;margin:0;margin-right:8px">Proxy mode:</label>
+          <select v-model="local.yahooFinance.corsProxy">
+            <option value="local">Local relay (node local-proxy.js)</option>
+            <option value="none">Direct only (no proxy)</option>
+          </select>
+        </div>
+        <div class="settings-row" style="margin-top:10px" v-if="local.yahooFinance.corsProxy === 'local'">
+          <label style="display:inline;margin:0;margin-right:8px">Relay URL:</label>
+          <input v-model="local.yahooFinance.localProxyUrl" style="flex:1;max-width:400px" placeholder="http://localhost:8787/proxy?url=" />
+        </div>
+      </div>
+
+      <!-- Crack Spread Thresholds -->
+      <div class="settings-section">
+        <h3>Crack Spread Strength Thresholds (USD/bbl)</h3>
+        <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+          Boundaries for the strength indicator shown next to the 3-2-1 crack spread
+          on the Gas Prices tab. Each tier covers up to its value; anything above
+          "Very Strong up to" is classified Extremely Strong.
+        </p>
+        <div class="settings-row" style="margin-bottom:8px">
+          <label style="display:inline;margin:0;margin-right:8px;width:170px">Normal / Modest up to</label>
+          <input v-model.number="local.crackSpreadThresholds.modestMax" type="number" step="0.5" style="width:100px" />
+        </div>
+        <div class="settings-row" style="margin-bottom:8px">
+          <label style="display:inline;margin:0;margin-right:8px;width:170px">Healthy up to</label>
+          <input v-model.number="local.crackSpreadThresholds.healthyMax" type="number" step="0.5" style="width:100px" />
+        </div>
+        <div class="settings-row">
+          <label style="display:inline;margin:0;margin-right:8px;width:170px">Very Strong up to</label>
+          <input v-model.number="local.crackSpreadThresholds.veryStrongMax" type="number" step="0.5" style="width:100px" />
+        </div>
+      </div>
+
       <!-- Stock Tickers -->
       <div class="settings-section">
         <h3>Stock Watchlist Tickers</h3>
@@ -171,6 +224,10 @@ const App = {
     const activeTab = ref('oil');
     const configLoaded = ref(false);
     const saveNotice = ref(false);
+    // Bumped on reset to force SettingsPanel to remount — it clones config
+    // into local state once at setup(), so it needs a fresh instance to
+    // pick up the reset values instead of showing stale form state.
+    const settingsKey = ref(0);
 
     const tabs = [
       { id: 'oil',       label: 'Oil Prices' },
@@ -183,12 +240,14 @@ const App = {
 
     onMounted(async () => {
       config.value = await loadConfig();
+      configureYahooFinance(config.value.yahooFinance);
       configLoaded.value = true;
     });
 
     function onSaveConfig(updated) {
       config.value = updated;
       saveConfig(updated);
+      configureYahooFinance(updated.yahooFinance);
       saveNotice.value = true;
       setTimeout(() => { saveNotice.value = false; }, 2500);
     }
@@ -196,9 +255,11 @@ const App = {
     async function onResetConfig() {
       if (!confirm('Reset all settings to defaults? This cannot be undone.')) return;
       localStorage.removeItem('oilgas_config');
-      const res = await fetch('./config.json');
+      const res = await fetch('./config.json', { cache: 'no-store' });
       config.value = await res.json();
       saveConfig(config.value);
+      configureYahooFinance(config.value.yahooFinance);
+      settingsKey.value++;
     }
 
     function onExportConfig(cfg) { exportConfig(cfg); }
@@ -206,7 +267,7 @@ const App = {
     // Provide config to all child components
     provide('config', config);
 
-    return { config, configLoaded, activeTab, tabs, saveNotice, onSaveConfig, onResetConfig, onExportConfig };
+    return { config, configLoaded, activeTab, tabs, saveNotice, settingsKey, onSaveConfig, onResetConfig, onExportConfig };
   },
   template: `
     <div id="app">
@@ -235,7 +296,7 @@ const App = {
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Documents     v-if="activeTab === 'documents'" :config="config" />
-          <SettingsPanel v-if="activeTab === 'settings'"  :config="config"
+          <SettingsPanel v-if="activeTab === 'settings'"  :key="settingsKey" :config="config"
             @save="onSaveConfig"
             @export="onExportConfig"
             @reset="onResetConfig"
