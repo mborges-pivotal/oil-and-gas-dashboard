@@ -16,6 +16,11 @@
 
 const RSS2JSON = 'https://api.rss2json.com/v1/api.json';
 const ALLORIGINS = 'https://api.allorigins.win/raw?url=';
+// Same-origin relay (server.js) — last-resort fallback for feeds whose host
+// blocks the well-known IPs of public scraping proxies like rss2json/
+// allorigins (common on IR-platform sites) but allows ordinary requests.
+// Only hosts in server.js's ALLOWED_HOSTS are actually relayed.
+const LOCAL_PROXY = '/proxy?url=';
 
 // In-memory cache: feedUrl → { timestamp: ms, items: [] }
 const feedCache = new Map();
@@ -63,7 +68,11 @@ export async function fetchFeed(feedUrl, sourceName, proxy = 'rss2json') {
   if (proxy === 'rss2json') {
     items = await fetchViaRss2Json(feedUrl, sourceName);
   } else {
-    items = await fetchViaAllorigins(feedUrl, sourceName);
+    try {
+      items = await fetchViaAllorigins(feedUrl, sourceName);
+    } catch {
+      items = await fetchViaLocalProxy(feedUrl, sourceName);
+    }
   }
 
   feedCache.set(cacheKey, { timestamp: Date.now(), items });
@@ -102,11 +111,15 @@ async function fetchViaRss2Json(feedUrl, sourceName) {
       source: sourceName,
     }));
   } catch (err) {
-    // Don't fall back if the feed host itself is blocking — allorigins will
-    // fail too, just more slowly.
-    if (err instanceof FeedBlockedError) throw err;
-    // Fallback to allorigins on any other rss2json failure
-    return fetchViaAllorigins(feedUrl, sourceName);
+    // rss2json failed (blocked or otherwise) — try allorigins, then our own
+    // relay as a last resort. Unlike rss2json/allorigins, the local relay
+    // isn't a well-known proxy IP that sites specifically blocklist, so it
+    // can succeed even when both public proxies are blocked.
+    try {
+      return await fetchViaAllorigins(feedUrl, sourceName);
+    } catch {
+      return fetchViaLocalProxy(feedUrl, sourceName);
+    }
   }
 }
 
@@ -125,7 +138,22 @@ async function fetchViaAllorigins(feedUrl, sourceName) {
     if (res.status >= 400 && res.status < 500) throw new FeedBlockedError(res.status);
     throw new Error(`allorigins HTTP ${res.status}`);
   }
-  const text = await res.text();
+  return parseXmlFeed(await res.text(), sourceName);
+}
+
+async function fetchViaLocalProxy(feedUrl, sourceName) {
+  const url = `${LOCAL_PROXY}${encodeURIComponent(feedUrl)}`;
+  const res = await fetchWithTimeout(url, { cache: 'no-store' });
+  if (!res.ok) {
+    // 403 here means either the feed host blocked us, or (more likely for a
+    // user-added feed) the host isn't in server.js's ALLOWED_HOSTS yet.
+    if (res.status >= 400 && res.status < 500) throw new FeedBlockedError(res.status);
+    throw new Error(`local proxy HTTP ${res.status}`);
+  }
+  return parseXmlFeed(await res.text(), sourceName);
+}
+
+function parseXmlFeed(text, sourceName) {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
 
   // Detect parse error (browser returns a <parsererror> document)

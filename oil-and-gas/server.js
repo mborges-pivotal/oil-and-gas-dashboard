@@ -19,7 +19,14 @@ const path = require('path');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
-const ALLOWED_HOSTS = new Set(['query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.sec.gov']);
+const ALLOWED_HOSTS = new Set([
+  'query1.finance.yahoo.com',
+  'query2.finance.yahoo.com',
+  'www.sec.gov',
+  // RSS feed hosts whose bot protection blocks rss2json/allorigins but
+  // allows ordinary requests — see services/rss.js's local-proxy fallback.
+  'investors.nov.com',
+]);
 
 // SEC's Fair Access policy (sec.gov/os/webmaster-faq#developers) requires a
 // real identifying User-Agent ("App Name contact@domain.com") on automated

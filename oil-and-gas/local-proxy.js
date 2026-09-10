@@ -27,7 +27,12 @@ const http = require('http');
 const https = require('https');
 
 const PORT = process.env.PROXY_PORT || 8787;
-const ALLOWED_HOSTS = new Set(['query1.finance.yahoo.com', 'query2.finance.yahoo.com', 'www.sec.gov']);
+const ALLOWED_HOSTS = new Set([
+  'query1.finance.yahoo.com',
+  'query2.finance.yahoo.com',
+  'www.sec.gov',
+  'investors.nov.com',
+]);
 
 // SEC's Fair Access policy (sec.gov/os/webmaster-faq#developers) requires a
 // real identifying User-Agent ("App Name contact@domain.com") on automated
