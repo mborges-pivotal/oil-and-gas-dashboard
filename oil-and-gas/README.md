@@ -8,39 +8,31 @@ A browser-only single-page app (SPA) for tracking oil prices, gas prices, O&G st
 ./run.sh
 ```
 
-This starts both the static server and the local Yahoo Finance CORS relay
-together, and always serves from this directory regardless of where you run
-it from — safer than running `npx serve .` by hand, which serves the wrong
-directory (and 404s on everything) if run one level too high, e.g. from the
-repo root instead of here. On macOS you can also just double-click
+This runs `server.js`, a single dependency-free Node process that serves the
+static app and relays the third-party APIs that don't send CORS headers
+(needed for Oil Prices + Stocks tabs), and always serves from this directory
+regardless of where you run it from. On macOS you can also just double-click
 `run.command`.
 
 <details>
 <summary>Manual / without run.sh</summary>
 
 ```bash
-# Serve the directory (any static server works) — run from THIS directory
-npx serve .
-
-# Or with Python
-python3 -m http.server 8080
-
-# Also start the local Yahoo Finance CORS relay (needed for Oil Prices + Stocks tabs)
-node local-proxy.js
+node server.js
+# or: PORT=8080 node server.js
 ```
 </details>
 
-Then open `http://localhost:3000` (or 8080) in your browser.
+Then open `http://localhost:3000` in your browser.
 
 > **Note:** The app must be served over HTTP — not opened as `file://` — because ES module imports require a server origin.
 
 > **Note:** `query1.finance.yahoo.com` doesn't send CORS headers, so browser
-> requests to it always fail directly. `local-proxy.js` is a small,
-> dependency-free Node relay (listens on port 8787) that fetches Yahoo
-> Finance server-side instead of depending on a public CORS-bypass proxy
-> (those are unreliable and are often blocked by corporate network
-> filtering). Without it running, Oil Prices and Stocks will show
-> "Unavailable".
+> requests to it always fail directly. `server.js` relays those requests
+> server-side (same origin, at `/proxy`) instead of depending on a public
+> CORS-bypass proxy (those are unreliable and are often blocked by corporate
+> network filtering). Without the server running, Oil Prices and Stocks will
+> show "Unavailable".
 
 ## Features
 
@@ -92,6 +84,8 @@ oil-and-gas/
 ├── config.json         # Default configuration seed
 ├── app.js              # Root Vue app + Settings panel
 ├── styles.css          # Dark theme CSS
+├── server.js           # Static file server + same-origin CORS relay (single process/port)
+├── package.json        # `npm start` → node server.js (used by Railway)
 ├── components/
 │   ├── OilPrices.js    # Oil price indexes + spread
 │   ├── GasPrices.js    # EIA gas prices + crack spread
@@ -108,6 +102,23 @@ oil-and-gas/
     ├── formatters.js   # Currency, percent, date formatters
     └── spread.js       # Spread + crack spread calculations
 ```
+
+## Deploying to Railway
+
+The repo root is one level above this app (`oil-and-gas/`), so Railway needs
+to be told to build from this subdirectory.
+
+1. Push this repo to GitHub (or use `railway up` from the CLI for a direct deploy without a repo).
+2. In the [Railway dashboard](https://railway.app), **New Project → Deploy from GitHub repo**, and pick this repo.
+3. Open the new service's **Settings** tab:
+   - **Root Directory** → `oil-and-gas`
+   - Leave **Build/Start Command** on auto-detect — Railway's Nixpacks builder finds `package.json`'s `start` script (`node server.js`) automatically.
+4. Railway injects `PORT` itself; `server.js` reads `process.env.PORT`, so no config is needed there.
+5. Deploy, then open the generated `*.up.railway.app` domain. Everything (SPA + `/proxy` relay) is served from that single domain/port.
+6. Optional: set an env var **SEC_CONTACT** (e.g. `YourApp you@example.com`) — SEC EDGAR requires a real identifying User-Agent on automated requests or it starts 403'ing.
+7. In the app's **⚙ Settings** tab, add your EIA API key (Gas Prices tab) — it's stored in the browser's localStorage, per visitor, not on the server.
+
+If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-gas/` directory run `railway login`, `railway init`, `railway up`.
 
 ## Known Limitations
 

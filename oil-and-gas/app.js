@@ -19,7 +19,7 @@ const SettingsPanel = {
     const local = reactive(JSON.parse(JSON.stringify(props.config)));
     // Configs saved before this setting existed won't have this section
     if (!local.yahooFinance) {
-      local.yahooFinance = { corsProxy: 'local', localProxyUrl: 'http://localhost:8787/proxy?url=' };
+      local.yahooFinance = { corsProxy: 'local', localProxyUrl: '/proxy?url=' };
     }
     if (!local.crackSpreadThresholds) {
       local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
@@ -128,7 +128,7 @@ const SettingsPanel = {
         </div>
         <div class="settings-row" style="margin-top:10px" v-if="local.yahooFinance.corsProxy === 'local'">
           <label style="display:inline;margin:0;margin-right:8px">Relay URL:</label>
-          <input v-model="local.yahooFinance.localProxyUrl" style="flex:1;max-width:400px" placeholder="http://localhost:8787/proxy?url=" />
+          <input v-model="local.yahooFinance.localProxyUrl" style="flex:1;max-width:400px" placeholder="/proxy?url=" />
         </div>
       </div>
 

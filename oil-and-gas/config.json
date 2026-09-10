@@ -10,7 +10,7 @@
   },
   "yahooFinance": {
     "corsProxy": "local",
-    "localProxyUrl": "http://localhost:8787/proxy?url="
+    "localProxyUrl": "/proxy?url="
   },
   "crackSpreadThresholds": {
     "modestMax": 15,

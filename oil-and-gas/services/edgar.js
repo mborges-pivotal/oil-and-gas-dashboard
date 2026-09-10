@@ -11,7 +11,7 @@
  * We add a 150ms minimum stagger between company fetches in the component.
  */
 
-const LOCAL_PROXY = 'http://localhost:8787/proxy?url=';
+const LOCAL_PROXY = '/proxy?url=';
 
 // In-memory session cache
 let cikMap = null;                          // ticker (upper) → cik (number)

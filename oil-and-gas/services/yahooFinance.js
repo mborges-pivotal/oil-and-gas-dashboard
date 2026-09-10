@@ -8,7 +8,7 @@
  */
 
 const BASE = 'https://query1.finance.yahoo.com';
-const DEFAULT_LOCAL_PROXY_URL = 'http://localhost:8787/proxy?url=';
+const DEFAULT_LOCAL_PROXY_URL = '/proxy?url=';
 
 // Configurable from Settings — see configureYahooFinance().
 let corsProxyMode = 'local';               // 'local' | 'none'

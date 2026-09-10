@@ -1,0 +1,12 @@
+{
+  "name": "oil-and-gas-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Browser-only oil & gas market dashboard (Vue 3 via CDN) with a same-origin CORS relay for Yahoo Finance and SEC EDGAR.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
