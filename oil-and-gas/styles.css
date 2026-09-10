@@ -303,6 +303,18 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 /* ============================================================
    News
    ============================================================ */
+.news-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.news-search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+}
+.news-filters select { min-width: 140px; }
 .news-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
