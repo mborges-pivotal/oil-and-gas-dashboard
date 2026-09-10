@@ -73,11 +73,53 @@ const SettingsPanel = {
     function exportCfg() { emit('export', JSON.parse(JSON.stringify(local))); }
     function reset() { emit('reset'); }
 
+    // Import Config — populates the form from an exported JSON file; the
+    // user still has to click "Save Changes" to persist it, same as any
+    // other edit made in this panel.
+    const fileInput = ref(null);
+    const importStatus = ref(null); // { type: 'success'|'error', message }
+    function triggerImport() { fileInput.value.click(); }
+    function onImportFile(e) {
+      const file = e.target.files[0];
+      e.target.value = ''; // allow re-importing the same file later
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(reader.result);
+        } catch (err) {
+          importStatus.value = { type: 'error', message: `Not valid JSON: ${err.message}` };
+          return;
+        }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          importStatus.value = { type: 'error', message: 'File does not contain a config object.' };
+          return;
+        }
+
+        Object.assign(local, parsed);
+        // Configs exported before these settings existed won't have them
+        if (!local.yahooFinance) {
+          local.yahooFinance = { corsProxy: 'local', localProxyUrl: '/proxy?url=' };
+        }
+        if (!local.crackSpreadThresholds) {
+          local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
+        }
+        importStatus.value = { type: 'success', message: `Imported "${file.name}" — review below, then click Save Changes.` };
+      };
+      reader.onerror = () => {
+        importStatus.value = { type: 'error', message: 'Could not read the file.' };
+      };
+      reader.readAsText(file);
+    }
+
     return {
       local, newTicker, addTicker, removeTicker,
       newFeedName, newFeedUrl, addFeed, removeFeed, toggleFeed,
       newCompanyTicker, newCompanyName, addCompany, removeCompany,
       save, exportCfg, reset,
+      fileInput, importStatus, triggerImport, onImportFile,
     };
   },
   template: `
@@ -85,10 +127,16 @@ const SettingsPanel = {
       <div class="flex-between mb-16">
         <div class="section-header" style="margin-bottom:0">Settings</div>
         <div class="flex gap-8">
+          <input ref="fileInput" type="file" accept="application/json,.json" style="display:none" @change="onImportFile" />
+          <button @click="triggerImport">Import Config</button>
           <button @click="exportCfg">Export Config</button>
           <button class="danger" @click="reset">Reset to Defaults</button>
           <button class="primary" @click="save">Save Changes</button>
         </div>
+      </div>
+
+      <div v-if="importStatus" class="notice" :class="{ error: importStatus.type === 'error' }" style="margin-bottom:16px">
+        {{ importStatus.type === 'error' ? '✗' : '✓' }} {{ importStatus.message }}
       </div>
 
       <!-- EIA API Key -->
