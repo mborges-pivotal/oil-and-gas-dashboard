@@ -43,12 +43,17 @@ const SettingsPanel = {
       const name = newFeedName.value.trim();
       const url = newFeedUrl.value.trim();
       if (name && url) {
-        local.news.feeds.push({ name, url });
+        local.news.feeds.push({ name, url, enabled: true });
         newFeedName.value = '';
         newFeedUrl.value = '';
       }
     }
     function removeFeed(i) { local.news.feeds.splice(i, 1); }
+    function toggleFeed(i) {
+      const feed = local.news.feeds[i];
+      // Treat missing `enabled` field as true (backwards-compat with saved configs)
+      feed.enabled = feed.enabled === false ? true : false;
+    }
 
     // Company add
     const newCompanyTicker = ref('');
@@ -70,7 +75,7 @@ const SettingsPanel = {
 
     return {
       local, newTicker, addTicker, removeTicker,
-      newFeedName, newFeedUrl, addFeed, removeFeed,
+      newFeedName, newFeedUrl, addFeed, removeFeed, toggleFeed,
       newCompanyTicker, newCompanyName, addCompany, removeCompany,
       save, exportCfg, reset,
     };
@@ -173,8 +178,9 @@ const SettingsPanel = {
       <div class="settings-section">
         <h3>News RSS Feeds</h3>
         <div v-for="(feed, i) in local.news.feeds" :key="i" class="settings-row" style="margin-bottom:6px">
-          <input v-model="feed.name" placeholder="Name" style="width:160px;flex:none" />
-          <input v-model="feed.url" placeholder="RSS URL" style="flex:1" />
+          <input v-model="feed.name" placeholder="Name" style="width:160px;flex:none" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
+          <input v-model="feed.url" placeholder="RSS URL" style="flex:1" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
+          <button @click="toggleFeed(i)" :title="feed.enabled === false ? 'Enable feed' : 'Pause feed'">{{ feed.enabled === false ? '▶ Enable' : '⏸ Pause' }}</button>
           <button class="danger" @click="removeFeed(i)">Remove</button>
         </div>
         <div class="settings-row" style="margin-top:8px">

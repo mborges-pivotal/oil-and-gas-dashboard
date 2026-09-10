@@ -19,9 +19,9 @@
   },
   "news": {
     "feeds": [
-      { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml" },
-      { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main" },
-      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx" }
+      { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml", "enabled": true },
+      { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main", "enabled": true },
+      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx", "enabled": true }
     ],
     "rssProxy": "rss2json"
   },

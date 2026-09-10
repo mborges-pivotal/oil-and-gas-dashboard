@@ -13,7 +13,7 @@ export default {
     const feedErrors = ref({});   // feedName → error message
     const lastUpdated = ref(null);
 
-    const feeds = computed(() => props.config.news?.feeds ?? []);
+    const feeds = computed(() => (props.config.news?.feeds ?? []).filter(f => f.enabled !== false));
     const proxy = computed(() => props.config.news?.rssProxy ?? 'rss2json');
 
     async function fetchAll(force = false) {
@@ -77,7 +77,11 @@ export default {
       <div v-if="Object.keys(feedErrors).length" class="notice warn mb-16">
         Some feeds failed to load:
         <span v-for="(err, name) in feedErrors" :key="name" style="display:block;font-size:12px;margin-top:2px">
-          <strong>{{ name }}</strong>: {{ err }}
+          <strong>{{ name }}</strong>:
+          <span v-if="err.includes('blocked by source')">
+            Feed host is blocking proxy access (403) — pause this feed in ⚙ Settings or replace it with a different URL.
+          </span>
+          <span v-else>{{ err }}</span>
         </span>
       </div>
 
