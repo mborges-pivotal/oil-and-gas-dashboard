@@ -38,7 +38,7 @@ Then open `http://localhost:3000` in your browser.
 
 | Tab | Description |
 |---|---|
-| **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator. |
+| **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator with a historical chart (1M–5Y) overlaying both indexes' actual prices, gap between them shaded green/red by which is on top. |
 | **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires EIA API key. |
 | **Stocks** | Configurable O&G stock watchlist with price, % change, volume, 30-day sparkline. |
 | **News** | Aggregated RSS feeds from Reuters, EIA, OilPrice.com, Rigzone. Configurable feed list. |
@@ -116,7 +116,8 @@ oil-and-gas/
     ├── config.js       # localStorage config persistence
     ├── formatters.js   # Currency, percent, date formatters
     ├── spread.js       # Spread + crack spread calculations
-    └── auth.js         # Admin credential storage/verification (client-side only)
+    ├── auth.js         # Admin credential storage/verification (client-side only)
+    └── dateRange.js    # Shared range-picker options for historical charts
 ```
 
 ## Deploying to Railway

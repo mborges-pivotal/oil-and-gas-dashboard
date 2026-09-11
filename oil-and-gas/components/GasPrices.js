@@ -3,6 +3,7 @@ import { fetchGasPrices, fetchDieselPrices, fetchGasPriceHistory } from '../serv
 import { fetchQuote } from '../services/yahooFinance.js';
 import { calcCrackSpread, classifyCrackSpread, DEFAULT_CRACK_SPREAD_THRESHOLDS } from '../utils/spread.js';
 import { formatUSD, formatPct, formatDate, changeClass } from '../utils/formatters.js';
+import { RANGE_OPTIONS, cutoffDateFor, monthlyTicks, dropEdgeTickCollisions } from '../utils/dateRange.js';
 
 const PRODUCT_LABELS = {
   EPMR: 'Regular',
@@ -19,31 +20,6 @@ const PRODUCT_ORDER = ['EPMR', 'EPMM', 'EPMP', 'EPM0'];
 const HISTORY_GRADES = ['EPMR', 'EPM0', 'EPMM', 'EPMP', 'EPD2D'];
 
 const HISTORY_MAX_WEEKS = 270; // ~5 years + buffer
-
-const RANGE_OPTIONS = [
-  { id: '1M', label: '1M' },
-  { id: '3M', label: '3M' },
-  { id: '6M', label: '6M' },
-  { id: 'YTD', label: 'YTD' },
-  { id: '1Y', label: '1Y' },
-  { id: '2Y', label: '2Y' },
-  { id: '5Y', label: '5Y' },
-];
-
-function cutoffDateFor(rangeId) {
-  const now = new Date();
-  const y = now.getFullYear(), m = now.getMonth(), d = now.getDate();
-  switch (rangeId) {
-    case '1M': return new Date(y, m - 1, d);
-    case '3M': return new Date(y, m - 3, d);
-    case '6M': return new Date(y, m - 6, d);
-    case 'YTD': return new Date(y, 0, 1);
-    case '1Y': return new Date(y - 1, m, d);
-    case '2Y': return new Date(y - 2, m, d);
-    case '5Y': return new Date(y - 5, m, d);
-    default: return new Date(0);
-  }
-}
 
 // ── Historical price chart (single series — inline SVG, no chart library) ──
 const HistoryChart = {
@@ -83,21 +59,19 @@ const HistoryChart = {
       return ticks;
     });
 
-    // Sparse X labels only (start / mid / end) — avoids collision without
-    // needing text-measurement logic. Built as one computed (not indices
-    // into a separately-exposed `data` array) so it can't desync from
-    // props.data when the parent swaps in a differently-sized array on
-    // range change.
+    // Monthly labels, thinned to fit — see monthlyTicks() for how it avoids
+    // crowding on wide ranges. Built as one computed (not indices into a
+    // separately-exposed `data` array) so it can't desync from props.data
+    // when the parent swaps in a differently-sized array on range change.
     const xTickLabels = computed(() => {
-      const n = props.data.length;
-      if (n === 0) return [];
-      const indices = n === 1 ? [0] : n === 2 ? [0, 1] : [0, Math.floor((n - 1) / 2), n - 1];
-      return indices.map((i, pos) => ({
-        i,
-        x: xAt(i),
-        label: formatDate(props.data[i].period),
-        anchor: pos === 0 ? 'start' : (pos === indices.length - 1 ? 'end' : 'middle'),
+      const ticks = monthlyTicks(props.data, 15);
+      const mapped = ticks.map((t, pos) => ({
+        i: t.i,
+        x: xAt(t.i),
+        label: t.label,
+        anchor: pos === 0 ? 'start' : (pos === ticks.length - 1 ? 'end' : 'middle'),
       }));
+      return dropEdgeTickCollisions(mapped);
     });
 
     function onMove(evt) {
