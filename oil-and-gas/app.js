@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig, exportConfig } from './utils/config.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
+import { getCredentials, verifyLogin, updateCredentials, isSessionAuthed, setSessionAuthed } from './utils/auth.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import OilPricesComponent from './components/OilPrices.js';
@@ -7,13 +8,14 @@ import GasPricesComponent from './components/GasPrices.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
 import DocumentsComponent from './components/Documents.js';
+import LoginComponent from './components/Login.js';
 
 const { createApp, ref, reactive, provide, onMounted } = Vue;
 
 // ── Settings Panel component ────────────────────────────────────────────────
 const SettingsPanel = {
+  emits: ['save', 'export', 'reset', 'logout'],
   props: ['config'],
-  emits: ['save', 'export', 'reset'],
   setup(props, { emit }) {
     // Work on a deep clone so changes aren't live until saved
     const local = reactive(JSON.parse(JSON.stringify(props.config)));
@@ -24,6 +26,15 @@ const SettingsPanel = {
     if (!local.crackSpreadThresholds) {
       local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
     }
+
+    // Each settings section can be collapsed independently; open by default
+    // so existing behavior (everything visible) is unchanged until a user
+    // chooses to collapse something.
+    const sections = reactive({
+      eia: true, refresh: true, proxy: true, crack: true,
+      tickers: true, feeds: true, companies: true, admin: true,
+    });
+    function toggleSection(key) { sections[key] = !sections[key]; }
 
     // Stock ticker add
     const newTicker = ref('');
@@ -72,6 +83,7 @@ const SettingsPanel = {
     function save() { emit('save', JSON.parse(JSON.stringify(local))); }
     function exportCfg() { emit('export', JSON.parse(JSON.stringify(local))); }
     function reset() { emit('reset'); }
+    function logout() { emit('logout'); }
 
     // Import Config — populates the form from an exported JSON file; the
     // user still has to click "Save Changes" to persist it, same as any
@@ -114,12 +126,67 @@ const SettingsPanel = {
       reader.readAsText(file);
     }
 
+    // Admin Account — kept entirely separate from `local`/config: it's
+    // stored under its own localStorage key so it's never swept up by
+    // Export/Import/Reset Config.
+    const adminUsername = ref('');
+    const newAdminUsername = ref('');
+    const currentPassword = ref('');
+    const newPassword = ref('');
+    const confirmPassword = ref('');
+    const adminStatus = ref(null); // { type: 'success'|'error', message }
+
+    onMounted(async () => {
+      const creds = await getCredentials();
+      adminUsername.value = creds.username;
+      newAdminUsername.value = creds.username;
+    });
+
+    async function updateAdmin() {
+      adminStatus.value = null;
+
+      if (!currentPassword.value) {
+        adminStatus.value = { type: 'error', message: 'Enter your current password to confirm this change.' };
+        return;
+      }
+      const ok = await verifyLogin(adminUsername.value, currentPassword.value);
+      if (!ok) {
+        adminStatus.value = { type: 'error', message: 'Current password is incorrect.' };
+        return;
+      }
+      if (!newAdminUsername.value.trim()) {
+        adminStatus.value = { type: 'error', message: 'Username cannot be empty.' };
+        return;
+      }
+      if (newPassword.value || confirmPassword.value) {
+        if (newPassword.value.length < 4) {
+          adminStatus.value = { type: 'error', message: 'New password must be at least 4 characters.' };
+          return;
+        }
+        if (newPassword.value !== confirmPassword.value) {
+          adminStatus.value = { type: 'error', message: 'New passwords do not match.' };
+          return;
+        }
+      }
+
+      const finalPassword = newPassword.value || currentPassword.value;
+      await updateCredentials(newAdminUsername.value.trim(), finalPassword);
+      adminUsername.value = newAdminUsername.value.trim();
+      currentPassword.value = '';
+      newPassword.value = '';
+      confirmPassword.value = '';
+      adminStatus.value = { type: 'success', message: 'Admin account updated.' };
+    }
+
     return {
-      local, newTicker, addTicker, removeTicker,
+      local, sections, toggleSection,
+      newTicker, addTicker, removeTicker,
       newFeedName, newFeedUrl, addFeed, removeFeed, toggleFeed,
       newCompanyTicker, newCompanyName, addCompany, removeCompany,
-      save, exportCfg, reset,
+      save, exportCfg, reset, logout,
       fileInput, importStatus, triggerImport, onImportFile,
+      adminUsername, newAdminUsername, currentPassword, newPassword, confirmPassword,
+      adminStatus, updateAdmin,
     };
   },
   template: `
@@ -132,6 +199,7 @@ const SettingsPanel = {
           <button @click="exportCfg">Export Config</button>
           <button class="danger" @click="reset">Reset to Defaults</button>
           <button class="primary" @click="save">Save Changes</button>
+          <button @click="logout">Log Out</button>
         </div>
       </div>
 
@@ -140,123 +208,195 @@ const SettingsPanel = {
       </div>
 
       <!-- EIA API Key -->
-      <div class="settings-section">
-        <h3>EIA API Key</h3>
-        <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-          Required for Gas Prices tab. Get a free key at
-          <a href="https://www.eia.gov/opendata/" target="_blank">eia.gov/opendata</a>.
-          The key is stored locally and visible in browser DevTools — this is expected for public EIA keys.
-        </p>
-        <div class="settings-row">
-          <input v-model="local.eiaApiKey" placeholder="Enter your free EIA API key…" style="max-width:400px" />
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.eia }" @click="toggleSection('eia')">
+          <span>EIA API Key</span>
+          <span class="chevron">▶</span>
+        </div>
+        <div class="accordion-body padded" v-if="sections.eia">
+          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+            Required for Gas Prices tab. Get a free key at
+            <a href="https://www.eia.gov/opendata/" target="_blank">eia.gov/opendata</a>.
+            The key is stored locally and visible in browser DevTools — this is expected for public EIA keys.
+          </p>
+          <div class="settings-row">
+            <input v-model="local.eiaApiKey" placeholder="Enter your free EIA API key…" style="max-width:400px" />
+          </div>
         </div>
       </div>
 
       <!-- Refresh Interval -->
-      <div class="settings-section">
-        <h3>Auto-Refresh Interval</h3>
-        <div class="settings-row">
-          <label style="display:inline;margin:0;margin-right:8px">Refresh every</label>
-          <input v-model.number="local.ui.refreshIntervalSeconds" type="number" min="30" max="3600" style="width:80px" />
-          <span class="text-muted text-sm">seconds (min 30)</span>
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.refresh }" @click="toggleSection('refresh')">
+          <span>Auto-Refresh Interval</span>
+          <span class="chevron">▶</span>
+        </div>
+        <div class="accordion-body padded" v-if="sections.refresh">
+          <div class="settings-row">
+            <label style="display:inline;margin:0;margin-right:8px">Refresh every</label>
+            <input v-model.number="local.ui.refreshIntervalSeconds" type="number" min="30" max="3600" style="width:80px" />
+            <span class="text-muted text-sm">seconds (min 30)</span>
+          </div>
         </div>
       </div>
 
       <!-- Yahoo Finance CORS Proxy -->
-      <div class="settings-section">
-        <h3>Yahoo Finance CORS Proxy</h3>
-        <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-          Yahoo Finance doesn't send CORS headers, so the browser can't call it directly.
-          By default this app routes through a small local relay — run
-          <code>node local-proxy.js</code> alongside the static server. Switch to
-          "Direct only" to skip that extra step, but Oil Prices and Stocks will show
-          "Unavailable" unless something else on your network allows direct access.
-        </p>
-        <div class="settings-row">
-          <label style="display:inline;margin:0;margin-right:8px">Proxy mode:</label>
-          <select v-model="local.yahooFinance.corsProxy">
-            <option value="local">Local relay (node local-proxy.js)</option>
-            <option value="none">Direct only (no proxy)</option>
-          </select>
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.proxy }" @click="toggleSection('proxy')">
+          <span>Yahoo Finance CORS Proxy</span>
+          <span class="chevron">▶</span>
         </div>
-        <div class="settings-row" style="margin-top:10px" v-if="local.yahooFinance.corsProxy === 'local'">
-          <label style="display:inline;margin:0;margin-right:8px">Relay URL:</label>
-          <input v-model="local.yahooFinance.localProxyUrl" style="flex:1;max-width:400px" placeholder="/proxy?url=" />
+        <div class="accordion-body padded" v-if="sections.proxy">
+          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+            Yahoo Finance doesn't send CORS headers, so the browser can't call it directly.
+            By default this app routes through a small local relay — run
+            <code>node local-proxy.js</code> alongside the static server. Switch to
+            "Direct only" to skip that extra step, but Oil Prices and Stocks will show
+            "Unavailable" unless something else on your network allows direct access.
+          </p>
+          <div class="settings-row">
+            <label style="display:inline;margin:0;margin-right:8px">Proxy mode:</label>
+            <select v-model="local.yahooFinance.corsProxy">
+              <option value="local">Local relay (node local-proxy.js)</option>
+              <option value="none">Direct only (no proxy)</option>
+            </select>
+          </div>
+          <div class="settings-row" style="margin-top:10px" v-if="local.yahooFinance.corsProxy === 'local'">
+            <label style="display:inline;margin:0;margin-right:8px">Relay URL:</label>
+            <input v-model="local.yahooFinance.localProxyUrl" style="flex:1;max-width:400px" placeholder="/proxy?url=" />
+          </div>
         </div>
       </div>
 
       <!-- Crack Spread Thresholds -->
-      <div class="settings-section">
-        <h3>Crack Spread Strength Thresholds (USD/bbl)</h3>
-        <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-          Boundaries for the strength indicator shown next to the 3-2-1 crack spread
-          on the Gas Prices tab. Each tier covers up to its value; anything above
-          "Very Strong up to" is classified Extremely Strong.
-        </p>
-        <div class="settings-row" style="margin-bottom:8px">
-          <label style="display:inline;margin:0;margin-right:8px;width:170px">Normal / Modest up to</label>
-          <input v-model.number="local.crackSpreadThresholds.modestMax" type="number" step="0.5" style="width:100px" />
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.crack }" @click="toggleSection('crack')">
+          <span>Crack Spread Strength Thresholds (USD/bbl)</span>
+          <span class="chevron">▶</span>
         </div>
-        <div class="settings-row" style="margin-bottom:8px">
-          <label style="display:inline;margin:0;margin-right:8px;width:170px">Healthy up to</label>
-          <input v-model.number="local.crackSpreadThresholds.healthyMax" type="number" step="0.5" style="width:100px" />
-        </div>
-        <div class="settings-row">
-          <label style="display:inline;margin:0;margin-right:8px;width:170px">Very Strong up to</label>
-          <input v-model.number="local.crackSpreadThresholds.veryStrongMax" type="number" step="0.5" style="width:100px" />
+        <div class="accordion-body padded" v-if="sections.crack">
+          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+            Boundaries for the strength indicator shown next to the 3-2-1 crack spread
+            on the Gas Prices tab. Each tier covers up to its value; anything above
+            "Very Strong up to" is classified Extremely Strong.
+          </p>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:170px">Normal / Modest up to</label>
+            <input v-model.number="local.crackSpreadThresholds.modestMax" type="number" step="0.5" style="width:100px" />
+          </div>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:170px">Healthy up to</label>
+            <input v-model.number="local.crackSpreadThresholds.healthyMax" type="number" step="0.5" style="width:100px" />
+          </div>
+          <div class="settings-row">
+            <label style="display:inline;margin:0;margin-right:8px;width:170px">Very Strong up to</label>
+            <input v-model.number="local.crackSpreadThresholds.veryStrongMax" type="number" step="0.5" style="width:100px" />
+          </div>
         </div>
       </div>
 
       <!-- Stock Tickers -->
-      <div class="settings-section">
-        <h3>Stock Watchlist Tickers</h3>
-        <div class="tag-list">
-          <span class="tag" v-for="(t, i) in local.stocks.tickers" :key="t">
-            {{ t }}
-            <button class="remove-btn" @click="removeTicker(i)">×</button>
-          </span>
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.tickers }" @click="toggleSection('tickers')">
+          <span>Stock Watchlist Tickers</span>
+          <span class="chevron">▶</span>
         </div>
-        <div class="settings-row">
-          <input v-model="newTicker" placeholder="e.g. BP" @keyup.enter="addTicker" style="width:120px" />
-          <button @click="addTicker">Add Ticker</button>
+        <div class="accordion-body padded" v-if="sections.tickers">
+          <div class="tag-list">
+            <span class="tag" v-for="(t, i) in local.stocks.tickers" :key="t">
+              {{ t }}
+              <button class="remove-btn" @click="removeTicker(i)">×</button>
+            </span>
+          </div>
+          <div class="settings-row">
+            <input v-model="newTicker" placeholder="e.g. BP" @keyup.enter="addTicker" style="width:120px" />
+            <button @click="addTicker">Add Ticker</button>
+          </div>
         </div>
       </div>
 
       <!-- News Feeds -->
-      <div class="settings-section">
-        <h3>News RSS Feeds</h3>
-        <div v-for="(feed, i) in local.news.feeds" :key="i" class="settings-row" style="margin-bottom:6px">
-          <input v-model="feed.name" placeholder="Name" style="width:160px;flex:none" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
-          <input v-model="feed.url" placeholder="RSS URL" style="flex:1" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
-          <button @click="toggleFeed(i)" :title="feed.enabled === false ? 'Enable feed' : 'Pause feed'">{{ feed.enabled === false ? '▶ Enable' : '⏸ Pause' }}</button>
-          <button class="danger" @click="removeFeed(i)">Remove</button>
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.feeds }" @click="toggleSection('feeds')">
+          <span>News RSS Feeds</span>
+          <span class="chevron">▶</span>
         </div>
-        <div class="settings-row" style="margin-top:8px">
-          <input v-model="newFeedName" placeholder="Source name" style="width:160px;flex:none" />
-          <input v-model="newFeedUrl" placeholder="RSS feed URL" style="flex:1" @keyup.enter="addFeed" />
-          <button @click="addFeed">Add Feed</button>
-        </div>
-        <div class="settings-row" style="margin-top:10px">
-          <label style="display:inline;margin:0;margin-right:8px">RSS Proxy:</label>
-          <select v-model="local.news.rssProxy">
-            <option value="rss2json">rss2json.com (recommended, 10 req/hr)</option>
-            <option value="allorigins">allorigins.win (raw XML, no rate limit)</option>
-          </select>
+        <div class="accordion-body padded" v-if="sections.feeds">
+          <div v-for="(feed, i) in local.news.feeds" :key="i" class="settings-row" style="margin-bottom:6px">
+            <input v-model="feed.name" placeholder="Name" style="width:160px;flex:none" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
+            <input v-model="feed.url" placeholder="RSS URL" style="flex:1" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
+            <button @click="toggleFeed(i)" :title="feed.enabled === false ? 'Enable feed' : 'Pause feed'">{{ feed.enabled === false ? '▶ Enable' : '⏸ Pause' }}</button>
+            <button class="danger" @click="removeFeed(i)">Remove</button>
+          </div>
+          <div class="settings-row" style="margin-top:8px">
+            <input v-model="newFeedName" placeholder="Source name" style="width:160px;flex:none" />
+            <input v-model="newFeedUrl" placeholder="RSS feed URL" style="flex:1" @keyup.enter="addFeed" />
+            <button @click="addFeed">Add Feed</button>
+          </div>
+          <div class="settings-row" style="margin-top:10px">
+            <label style="display:inline;margin:0;margin-right:8px">RSS Proxy:</label>
+            <select v-model="local.news.rssProxy">
+              <option value="rss2json">rss2json.com (recommended, 10 req/hr)</option>
+              <option value="allorigins">allorigins.win (raw XML, no rate limit)</option>
+            </select>
+          </div>
         </div>
       </div>
 
       <!-- Documents Companies -->
-      <div class="settings-section">
-        <h3>Document Collector Companies</h3>
-        <div v-for="(co, i) in local.documents.companies" :key="i" class="settings-row" style="margin-bottom:6px">
-          <input v-model="co.ticker" placeholder="Ticker" style="width:90px;flex:none" />
-          <input v-model="co.name" placeholder="Company name" style="flex:1" />
-          <button class="danger" @click="removeCompany(i)">Remove</button>
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.companies }" @click="toggleSection('companies')">
+          <span>Document Collector Companies</span>
+          <span class="chevron">▶</span>
         </div>
-        <div class="settings-row" style="margin-top:8px">
-          <input v-model="newCompanyTicker" placeholder="Ticker" style="width:90px;flex:none" @keyup.enter="addCompany" />
-          <input v-model="newCompanyName" placeholder="Company name" style="flex:1" @keyup.enter="addCompany" />
-          <button @click="addCompany">Add Company</button>
+        <div class="accordion-body padded" v-if="sections.companies">
+          <div v-for="(co, i) in local.documents.companies" :key="i" class="settings-row" style="margin-bottom:6px">
+            <input v-model="co.ticker" placeholder="Ticker" style="width:90px;flex:none" />
+            <input v-model="co.name" placeholder="Company name" style="flex:1" />
+            <button class="danger" @click="removeCompany(i)">Remove</button>
+          </div>
+          <div class="settings-row" style="margin-top:8px">
+            <input v-model="newCompanyTicker" placeholder="Ticker" style="width:90px;flex:none" @keyup.enter="addCompany" />
+            <input v-model="newCompanyName" placeholder="Company name" style="flex:1" @keyup.enter="addCompany" />
+            <button @click="addCompany">Add Company</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Admin Account -->
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.admin }" @click="toggleSection('admin')">
+          <span>Admin Account</span>
+          <span class="chevron">▶</span>
+        </div>
+        <div class="accordion-body padded" v-if="sections.admin">
+          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+            Changes the username/password for the Settings login on this browser. This is a
+            lightweight client-side lock, not real access control — it isn't a substitute for
+            keeping this dashboard off a network you don't trust.
+          </p>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:140px">New username</label>
+            <input v-model="newAdminUsername" style="max-width:220px" />
+          </div>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:140px">New password</label>
+            <input v-model="newPassword" type="password" placeholder="Leave blank to keep current password" style="max-width:220px" autocomplete="new-password" />
+          </div>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:140px">Confirm new password</label>
+            <input v-model="confirmPassword" type="password" style="max-width:220px" autocomplete="new-password" />
+          </div>
+          <div class="settings-row" style="margin-bottom:8px">
+            <label style="display:inline;margin:0;margin-right:8px;width:140px">Current password</label>
+            <input v-model="currentPassword" type="password" placeholder="Required to confirm" style="max-width:220px" autocomplete="current-password" />
+          </div>
+          <div class="notice" :class="{ error: adminStatus.type === 'error' }" style="margin-bottom:8px" v-if="adminStatus">
+            {{ adminStatus.type === 'error' ? '✗' : '✓' }} {{ adminStatus.message }}
+          </div>
+          <div class="settings-row">
+            <button class="primary" @click="updateAdmin">Update Admin Account</button>
+          </div>
         </div>
       </div>
     </div>
@@ -272,6 +412,7 @@ const App = {
     News: NewsComponent,
     Documents: DocumentsComponent,
     SettingsPanel,
+    Login: LoginComponent,
   },
   setup() {
     const config = ref(null);
@@ -282,6 +423,10 @@ const App = {
     // into local state once at setup(), so it needs a fresh instance to
     // pick up the reset values instead of showing stale form state.
     const settingsKey = ref(0);
+    // Settings tab requires logging in (client-side gate only — see utils/auth.js).
+    // Backed by sessionStorage so a page reload within the same tab session
+    // doesn't force a re-login, but a new tab/browser session does.
+    const settingsAuthed = ref(isSessionAuthed());
 
     const tabs = [
       { id: 'oil',       label: 'Oil Prices' },
@@ -318,10 +463,23 @@ const App = {
 
     function onExportConfig(cfg) { exportConfig(cfg); }
 
+    function onLoginSuccess() {
+      settingsAuthed.value = true;
+      setSessionAuthed(true);
+    }
+
+    function onLogout() {
+      settingsAuthed.value = false;
+      setSessionAuthed(false);
+    }
+
     // Provide config to all child components
     provide('config', config);
 
-    return { config, configLoaded, activeTab, tabs, saveNotice, settingsKey, onSaveConfig, onResetConfig, onExportConfig };
+    return {
+      config, configLoaded, activeTab, tabs, saveNotice, settingsKey, settingsAuthed,
+      onSaveConfig, onResetConfig, onExportConfig, onLoginSuccess, onLogout,
+    };
   },
   template: `
     <div id="app">
@@ -350,11 +508,16 @@ const App = {
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Documents     v-if="activeTab === 'documents'" :config="config" />
-          <SettingsPanel v-if="activeTab === 'settings'"  :key="settingsKey" :config="config"
-            @save="onSaveConfig"
-            @export="onExportConfig"
-            @reset="onResetConfig"
-          />
+
+          <template v-if="activeTab === 'settings'">
+            <Login v-if="!settingsAuthed" @success="onLoginSuccess" />
+            <SettingsPanel v-else :key="settingsKey" :config="config"
+              @save="onSaveConfig"
+              @export="onExportConfig"
+              @reset="onResetConfig"
+              @logout="onLogout"
+            />
+          </template>
         </template>
       </main>
     </div>

@@ -43,13 +43,27 @@ Then open `http://localhost:3000` in your browser.
 | **Stocks** | Configurable O&G stock watchlist with price, % change, volume, 30-day sparkline. |
 | **News** | Aggregated RSS feeds from Reuters, EIA, OilPrice.com, Rigzone. Configurable feed list. |
 | **Documents** | SEC EDGAR 10-K, 10-Q, 8-K, Proxy filings + earnings transcript links. Configurable company list. |
-| **⚙ Settings** | All configuration: EIA key, tickers, RSS feeds, companies. Persisted to localStorage. Export/reset. |
+| **⚙ Settings** | All configuration: EIA key, tickers, RSS feeds, companies. Persisted to localStorage. Import/Export/Reset. Behind an admin login; sections are collapsible. |
 
 ## Configuration
 
 All settings are stored in `localStorage` under the key `oilgas_config` and seeded from `config.json` on first load.
 
-You can edit settings live in the **⚙ Settings** tab — no page reload required.
+You can edit settings live in the **⚙ Settings** tab — no page reload required. Each settings section can be
+collapsed independently (click its header); they're all expanded by default.
+
+### Admin login
+
+The Settings tab is gated by a login screen, default **admin / admin**. Change the username/password under
+**Settings → Admin Account** (requires the current password). Credentials are stored hashed in this browser's
+localStorage, separately from the rest of the config — they're never included in Export/Import/Reset.
+
+**This is a lightweight, client-side-only lock, not real access control.** The app has no backend or database:
+the whole check runs in JS delivered to the browser, so anyone with DevTools access to the page can read the
+stored hash, flip the session flag directly, or just edit localStorage — none of that requires the password.
+It's meant to keep settings from being casually changed on a shared screen (e.g. a dashboard on an office TV),
+not to protect data from a motivated user. Don't rely on it once this app is deployed somewhere public (see
+[Deploying to Railway](#deploying-to-railway)) — anyone who bypasses the login has the same access as an admin.
 
 ### EIA API Key (required for Gas Prices tab)
 
@@ -91,7 +105,8 @@ oil-and-gas/
 │   ├── GasPrices.js    # EIA gas prices + crack spread
 │   ├── Stocks.js       # Stock watchlist + sparklines
 │   ├── News.js         # RSS news aggregator
-│   └── Documents.js    # SEC EDGAR document collector
+│   ├── Documents.js    # SEC EDGAR document collector
+│   └── Login.js        # Admin login form (Settings gate)
 ├── services/
 │   ├── yahooFinance.js # Yahoo Finance API calls
 │   ├── eia.js          # EIA API calls
@@ -100,7 +115,8 @@ oil-and-gas/
 └── utils/
     ├── config.js       # localStorage config persistence
     ├── formatters.js   # Currency, percent, date formatters
-    └── spread.js       # Spread + crack spread calculations
+    ├── spread.js       # Spread + crack spread calculations
+    └── auth.js         # Admin credential storage/verification (client-side only)
 ```
 
 ## Deploying to Railway

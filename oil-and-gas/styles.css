@@ -394,6 +394,28 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .accordion-header .chevron { transition: transform var(--transition); color: var(--text-muted); }
 .accordion-header.open .chevron { transform: rotate(90deg); }
 .accordion-body { background: var(--surface-2); border-top: 1px solid var(--border); }
+/* Documents' accordion bodies pad their own children (tables, tabs) instead
+   so those can run edge-to-edge; Settings' accordion bodies want uniform
+   padding around plain form rows, hence this opt-in modifier. */
+.accordion-body.padded { padding: 16px; }
+
+/* ============================================================
+   Admin Login
+   ============================================================ */
+.login-box {
+  max-width: 380px;
+  margin: 48px auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+.login-box code {
+  background: var(--surface-2);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 11px;
+}
 
 .filing-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
 .filing-tab {
