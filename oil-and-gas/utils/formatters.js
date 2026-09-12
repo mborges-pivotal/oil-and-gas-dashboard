@@ -21,6 +21,16 @@ export function formatPct(value) {
 }
 
 /**
+ * Percent formatter for an absolute level (no +/- sign) — e.g. an
+ * unemployment rate or bond yield, as opposed to formatPct's use for a
+ * change/delta where the sign is the point.
+ */
+export function formatPercentLevel(value) {
+  if (value == null || isNaN(value)) return '—';
+  return `${value.toFixed(2)}%`;
+}
+
+/**
  * Large number abbreviation (e.g. 1.4M, 23.5B).
  */
 export function formatVolume(value) {

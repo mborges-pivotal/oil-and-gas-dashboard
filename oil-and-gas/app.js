@@ -3,6 +3,7 @@ import { configureYahooFinance } from './services/yahooFinance.js';
 import { getCredentials, verifyLogin, updateCredentials, isSessionAuthed, setSessionAuthed } from './utils/auth.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
+import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
 import OilPricesComponent from './components/OilPrices.js';
 import GasPricesComponent from './components/GasPrices.js';
 import StocksComponent from './components/Stocks.js';
@@ -31,7 +32,7 @@ const SettingsPanel = {
     // so existing behavior (everything visible) is unchanged until a user
     // chooses to collapse something.
     const sections = reactive({
-      eia: true, refresh: true, proxy: true, crack: true,
+      eia: true, fred: true, refresh: true, proxy: true, crack: true,
       tickers: true, feeds: true, companies: true, admin: true,
     });
     function toggleSection(key) { sections[key] = !sections[key]; }
@@ -225,6 +226,24 @@ const SettingsPanel = {
         </div>
       </div>
 
+      <!-- FRED API Key -->
+      <div class="accordion-item">
+        <div class="accordion-header" :class="{ open: sections.fred }" @click="toggleSection('fred')">
+          <span>FRED API Key</span>
+          <span class="chevron">▶</span>
+        </div>
+        <div class="accordion-body padded" v-if="sections.fred">
+          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
+            Required for the Economic Indicators tab (inflation, unemployment, fed funds rate, Treasury
+            yields). Get a free key at
+            <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank">fred.stlouisfed.org</a>.
+          </p>
+          <div class="settings-row">
+            <input v-model="local.fredApiKey" placeholder="Enter your free FRED API key…" style="max-width:400px" />
+          </div>
+        </div>
+      </div>
+
       <!-- Refresh Interval -->
       <div class="accordion-item">
         <div class="accordion-header" :class="{ open: sections.refresh }" @click="toggleSection('refresh')">
@@ -406,6 +425,7 @@ const SettingsPanel = {
 // ── Root App ────────────────────────────────────────────────────────────────
 const App = {
   components: {
+    EconomicIndicators: EconomicIndicatorsComponent,
     OilPrices: OilPricesComponent,
     GasPrices: GasPricesComponent,
     Stocks: StocksComponent,
@@ -429,6 +449,7 @@ const App = {
     const settingsAuthed = ref(isSessionAuthed());
 
     const tabs = [
+      { id: 'econ',      label: 'Economic Indicators' },
       { id: 'oil',       label: 'Oil Prices' },
       { id: 'gas',       label: 'Gas Prices' },
       { id: 'stocks',    label: 'Stocks' },
@@ -503,6 +524,7 @@ const App = {
         <template v-else>
           <div v-if="saveNotice" class="notice" style="margin-bottom:16px">✓ Settings saved.</div>
 
+          <EconomicIndicators v-if="activeTab === 'econ'" :config="config" />
           <OilPrices     v-if="activeTab === 'oil'"       :config="config" />
           <GasPrices     v-if="activeTab === 'gas'"       :config="config" />
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />

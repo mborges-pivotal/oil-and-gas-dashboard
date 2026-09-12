@@ -27,21 +27,22 @@ Then open `http://localhost:3000` in your browser.
 
 > **Note:** The app must be served over HTTP — not opened as `file://` — because ES module imports require a server origin.
 
-> **Note:** `query1.finance.yahoo.com` doesn't send CORS headers, so browser
-> requests to it always fail directly. `server.js` relays those requests
-> server-side (same origin, at `/proxy`) instead of depending on a public
-> CORS-bypass proxy (those are unreliable and are often blocked by corporate
-> network filtering). Without the server running, Oil Prices and Stocks will
-> show "Unavailable".
+> **Note:** `query1.finance.yahoo.com` and `api.stlouisfed.org` (FRED) don't
+> send CORS headers, so browser requests to them always fail directly.
+> `server.js` relays those requests server-side (same origin, at `/proxy`)
+> instead of depending on a public CORS-bypass proxy (those are unreliable
+> and are often blocked by corporate network filtering). Without the server
+> running, Oil Prices, Stocks, and Economic Indicators will show "Unavailable".
 
 ## Features
 
 | Tab | Description |
 |---|---|
+| **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Requires FRED API key. |
 | **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator with a historical chart (1M–5Y) overlaying both indexes' actual prices, gap between them shaded green/red by which is on top. |
 | **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires EIA API key. |
 | **Stocks** | Configurable O&G stock watchlist with price, % change, volume, 30-day sparkline. |
-| **News** | Aggregated RSS feeds from Reuters, EIA, OilPrice.com, Rigzone. Configurable feed list. |
+| **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
 | **Documents** | SEC EDGAR 10-K, 10-Q, 8-K, Proxy filings + earnings transcript links. Configurable company list. |
 | **⚙ Settings** | All configuration: EIA key, tickers, RSS feeds, companies. Persisted to localStorage. Import/Export/Reset. Behind an admin login; sections are collapsible. |
 
@@ -74,6 +75,16 @@ not to protect data from a motivated user. Don't rely on it once this app is dep
 
 The key is stored in your browser's localStorage. It is not sent anywhere except the EIA API itself.
 
+### FRED API Key (required for Economic Indicators tab)
+
+1. Register for free at [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html)
+2. Copy your API key
+3. Paste it in **⚙ Settings → FRED API Key**
+4. Click **Save Changes**
+
+Like the EIA key, this is stored in your browser's localStorage and sent only to the FRED API (via this app's
+same-origin relay — see the CORS note below).
+
 ## Data Sources
 
 | Data | Source | Key Required |
@@ -81,6 +92,7 @@ The key is stored in your browser's localStorage. It is not sent anywhere except
 | Oil futures prices | Yahoo Finance (unofficial) | No |
 | Stock quotes + sparklines | Yahoo Finance (unofficial) | No |
 | Retail gas & diesel prices | EIA Open Data API v2 | **Yes (free)** |
+| Inflation, unemployment, Fed funds rate, Treasury yields | FRED (Federal Reserve Bank of St. Louis) | **Yes (free)** |
 | News feeds | rss2json.com proxy + allorigins.win fallback | No |
 | SEC filings (10-K, 10-Q, 8-K) | SEC EDGAR (data.sec.gov) | No |
 
@@ -101,15 +113,19 @@ oil-and-gas/
 ├── server.js           # Static file server + same-origin CORS relay (single process/port)
 ├── package.json        # `npm start` → node server.js (used by Railway)
 ├── components/
+│   ├── EconomicIndicators.js  # FRED macro indicators + historical chart
 │   ├── OilPrices.js    # Oil price indexes + spread
 │   ├── GasPrices.js    # EIA gas prices + crack spread
 │   ├── Stocks.js       # Stock watchlist + sparklines
 │   ├── News.js         # RSS news aggregator
 │   ├── Documents.js    # SEC EDGAR document collector
-│   └── Login.js        # Admin login form (Settings gate)
+│   ├── Login.js        # Admin login form (Settings gate)
+│   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
+│   └── DualLineChart.js # Shared two-series overlay chart w/ crossing-shaded fill (SVG)
 ├── services/
 │   ├── yahooFinance.js # Yahoo Finance API calls
 │   ├── eia.js          # EIA API calls
+│   ├── fred.js         # FRED (economic data) API calls
 │   ├── rss.js          # RSS feed fetching + caching
 │   └── edgar.js        # SEC EDGAR API + helpers
 └── utils/

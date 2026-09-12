@@ -1,5 +1,6 @@
 {
   "eiaApiKey": "",
+  "fredApiKey": "",
   "stocks": {
     "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG", "NOV", "KMI"]
   },
@@ -21,7 +22,8 @@
     "feeds": [
       { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml", "enabled": true },
       { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main", "enabled": true },
-      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx", "enabled": true }
+      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx", "enabled": true },
+      { "name": "FRED Blog (St. Louis Fed)", "url": "https://fredblog.stlouisfed.org/feed/", "enabled": true }
     ],
     "rssProxy": "rss2json"
   },

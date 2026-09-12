@@ -26,6 +26,8 @@ const ALLOWED_HOSTS = new Set([
   // RSS feed hosts whose bot protection blocks rss2json/allorigins but
   // allows ordinary requests — see services/rss.js's local-proxy fallback.
   'investors.nov.com',
+  // FRED (economic data) sends no CORS headers — see services/fred.js.
+  'api.stlouisfed.org',
 ]);
 
 // SEC's Fair Access policy (sec.gov/os/webmaster-faq#developers) requires a

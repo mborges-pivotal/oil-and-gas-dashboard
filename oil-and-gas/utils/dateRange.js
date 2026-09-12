@@ -1,6 +1,7 @@
 /**
  * Shared range-picker options and cutoff logic for historical charts
- * (Gas Prices retail history, Oil Prices spread history).
+ * (Gas Prices retail history, Oil Prices spread history, Economic
+ * Indicators FRED series history).
  */
 export const RANGE_OPTIONS = [
   { id: '1M', label: '1M' },

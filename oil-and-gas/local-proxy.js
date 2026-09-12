@@ -32,6 +32,7 @@ const ALLOWED_HOSTS = new Set([
   'query2.finance.yahoo.com',
   'www.sec.gov',
   'investors.nov.com',
+  'api.stlouisfed.org',
 ]);
 
 // SEC's Fair Access policy (sec.gov/os/webmaster-faq#developers) requires a
