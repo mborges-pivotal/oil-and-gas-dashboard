@@ -31,6 +31,22 @@ export function formatPercentLevel(value) {
 }
 
 /**
+ * Plain number formatter (thousands separator, 2 decimals, no currency
+ * symbol) — for values like stock market indexes that aren't dollar-
+ * denominated, unlike a stock price. Pass `signed: true` to prepend a '+'
+ * for non-negative values (matches formatPct's convention), for a
+ * change/delta display.
+ */
+export function formatNumber(value, { signed = false } = {}) {
+  if (value == null || isNaN(value)) return '—';
+  const formatted = new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+  return signed && value >= 0 ? `+${formatted}` : formatted;
+}
+
+/**
  * Large number abbreviation (e.g. 1.4M, 23.5B).
  */
 export function formatVolume(value) {

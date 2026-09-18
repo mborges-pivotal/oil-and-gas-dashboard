@@ -2,6 +2,9 @@
   "stocks": {
     "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG", "NOV", "KMI"]
   },
+  "marketIndexes": {
+    "symbols": ["^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX"]
+  },
   "oilIndexes": {
     "symbols": ["BZ=F", "CL=F", "NG=F", "HO=F", "RB=F"],
     "defaultSpreadA": "BZ=F",

@@ -24,9 +24,25 @@ export async function loadConfig() {
       // corrupted — fall through to defaults
     }
   }
+
   if (!config) {
     config = serverDefaults;
     saveConfig(config);
+  } else {
+    // A returning visitor's stored config predates any top-level section
+    // added to config.json since they first saved — e.g. a new tab's
+    // config shipped after they'd already been using the app. Backfill
+    // only what's entirely missing (never touch a key they already have,
+    // even if its value differs from the current default) and persist the
+    // backfill so this only has to run once per new field.
+    let backfilled = false;
+    for (const key of Object.keys(serverDefaults)) {
+      if (!(key in config) && !API_KEY_FIELDS.includes(key)) {
+        config[key] = serverDefaults[key];
+        backfilled = true;
+      }
+    }
+    if (backfilled) saveConfig(config);
   }
 
   for (const field of API_KEY_FIELDS) config[field] = serverDefaults[field] ?? '';

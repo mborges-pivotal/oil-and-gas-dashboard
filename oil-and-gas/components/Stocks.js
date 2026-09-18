@@ -1,6 +1,19 @@
 const { ref, reactive, onMounted, onUnmounted, computed } = Vue;
-import { fetchBatchQuotes, fetchChart } from '../services/yahooFinance.js';
-import { formatUSD, formatPct, formatVolume, changeClass } from '../utils/formatters.js';
+import { fetchQuote, fetchBatchQuotes, fetchChart } from '../services/yahooFinance.js';
+import { formatUSD, formatNumber, formatPct, formatVolume, changeClass } from '../utils/formatters.js';
+
+const INDEX_LABELS = {
+  '^GSPC': 'S&P 500',
+  '^DJI': 'Dow Jones',
+  '^IXIC': 'Nasdaq Composite',
+  '^RUT': 'Russell 2000',
+  '^VIX': 'VIX (Volatility)',
+};
+// Matches config.json's marketIndexes.symbols — used as a fallback for
+// anyone whose localStorage-persisted config predates this field (loadConfig
+// only pulls in config.json's *new* top-level fields on a first-ever visit,
+// not for a returning visitor who already has a saved config).
+const DEFAULT_INDEX_SYMBOLS = Object.keys(INDEX_LABELS);
 
 /**
  * Build a minimal inline SVG sparkline from an array of close prices.
@@ -39,6 +52,25 @@ export default {
 
     const tickers = computed(() => props.config.stocks?.tickers ?? []);
 
+    // Major market indexes — symbol → { price, change, pctChange, loading, error },
+    // fetched independently so one bad symbol doesn't block the others (same
+    // per-symbol pattern as Oil Prices' index cards).
+    const indexSymbols = computed(() => props.config.marketIndexes?.symbols ?? DEFAULT_INDEX_SYMBOLS);
+    const indexes = reactive({});
+
+    async function fetchIndexes() {
+      await Promise.all(indexSymbols.value.map(async (sym) => {
+        if (!indexes[sym]) indexes[sym] = { price: null, change: null, pctChange: null, loading: true, error: null };
+        else indexes[sym].loading = true;
+        try {
+          const q = await fetchQuote(sym);
+          indexes[sym] = { ...q, loading: false, error: null };
+        } catch (e) {
+          indexes[sym] = { price: null, change: null, pctChange: null, loading: false, error: e.message };
+        }
+      }));
+    }
+
     async function fetchAll() {
       loading.value = quotes.value.length === 0;
       error.value = null;
@@ -62,23 +94,54 @@ export default {
       }
     }
 
+    async function refreshAll() {
+      await Promise.all([fetchAll(), fetchIndexes()]);
+    }
+
     onMounted(() => {
-      fetchAll();
+      refreshAll();
       const interval = Math.max(30, props.config.ui?.refreshIntervalSeconds ?? 60) * 1000;
-      refreshTimer = setInterval(fetchAll, interval);
+      refreshTimer = setInterval(refreshAll, interval);
     });
     onUnmounted(() => clearInterval(refreshTimer));
 
-    return { quotes, sparklines, loading, error, lastUpdated, tickers, formatUSD, formatPct, formatVolume, changeClass };
+    return {
+      quotes, sparklines, loading, error, lastUpdated, tickers,
+      indexSymbols, indexes, INDEX_LABELS,
+      formatUSD, formatNumber, formatPct, formatVolume, changeClass,
+    };
   },
   template: `
     <div>
       <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Stock Watchlist</div>
+        <div class="section-header" style="margin-bottom:0">Stocks</div>
         <div class="flex gap-8" style="align-items:center">
           <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
         </div>
       </div>
+
+      <!-- Major Market Indexes -->
+      <div class="card-title" style="margin-bottom:10px">Major Market Indexes</div>
+      <div class="price-grid mb-24">
+        <div class="price-card" v-for="sym in indexSymbols" :key="sym">
+          <div class="label">{{ INDEX_LABELS[sym] ?? sym }}</div>
+          <template v-if="indexes[sym]?.loading && indexes[sym]?.price == null">
+            <div class="skeleton" style="width:80%;height:28px;margin-top:4px"></div>
+            <div class="skeleton" style="width:50%;height:14px;margin-top:6px"></div>
+          </template>
+          <template v-else-if="indexes[sym]?.error">
+            <div class="text-muted text-sm">Unavailable</div>
+          </template>
+          <template v-else>
+            <div class="price">{{ formatNumber(indexes[sym]?.price) }}</div>
+            <div class="change" :class="changeClass(indexes[sym]?.change)">
+              {{ formatNumber(indexes[sym]?.change, { signed: true }) }} ({{ formatPct(indexes[sym]?.pctChange) }})
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div class="card-title" style="margin-bottom:10px">Stock Watchlist</div>
 
       <div class="notice" v-if="tickers.length === 0">
         No tickers configured. Add tickers in the ⚙ Settings tab.
