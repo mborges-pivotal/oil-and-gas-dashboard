@@ -17,12 +17,46 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
+
+// Loads a local .env file (KEY=value per line) into process.env, so keys
+// like EIA_API_KEY/FRED_API_KEY can be set once in a file instead of typed
+// inline every time. Dependency-free (no npm install) — this project has
+// none. Real environment variables always win over the file (so this is a
+// no-op on Railway, which sets its own via the platform, not a checked-in
+// .env), and a missing/absent .env is silently fine — it's optional.
+function loadDotEnv(filePath) {
+  let text;
+  try {
+    text = fs.readFileSync(filePath, 'utf8');
+  } catch {
+    return;
+  }
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq === -1) continue;
+    const key = trimmed.slice(0, eq).trim();
+    let value = trimmed.slice(eq + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = value;
+  }
+}
+loadDotEnv(path.join(ROOT, '.env'));
+
+const PORT = process.env.PORT || 3000;
 const ALLOWED_HOSTS = new Set([
   'query1.finance.yahoo.com',
   'query2.finance.yahoo.com',
   'www.sec.gov',
+  // Filing submissions API — same Fair Access UA requirement as www.sec.gov
+  // below, just enforced as a 403 "MissingAuthenticationTokenException"
+  // instead (a generic AWS API Gateway message; the actual cause is the
+  // same missing/generic User-Agent). See services/edgar.js.
+  'data.sec.gov',
   // RSS feed hosts whose bot protection blocks rss2json/allorigins but
   // allows ordinary requests — see services/rss.js's local-proxy fallback.
   'investors.nov.com',
@@ -36,6 +70,7 @@ const ALLOWED_HOSTS = new Set([
 // Exceeded" page regardless of actual request volume. Override via env var
 // with your own contact info if you hit this.
 const SEC_USER_AGENT = process.env.SEC_CONTACT || 'Oil-Gas-Dashboard contact@example.com';
+const SEC_HOSTS = new Set(['www.sec.gov', 'data.sec.gov']);
 
 // Fixed, operator-configured API keys — set per deployment (locally via
 // shell env, or in Railway's environment variable settings), never
@@ -73,7 +108,7 @@ function handleProxy(req, res, reqUrl) {
     return;
   }
 
-  const userAgent = targetUrl.hostname === 'www.sec.gov' ? SEC_USER_AGENT : 'Mozilla/5.0';
+  const userAgent = SEC_HOSTS.has(targetUrl.hostname) ? SEC_USER_AGENT : 'Mozilla/5.0';
   https
     .get(targetUrl, { headers: { 'User-Agent': userAgent } }, (upstream) => {
       res.writeHead(upstream.statusCode, { 'Content-Type': upstream.headers['content-type'] ?? 'application/json' });

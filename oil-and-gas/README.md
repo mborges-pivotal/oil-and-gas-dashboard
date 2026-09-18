@@ -14,6 +14,19 @@ static app and relays the third-party APIs that don't send CORS headers
 regardless of where you run it from. On macOS you can also just double-click
 `run.command`.
 
+To enable the Gas Prices / Economic Indicators tabs, copy `.env.example` to
+`.env` and fill in your free API keys — `server.js` loads it automatically,
+no install step needed:
+
+```bash
+cp .env.example .env
+# edit .env with your EIA_API_KEY / FRED_API_KEY, then:
+./run.sh
+```
+
+`.env` is gitignored; never commit real keys. Both tabs work fine without
+it too — they just show a "not configured" notice instead.
+
 <details>
 <summary>Manual / without run.sh</summary>
 
@@ -21,6 +34,7 @@ regardless of where you run it from. On macOS you can also just double-click
 node server.js
 # or: PORT=8080 node server.js
 ```
+`.env` is picked up the same way regardless of how you launch `server.js`.
 </details>
 
 Then open `http://localhost:3000` in your browser.
@@ -41,10 +55,9 @@ Then open `http://localhost:3000` in your browser.
 | **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. |
 | **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator with a historical chart (1M–5Y) overlaying both indexes' actual prices, gap between them shaded green/red by which is on top. |
 | **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-gas-prices-tab) below) — not something a visitor enters. |
-| **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist with price, % change, volume, 30-day sparkline. |
+| **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Expand a ticker to see its SEC EDGAR filings (10-K, 10-Q, 8-K, Proxy) and earnings transcript links right there, for whichever tickers are in the watchlist — no separate company list to maintain. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
-| **Documents** | SEC EDGAR 10-K, 10-Q, 8-K, Proxy filings + earnings transcript links. Configurable company list. |
-| **⚙ Settings** | Tickers, RSS feeds, companies, thresholds, and more — persisted to localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
+| **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — persisted to localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
 
 ## Configuration
 
@@ -60,11 +73,13 @@ types into Settings (the Settings tab has no field for it at all).
 
 1. Register for free at [eia.gov/opendata](https://www.eia.gov/opendata/)
 2. Copy your API key
-3. Set it as the **`EIA_API_KEY`** environment variable when running the server:
+3. Set it as the **`EIA_API_KEY`** environment variable when running the server — locally, the easiest way is
+   a `.env` file (copy `.env.example` to `.env`, fill it in, run `./run.sh` as usual); a one-off shell var
+   also works:
    ```bash
    EIA_API_KEY=your-key-here ./run.sh
    ```
-   On Railway, add it under the service's **Variables** tab instead (see [Deploying to Railway](#deploying-to-railway)).
+   On Railway, add it under the service's **Variables** tab instead (see [Deploying to Railway](#deploying-to-railway)) — `.env` files aren't deployed there.
 
 `server.js` injects it into the `config.json` it serves to the browser — it's never written to the `config.json`
 file on disk or committed to git, and a visitor can't change or export it from Settings.
@@ -75,13 +90,14 @@ Same model as the EIA key above — fixed per-deployment configuration, not a Se
 
 1. Register for free at [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html)
 2. Copy your API key
-3. Set it as the **`FRED_API_KEY`** environment variable when running the server:
+3. Set it as the **`FRED_API_KEY`** environment variable — same `.env` file as above, or:
    ```bash
    FRED_API_KEY=your-key-here ./run.sh
    ```
    On Railway, add it under the service's **Variables** tab.
 
-Both keys can be set together, e.g. `EIA_API_KEY=xxx FRED_API_KEY=yyy ./run.sh`.
+Both keys go in the same `.env` file (see `.env.example`), or can be set together inline:
+`EIA_API_KEY=xxx FRED_API_KEY=yyy ./run.sh`.
 
 ## Data Sources
 
@@ -110,13 +126,13 @@ oil-and-gas/
 ├── styles.css          # Dark theme CSS
 ├── server.js           # Static file server + same-origin CORS relay (single process/port)
 ├── package.json        # `npm start` → node server.js (used by Railway)
+├── .env.example        # Template for local API keys — copy to .env (gitignored)
 ├── components/
 │   ├── EconomicIndicators.js  # FRED macro indicators + historical chart
 │   ├── OilPrices.js    # Oil price indexes + spread
 │   ├── GasPrices.js    # EIA gas prices + crack spread
-│   ├── Stocks.js       # Market indexes + stock watchlist + sparklines
+│   ├── Stocks.js       # Market indexes + stock watchlist + sparklines + per-ticker SEC filings
 │   ├── News.js         # RSS news aggregator
-│   ├── Documents.js    # SEC EDGAR document collector
 │   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
 │   └── DualLineChart.js # Shared two-series overlay chart w/ crossing-shaded fill (SVG)
 ├── services/

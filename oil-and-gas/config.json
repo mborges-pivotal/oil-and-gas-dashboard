@@ -33,13 +33,6 @@
     "rssProxy": "rss2json",
     "economicNewsDays": 7
   },
-  "documents": {
-    "companies": [
-      { "ticker": "KMI", "name": "Kinder Morgan" },
-      { "ticker": "NOV", "name": "NOV" },
-      { "ticker": "VLO", "name": "Valero Energy" }
-    ]
-  },
   "ui": {
     "theme": "dark",
     "refreshIntervalSeconds": 60

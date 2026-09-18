@@ -3,9 +3,11 @@
  *
  * - query1/query2.finance.yahoo.com never send Access-Control-Allow-Origin,
  *   so browser fetches to Yahoo Finance always fail CORS.
- * - www.sec.gov/files/company_tickers.json (ticker → CIK lookup) also never
- *   sends CORS headers, unlike data.sec.gov (used for the actual filings),
- *   which does.
+ * - www.sec.gov/files/company_tickers.json (ticker → CIK lookup) never sends
+ *   CORS headers at all. data.sec.gov (the actual filings) does send them,
+ *   but both hosts enforce SEC's Fair Access policy the same way — reject a
+ *   request with no real identifying User-Agent, which a browser can never
+ *   set itself — so both need relaying regardless of the CORS header.
  *
  * Public CORS-bypass proxies (allorigins.win, corsproxy.io, ...) are
  * unreliable and are also often blocked by corporate network filtering
@@ -31,6 +33,7 @@ const ALLOWED_HOSTS = new Set([
   'query1.finance.yahoo.com',
   'query2.finance.yahoo.com',
   'www.sec.gov',
+  'data.sec.gov',
   'investors.nov.com',
   'api.stlouisfed.org',
 ]);
@@ -41,6 +44,7 @@ const ALLOWED_HOSTS = new Set([
 // Exceeded" page regardless of actual request volume. Override via env var
 // with your own contact info if you hit this.
 const SEC_USER_AGENT = process.env.SEC_CONTACT || 'Oil-Gas-Dashboard-Local-Dev contact@example.com';
+const SEC_HOSTS = new Set(['www.sec.gov', 'data.sec.gov']);
 
 const server = http.createServer((req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -75,7 +79,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  const userAgent = targetUrl.hostname === 'www.sec.gov' ? SEC_USER_AGENT : 'Mozilla/5.0';
+  const userAgent = SEC_HOSTS.has(targetUrl.hostname) ? SEC_USER_AGENT : 'Mozilla/5.0';
   https.get(targetUrl, { headers: { 'User-Agent': userAgent } }, (upstream) => {
     res.writeHead(upstream.statusCode, { 'Content-Type': upstream.headers['content-type'] ?? 'application/json' });
     upstream.pipe(res);

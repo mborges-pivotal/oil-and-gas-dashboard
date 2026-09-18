@@ -11,5 +11,8 @@ node_modules/
 # Local config overrides (keep config.json defaults, ignore personal copies)
 oilgas-config.json
 
+# Local API keys / secrets (see .env.example) — never commit real values
+.env
+
 # Logs
 *.log

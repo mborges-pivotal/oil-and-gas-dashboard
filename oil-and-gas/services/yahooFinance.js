@@ -79,24 +79,6 @@ export async function fetchQuote(symbol) {
 }
 
 /**
- * Fetch quotes for multiple symbols.
- *
- * Uses the v8/finance/chart endpoint (one request per symbol) rather than
- * the v7/finance/quote batch endpoint: Yahoo now gates v7/finance/quote
- * behind crumb/cookie auth and it returns 401 without it, while v8 stays
- * open. A single bad symbol won't fail the whole batch.
- *
- * Returns an array of quote objects (only for symbols that succeeded).
- */
-export async function fetchBatchQuotes(symbols) {
-  if (!symbols.length) return [];
-  const settled = await Promise.allSettled(symbols.map(fetchQuote));
-  return settled
-    .filter(r => r.status === 'fulfilled')
-    .map(r => r.value);
-}
-
-/**
  * Fetch historical close prices for a sparkline (last N days).
  * Returns: { symbol, timestamps: number[], closes: number[] }
  */

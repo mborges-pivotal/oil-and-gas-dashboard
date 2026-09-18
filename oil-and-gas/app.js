@@ -7,7 +7,6 @@ import OilPricesComponent from './components/OilPrices.js';
 import GasPricesComponent from './components/GasPrices.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
-import DocumentsComponent from './components/Documents.js';
 
 const { createApp, ref, reactive, provide, onMounted } = Vue;
 
@@ -34,7 +33,7 @@ const SettingsPanel = {
     // chooses to collapse something.
     const sections = reactive({
       refresh: true, proxy: true, crack: true,
-      tickers: true, feeds: true, companies: true,
+      tickers: true, feeds: true,
     });
     function toggleSection(key) { sections[key] = !sections[key]; }
 
@@ -67,20 +66,6 @@ const SettingsPanel = {
       // Treat missing `enabled` field as true (backwards-compat with saved configs)
       feed.enabled = feed.enabled === false ? true : false;
     }
-
-    // Company add
-    const newCompanyTicker = ref('');
-    const newCompanyName = ref('');
-    function addCompany() {
-      const ticker = newCompanyTicker.value.trim().toUpperCase();
-      const name = newCompanyName.value.trim();
-      if (ticker && name) {
-        local.documents.companies.push({ ticker, name });
-        newCompanyTicker.value = '';
-        newCompanyName.value = '';
-      }
-    }
-    function removeCompany(i) { local.documents.companies.splice(i, 1); }
 
     // eiaApiKey/fredApiKey are fixed, operator-configured values (see
     // server.js) — this panel never shows or edits them, and neither an
@@ -142,7 +127,6 @@ const SettingsPanel = {
       local, sections, toggleSection,
       newTicker, addTicker, removeTicker,
       newFeedName, newFeedUrl, addFeed, removeFeed, toggleFeed,
-      newCompanyTicker, newCompanyName, addCompany, removeCompany,
       save, exportCfg, reset,
       fileInput, importStatus, triggerImport, onImportFile,
     };
@@ -291,26 +275,6 @@ const SettingsPanel = {
         </div>
       </div>
 
-      <!-- Documents Companies -->
-      <div class="accordion-item">
-        <div class="accordion-header" :class="{ open: sections.companies }" @click="toggleSection('companies')">
-          <span>Document Collector Companies</span>
-          <span class="chevron">▶</span>
-        </div>
-        <div class="accordion-body padded" v-if="sections.companies">
-          <div v-for="(co, i) in local.documents.companies" :key="i" class="settings-row" style="margin-bottom:6px">
-            <input v-model="co.ticker" placeholder="Ticker" style="width:90px;flex:none" />
-            <input v-model="co.name" placeholder="Company name" style="flex:1" />
-            <button class="danger" @click="removeCompany(i)">Remove</button>
-          </div>
-          <div class="settings-row" style="margin-top:8px">
-            <input v-model="newCompanyTicker" placeholder="Ticker" style="width:90px;flex:none" @keyup.enter="addCompany" />
-            <input v-model="newCompanyName" placeholder="Company name" style="flex:1" @keyup.enter="addCompany" />
-            <button @click="addCompany">Add Company</button>
-          </div>
-        </div>
-      </div>
-
     </div>
   `,
 };
@@ -323,7 +287,6 @@ const App = {
     GasPrices: GasPricesComponent,
     Stocks: StocksComponent,
     News: NewsComponent,
-    Documents: DocumentsComponent,
     SettingsPanel,
   },
   setup() {
@@ -342,7 +305,6 @@ const App = {
       { id: 'gas',       label: 'Gas Prices' },
       { id: 'stocks',    label: 'Stocks' },
       { id: 'news',      label: 'News' },
-      { id: 'documents', label: 'Documents' },
       { id: 'settings',  label: '⚙ Settings' },
     ];
 
@@ -412,7 +374,6 @@ const App = {
           <GasPrices     v-if="activeTab === 'gas'"       :config="config" />
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
           <News          v-if="activeTab === 'news'"      :config="config" />
-          <Documents     v-if="activeTab === 'documents'" :config="config" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config"
             @save="onSaveConfig"

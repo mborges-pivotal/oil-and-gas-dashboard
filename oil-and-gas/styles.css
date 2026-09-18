@@ -394,9 +394,9 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .accordion-header .chevron { transition: transform var(--transition); color: var(--text-muted); }
 .accordion-header.open .chevron { transform: rotate(90deg); }
 .accordion-body { background: var(--surface-2); border-top: 1px solid var(--border); }
-/* Documents' accordion bodies pad their own children (tables, tabs) instead
-   so those can run edge-to-edge; Settings' accordion bodies want uniform
-   padding around plain form rows, hence this opt-in modifier. */
+/* SEC filings' accordion bodies (Stocks tab) pad their own children (tables,
+   tabs) instead so those can run edge-to-edge; Settings' accordion bodies
+   want uniform padding around plain form rows, hence this opt-in modifier. */
 .accordion-body.padded { padding: 16px; }
 
 .filing-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); }
@@ -411,6 +411,29 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 }
 .filing-tab:hover { color: var(--text); background: transparent; }
 .filing-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* Stock Watchlist row — accordion header doubling as the old table row, so
+   its columns need to line up across every ticker the way table cells did. */
+.stock-row-header { padding: 10px 16px; }
+.stock-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 1;
+  gap: 16px;
+  min-width: 0;
+}
+.stock-row-id { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
+.stock-row-ticker { font-weight: 700; flex: none; }
+.stock-row-metrics {
+  display: grid;
+  grid-template-columns: 76px 76px 64px 64px;
+  gap: 12px;
+  align-items: center;
+  flex: none;
+}
+.stock-row-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; }
+.stock-row-sparkline { display: flex; justify-content: flex-end; width: 80px; flex: none; }
 
 /* ============================================================
    Sparkline SVG

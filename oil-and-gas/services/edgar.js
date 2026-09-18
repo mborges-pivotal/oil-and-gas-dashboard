@@ -2,10 +2,14 @@
  * SEC EDGAR service.
  *
  * All endpoints are free, no API key required.
- * CORS: data.sec.gov and efts.sec.gov return Access-Control-Allow-Origin: *
- * www.sec.gov (used below for the ticker→CIK lookup) does NOT — browser
- * fetches to it always fail with a generic "Failed to fetch", so it falls
- * back through the local relay (local-proxy.js), same as Yahoo Finance.
+ *
+ * CORS: data.sec.gov sends Access-Control-Allow-Origin: *; www.sec.gov (the
+ * ticker→CIK lookup) does not. But both enforce SEC's Fair Access policy
+ * (sec.gov/os/webmaster-faq#developers) — a request needs a real identifying
+ * User-Agent ("App Name contact@domain.com") or it's rejected outright, and
+ * a browser can never set its own User-Agent. So both fail from a direct
+ * browser fetch regardless of the CORS header, and both fall back through
+ * the local relay (server.js's /proxy, which sets that header server-side).
  *
  * Rate limit: SEC enforces 10 req/sec per IP.
  * We add a 150ms minimum stagger between company fetches in the component.
@@ -63,11 +67,23 @@ export async function fetchFilings(cik) {
   if (submissionsCache.has(cacheKey)) return submissionsCache.get(cacheKey);
 
   const url = `https://data.sec.gov/submissions/${padded}.json`;
-  const res = await fetch(url, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`EDGAR submissions HTTP ${res.status}`);
-  const data = await res.json();
-  submissionsCache.set(cacheKey, data);
-  return data;
+  let json;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    json = await res.json();
+  } catch {
+    // data.sec.gov does send CORS headers, but still enforces SEC's Fair
+    // Access policy (a real identifying User-Agent) the same way
+    // www.sec.gov does above — a browser can never set that itself, so this
+    // 403s directly regardless of CORS. Falls back through the local relay,
+    // same as the CIK lookup.
+    const res = await fetch(LOCAL_PROXY + encodeURIComponent(url), { cache: 'no-store' });
+    if (!res.ok) throw new Error(`EDGAR submissions: local proxy HTTP ${res.status}. Is the server running?`);
+    json = await res.json();
+  }
+  submissionsCache.set(cacheKey, json);
+  return json;
 }
 
 /**
