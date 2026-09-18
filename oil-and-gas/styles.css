@@ -436,6 +436,13 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .filing-tab:hover { color: var(--text); background: transparent; }
 .filing-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* Second-level tab row — the doc-type tabs (10-K/10-Q/...) nested inside
+   the Documents tab of a stock's detail panel. Smaller and set against a
+   recessed background so it reads as a sub-level, not a sibling, of the
+   Historical Chart/Documents tabs above it. */
+.filing-tabs.nested { background: var(--surface); padding: 0 8px; }
+.filing-tabs.nested .filing-tab { font-size: 11px; padding: 7px 10px; }
+
 /* Stock Watchlist row — accordion header doubling as the old table row, so
    its columns need to line up across every ticker the way table cells did. */
 .stock-row-header { padding: 10px 16px; }

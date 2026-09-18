@@ -2,6 +2,8 @@ const { ref, reactive, onMounted, onUnmounted, computed } = Vue;
 import { fetchQuote, fetchChart } from '../services/yahooFinance.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
 import { formatUSD, formatNumber, formatPct, formatVolume, formatDate, changeClass } from '../utils/formatters.js';
+import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
+import HistoryChart from './HistoryChart.js';
 
 const INDEX_LABELS = {
   '^GSPC': 'S&P 500',
@@ -48,8 +50,14 @@ function buildSparklineSVG(closes, width = 80, height = 30) {
   </svg>`;
 }
 
+// Base window fetched once per ticker; range buttons then filter this
+// client-side (same pattern as the Oil & Gas Markets spread/gas history
+// charts), so switching ranges doesn't re-hit the API.
+const CHART_FETCH_RANGE = '5y';
+
 export default {
   name: 'Stocks',
+  components: { HistoryChart },
   props: ['config'],
   setup(props) {
     const tickers = computed(() => props.config.stocks?.tickers ?? []);
@@ -106,57 +114,112 @@ export default {
     });
     onUnmounted(() => clearInterval(refreshTimer));
 
-    // ── SEC documents, merged in under each ticker (was a separate Documents ──
-    // tab with its own configured company list; now pulled directly for
-    // whatever's in the Stock Watchlist, so there's nothing extra to
-    // configure). Loaded lazily — only when a row is first expanded — rather
-    // than eagerly for the whole watchlist on every visit, since SEC EDGAR is
-    // rate-limited and a longer watchlist would mean a lot of unseen fetches.
-    const documents = reactive({}); // ticker → { open, loading, loaded, error, cik, filings, activeTab }
+    // ── Per-ticker detail panel: two tabs, "Historical Chart" and ──
+    // "Documents" (SEC filings — was a separate Documents tab with its own
+    // configured company list; now pulled directly for whatever's in the
+    // Stock Watchlist, so there's nothing extra to configure). Both tabs
+    // load lazily — only when a row is first expanded, or when that tab is
+    // first switched to — rather than eagerly for the whole watchlist on
+    // every visit, since SEC EDGAR is rate-limited and Yahoo chart history
+    // is one more request per ticker either way.
+    const details = reactive({}); // ticker → { open, tab: 'chart'|'documents', chart: {...}, docs: {...} }
 
-    function ensureDocs(ticker) {
-      if (!documents[ticker]) {
-        documents[ticker] = { open: false, loading: false, loaded: false, error: null, cik: null, filings: [], activeTab: '10-K' };
+    function ensureDetail(ticker) {
+      if (!details[ticker]) {
+        details[ticker] = {
+          open: false,
+          tab: 'chart',
+          chart: { loading: false, loaded: false, error: null, series: [], range: '1Y' },
+          docs: { loading: false, loaded: false, error: null, cik: null, filings: [], activeTab: '10-K' },
+        };
+      }
+    }
+
+    async function loadChart(ticker) {
+      const d = details[ticker].chart;
+      if (d.loaded || d.loading) return;
+      d.loading = true;
+      d.error = null;
+      try {
+        const chart = await fetchChart(ticker, CHART_FETCH_RANGE, '1d');
+        const series = [];
+        chart.timestamps.forEach((ts, i) => {
+          const close = chart.closes[i];
+          if (close == null) return;
+          series.push({ period: new Date(ts * 1000).toISOString().slice(0, 10), value: close });
+        });
+        d.series = series;
+        d.loaded = true;
+      } catch (e) {
+        d.error = e.message;
+      } finally {
+        d.loading = false;
       }
     }
 
     async function loadDocs(ticker) {
-      const entry = documents[ticker];
-      if (entry.loaded || entry.loading) return;
-      entry.loading = true;
-      entry.error = null;
+      const d = details[ticker].docs;
+      if (d.loaded || d.loading) return;
+      d.loading = true;
+      d.error = null;
       try {
         const cik = await resolveCIK(ticker);
         if (!cik) throw new Error(`Ticker "${ticker}" not found in SEC EDGAR`);
-        entry.cik = cik;
+        d.cik = cik;
         const submissions = await fetchFilings(cik);
-        entry.filings = extractFilings(submissions, ['10-K', '10-Q', '8-K', 'DEF 14A'], 10);
-        entry.loaded = true;
+        d.filings = extractFilings(submissions, ['10-K', '10-Q', '8-K', 'DEF 14A'], 10);
+        d.loaded = true;
       } catch (e) {
-        entry.error = e.message;
+        d.error = e.message;
       } finally {
-        entry.loading = false;
+        d.loading = false;
       }
     }
 
-    function toggleDocs(ticker) {
-      ensureDocs(ticker);
-      documents[ticker].open = !documents[ticker].open;
-      if (documents[ticker].open) loadDocs(ticker);
+    function loadActiveTab(ticker) {
+      if (details[ticker].tab === 'chart') loadChart(ticker);
+      else loadDocs(ticker);
+    }
+
+    function toggleDetail(ticker) {
+      ensureDetail(ticker);
+      details[ticker].open = !details[ticker].open;
+      if (details[ticker].open) loadActiveTab(ticker);
+    }
+
+    function setDetailTab(ticker, tab) {
+      if (!details[ticker] || details[ticker].tab === tab) return;
+      details[ticker].tab = tab;
+      loadActiveTab(ticker);
     }
 
     function setDocsTab(ticker, tab) {
-      if (documents[ticker]) documents[ticker].activeTab = tab;
+      if (details[ticker]) details[ticker].docs.activeTab = tab;
     }
 
     function filingsForTab(ticker, tab) {
-      return (documents[ticker]?.filings ?? []).filter(f => f.form === tab);
+      return (details[ticker]?.docs.filings ?? []).filter(f => f.form === tab);
+    }
+
+    // Chart series is fetched ascending already, but sort defensively —
+    // same belt-and-suspenders as the Oil & Gas Markets spread history,
+    // since a future change to the fetch order shouldn't silently corrupt
+    // the chart's left-to-right ordering.
+    function filteredChartData(ticker) {
+      const d = details[ticker]?.chart;
+      if (!d) return [];
+      const cutoff = cutoffDateFor(d.range);
+      return d.series
+        .filter(r => new Date(r.period) >= cutoff)
+        .slice()
+        .sort((a, b) => a.period.localeCompare(b.period));
     }
 
     return {
       tickers, stockQuotes, sparklines, lastUpdated,
       indexSymbols, indexes, INDEX_LABELS,
-      documents, toggleDocs, setDocsTab, filingsForTab, FORM_TABS,
+      details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData,
+      FORM_TABS, RANGE_OPTIONS,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, changeClass,
     };
@@ -199,7 +262,7 @@ export default {
 
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings -->
       <div class="accordion-item" v-for="sym in tickers" :key="sym">
-        <div class="accordion-header stock-row-header" :class="{ open: documents[sym]?.open }" @click="toggleDocs(sym)">
+        <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)">
           <div class="stock-row-main">
             <div class="stock-row-id">
               <span class="stock-row-ticker">{{ sym }}</span>
@@ -225,85 +288,120 @@ export default {
           <span class="chevron">▶</span>
         </div>
 
-        <!-- SEC filings — same content that used to live on the standalone Documents tab -->
-        <div class="accordion-body" v-if="documents[sym]?.open">
-          <template v-if="documents[sym]?.loading">
-            <div style="padding:16px">
-              <div class="skeleton" style="width:60%;height:14px;margin-bottom:8px"></div>
-              <div class="skeleton" style="width:40%;height:12px"></div>
+        <!-- Historical Chart + Documents (SEC filings) — same content that -->
+        <!-- used to live on the standalone Documents tab, now nested here. -->
+        <div class="accordion-body" v-if="details[sym]?.open">
+          <div class="filing-tabs">
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Historical Chart</button>
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')">Documents</button>
+          </div>
+
+          <!-- Historical Chart -->
+          <template v-if="details[sym]?.tab === 'chart'">
+            <div class="chart-filters" style="padding:12px 16px 0">
+              <div class="range-btn-group">
+                <button
+                  v-for="r in RANGE_OPTIONS" :key="r.id"
+                  class="range-btn" :class="{ active: details[sym]?.chart.range === r.id }"
+                  @click.stop="details[sym].chart.range = r.id"
+                >{{ r.label }}</button>
+              </div>
+            </div>
+
+            <div style="padding:12px 16px" v-if="details[sym]?.chart.loading">
+              <div class="skeleton" style="width:100%;height:220px"></div>
+            </div>
+            <div class="notice error" style="margin:12px" v-else-if="details[sym]?.chart.error">
+              {{ details[sym].chart.error }}
+            </div>
+            <div style="padding:12px 16px" v-else-if="filteredChartData(sym).length">
+              <HistoryChart :data="filteredChartData(sym)" />
+            </div>
+            <div class="text-muted text-sm" style="padding:16px" v-else>
+              No price history available for this range.
             </div>
           </template>
 
-          <div class="notice error" style="margin:12px" v-else-if="documents[sym]?.error">
-            {{ documents[sym].error }}
-          </div>
-
-          <template v-else-if="documents[sym]?.loaded">
-            <div class="filing-tabs">
-              <button
-                v-for="tab in FORM_TABS"
-                :key="tab.id"
-                class="filing-tab"
-                :class="{ active: documents[sym]?.activeTab === tab.id }"
-                @click.stop="setDocsTab(sym, tab.id)"
-              >{{ tab.label }}</button>
-            </div>
-
-            <div style="padding:12px 16px" v-if="documents[sym]?.activeTab === 'transcript'">
-              <p class="text-muted text-sm" style="margin-bottom:12px">
-                No free API exists for earnings transcripts. Links below open external search pages.
-              </p>
-              <div v-for="link in getTranscriptLinks(sym)" :key="link.url" style="margin-bottom:8px">
-                <a :href="link.url" target="_blank" rel="noopener">{{ link.label }}</a>
+          <!-- Documents -->
+          <template v-else>
+            <template v-if="details[sym]?.docs.loading">
+              <div style="padding:16px">
+                <div class="skeleton" style="width:60%;height:14px;margin-bottom:8px"></div>
+                <div class="skeleton" style="width:40%;height:12px"></div>
               </div>
+            </template>
+
+            <div class="notice error" style="margin:12px" v-else-if="details[sym]?.docs.error">
+              {{ details[sym].docs.error }}
             </div>
 
-            <div v-else style="padding:4px 0">
-              <div v-if="filingsForTab(sym, documents[sym]?.activeTab).length === 0"
-                   class="text-muted text-sm" style="padding:16px">
-                No {{ documents[sym]?.activeTab }} filings found in recent history.
+            <template v-else-if="details[sym]?.docs.loaded">
+              <div class="filing-tabs nested">
+                <button
+                  v-for="tab in FORM_TABS"
+                  :key="tab.id"
+                  class="filing-tab"
+                  :class="{ active: details[sym]?.docs.activeTab === tab.id }"
+                  @click.stop="setDocsTab(sym, tab.id)"
+                >{{ tab.label }}</button>
               </div>
-              <table class="data-table" v-else>
-                <thead>
-                  <tr>
-                    <th>Form</th>
-                    <th>Filed</th>
-                    <th>Report Date</th>
-                    <th>Document</th>
-                    <th>Index</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="filing in filingsForTab(sym, documents[sym]?.activeTab)" :key="filing.accessionNumber">
-                    <td style="font-weight:600">{{ filing.form }}</td>
-                    <td>{{ filing.filingDate }}</td>
-                    <td class="text-muted">{{ filing.reportDate || '—' }}</td>
-                    <td>
-                      <a
-                        v-if="filing.primaryDocument"
-                        :href="buildFilingUrl(documents[sym].cik, filing.accessionNumber, filing.primaryDocument)"
-                        target="_blank" rel="noopener"
-                      >{{ filing.primaryDocument }}</a>
-                      <span v-else class="text-muted">—</span>
-                    </td>
-                    <td>
-                      <a
-                        :href="buildIndexUrl(documents[sym].cik, filing.accessionNumber)"
-                        target="_blank" rel="noopener"
-                        class="text-muted text-sm"
-                      >View index</a>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+
+              <div style="padding:12px 16px" v-if="details[sym]?.docs.activeTab === 'transcript'">
+                <p class="text-muted text-sm" style="margin-bottom:12px">
+                  No free API exists for earnings transcripts. Links below open external search pages.
+                </p>
+                <div v-for="link in getTranscriptLinks(sym)" :key="link.url" style="margin-bottom:8px">
+                  <a :href="link.url" target="_blank" rel="noopener">{{ link.label }}</a>
+                </div>
+              </div>
+
+              <div v-else style="padding:4px 0">
+                <div v-if="filingsForTab(sym, details[sym]?.docs.activeTab).length === 0"
+                     class="text-muted text-sm" style="padding:16px">
+                  No {{ details[sym]?.docs.activeTab }} filings found in recent history.
+                </div>
+                <table class="data-table" v-else>
+                  <thead>
+                    <tr>
+                      <th>Form</th>
+                      <th>Filed</th>
+                      <th>Report Date</th>
+                      <th>Document</th>
+                      <th>Index</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="filing in filingsForTab(sym, details[sym]?.docs.activeTab)" :key="filing.accessionNumber">
+                      <td style="font-weight:600">{{ filing.form }}</td>
+                      <td>{{ filing.filingDate }}</td>
+                      <td class="text-muted">{{ filing.reportDate || '—' }}</td>
+                      <td>
+                        <a
+                          v-if="filing.primaryDocument"
+                          :href="buildFilingUrl(details[sym].docs.cik, filing.accessionNumber, filing.primaryDocument)"
+                          target="_blank" rel="noopener"
+                        >{{ filing.primaryDocument }}</a>
+                        <span v-else class="text-muted">—</span>
+                      </td>
+                      <td>
+                        <a
+                          :href="buildIndexUrl(details[sym].docs.cik, filing.accessionNumber)"
+                          target="_blank" rel="noopener"
+                          class="text-muted text-sm"
+                        >View index</a>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </template>
           </template>
         </div>
       </div>
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">
-        Quotes/sparklines from Yahoo Finance (unofficial API), delayed 15–20 minutes. SEC filings from
-        SEC EDGAR (data.sec.gov), no API key required, loaded when you expand a ticker. Manage tickers in ⚙ Settings.
+        Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.
+        SEC filings from SEC EDGAR (data.sec.gov), no API key required. Both load when you expand a ticker. Manage tickers in ⚙ Settings.
       </div>
     </div>
   `,
