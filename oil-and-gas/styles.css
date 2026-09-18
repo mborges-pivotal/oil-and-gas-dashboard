@@ -115,6 +115,30 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .tab-btn:hover { background: transparent; color: var(--text); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* Secondary tab strip nested inside a page (e.g. Oil & Gas Markets'
+   Oil/Retail Gas split) — same underline-on-active language as the main
+   .tab-bar, sized down and without its own background since it lives in
+   the content area, not the app header. */
+.subtab-bar {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 20px;
+}
+.subtab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: color var(--transition), border-color var(--transition);
+}
+.subtab-btn:hover { background: transparent; color: var(--text); }
+.subtab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 .tab-content {
   flex: 1;
   padding: 24px 20px;

@@ -3,8 +3,7 @@ import { configureYahooFinance } from './services/yahooFinance.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
-import OilPricesComponent from './components/OilPrices.js';
-import GasPricesComponent from './components/GasPrices.js';
+import OilGasMarketsComponent from './components/OilGasMarkets.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
 
@@ -283,15 +282,14 @@ const SettingsPanel = {
 const App = {
   components: {
     EconomicIndicators: EconomicIndicatorsComponent,
-    OilPrices: OilPricesComponent,
-    GasPrices: GasPricesComponent,
+    OilGasMarkets: OilGasMarketsComponent,
     Stocks: StocksComponent,
     News: NewsComponent,
     SettingsPanel,
   },
   setup() {
     const config = ref(null);
-    const activeTab = ref('oil');
+    const activeTab = ref('markets');
     const configLoaded = ref(false);
     const saveNotice = ref(false);
     // Bumped on reset to force SettingsPanel to remount — it clones config
@@ -301,8 +299,7 @@ const App = {
 
     const tabs = [
       { id: 'econ',      label: 'Economic Indicators' },
-      { id: 'oil',       label: 'Oil Prices' },
-      { id: 'gas',       label: 'Gas Prices' },
+      { id: 'markets',   label: 'Oil & Gas Markets' },
       { id: 'stocks',    label: 'Stocks' },
       { id: 'news',      label: 'News' },
       { id: 'settings',  label: '⚙ Settings' },
@@ -370,8 +367,7 @@ const App = {
           <div v-if="saveNotice" class="notice" style="margin-bottom:16px">✓ Settings saved.</div>
 
           <EconomicIndicators v-if="activeTab === 'econ'" :config="config" />
-          <OilPrices     v-if="activeTab === 'oil'"       :config="config" />
-          <GasPrices     v-if="activeTab === 'gas'"       :config="config" />
+          <OilGasMarkets v-if="activeTab === 'markets'"   :config="config" />
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
           <News          v-if="activeTab === 'news'"      :config="config" />
 

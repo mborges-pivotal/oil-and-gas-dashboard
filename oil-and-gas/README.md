@@ -10,13 +10,13 @@ A browser-only single-page app (SPA) for tracking oil prices, gas prices, O&G st
 
 This runs `server.js`, a single dependency-free Node process that serves the
 static app and relays the third-party APIs that don't send CORS headers
-(needed for Oil Prices + Stocks tabs), and always serves from this directory
-regardless of where you run it from. On macOS you can also just double-click
-`run.command`.
+(needed for Oil & Gas Markets + Stocks tabs), and always serves from this
+directory regardless of where you run it from. On macOS you can also just
+double-click `run.command`.
 
-To enable the Gas Prices / Economic Indicators tabs, copy `.env.example` to
-`.env` and fill in your free API keys — `server.js` loads it automatically,
-no install step needed:
+To enable the retail gas prices section / Economic Indicators tab, copy
+`.env.example` to `.env` and fill in your free API keys — `server.js` loads
+it automatically, no install step needed:
 
 ```bash
 cp .env.example .env
@@ -46,15 +46,14 @@ Then open `http://localhost:3000` in your browser.
 > `server.js` relays those requests server-side (same origin, at `/proxy`)
 > instead of depending on a public CORS-bypass proxy (those are unreliable
 > and are often blocked by corporate network filtering). Without the server
-> running, Oil Prices, Stocks, and Economic Indicators will show "Unavailable".
+> running, Oil & Gas Markets, Stocks, and Economic Indicators will show "Unavailable".
 
 ## Features
 
 | Tab | Description |
 |---|---|
 | **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. |
-| **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator with a historical chart (1M–5Y) overlaying both indexes' actual prices, gap between them shaded green/red by which is on top. |
-| **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-gas-prices-tab) below) — not something a visitor enters. |
+| **Oil & Gas Markets** | Two sub-tabs. **Oil Price Indexes**: BZ=F, CL=F, NG=F, HO=F, RB=F with a spread calculator and historical spread chart. **Retail Gas Prices**: the 3-2-1 crack spread (live futures, no key needed) and EIA retail gasoline/diesel prices with their own historical chart. Retail prices require an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) below) — not something a visitor enters. |
 | **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Expand a ticker to see its SEC EDGAR filings (10-K, 10-Q, 8-K, Proxy) and earnings transcript links right there, for whichever tickers are in the watchlist — no separate company list to maintain. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
 | **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — persisted to localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
@@ -66,7 +65,7 @@ All settings are stored in `localStorage` under the key `oilgas_config` and seed
 You can edit settings live in the **⚙ Settings** tab — no page reload required. Each settings section can be
 collapsed independently (click its header); they're all expanded by default.
 
-### EIA API Key (required for Gas Prices tab)
+### EIA API Key (required for retail gas prices)
 
 This is **fixed, per-deployment configuration** — set once by whoever runs the app, not something a visitor
 types into Settings (the Settings tab has no field for it at all).
@@ -129,8 +128,7 @@ oil-and-gas/
 ├── .env.example        # Template for local API keys — copy to .env (gitignored)
 ├── components/
 │   ├── EconomicIndicators.js  # FRED macro indicators + historical chart
-│   ├── OilPrices.js    # Oil price indexes + spread
-│   ├── GasPrices.js    # EIA gas prices + crack spread
+│   ├── OilGasMarkets.js  # Oil indexes + spread, crack spread, EIA retail gas prices
 │   ├── Stocks.js       # Market indexes + stock watchlist + sparklines + per-ticker SEC filings
 │   ├── News.js         # RSS news aggregator
 │   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
@@ -161,7 +159,7 @@ to be told to build from this subdirectory.
 4. Railway injects `PORT` itself; `server.js` reads `process.env.PORT`, so no config is needed there.
 5. Deploy, then open the generated `*.up.railway.app` domain. Everything (SPA + `/proxy` relay) is served from that single domain/port.
 6. Optional: set an env var **SEC_CONTACT** (e.g. `YourApp you@example.com`) — SEC EDGAR requires a real identifying User-Agent on automated requests or it starts 403'ing.
-7. Set **EIA_API_KEY** / **FRED_API_KEY** under the service's **Variables** tab to enable the Gas Prices / Economic Indicators tabs for everyone visiting this deployment — see [EIA API Key](#eia-api-key-required-for-gas-prices-tab) / [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) above. These are fixed for the whole deployment, not something each visitor sets.
+7. Set **EIA_API_KEY** / **FRED_API_KEY** under the service's **Variables** tab to enable retail gas prices / the Economic Indicators tab for everyone visiting this deployment — see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) / [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) above. These are fixed for the whole deployment, not something each visitor sets.
 
 If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-gas/` directory run `railway login`, `railway init`, `railway up`.
 
@@ -169,6 +167,6 @@ If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-
 
 - **Yahoo Finance** is an unofficial API — it may break without notice.
 - **rss2json.com** free tier is limited to 10 requests/hour per IP. Results are cached for 30 minutes.
-- **Gas Prices tab** is disabled until an EIA API key is configured.
+- **Retail gas prices** (in Oil & Gas Markets) are hidden until an EIA API key is configured.
 - Prices from Yahoo Finance may be delayed 15–20 minutes.
 - SEC EDGAR is rate-limited to 10 requests/second; the app staggers requests automatically.
