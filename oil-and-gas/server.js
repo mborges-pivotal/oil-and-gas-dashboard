@@ -37,6 +37,15 @@ const ALLOWED_HOSTS = new Set([
 // with your own contact info if you hit this.
 const SEC_USER_AGENT = process.env.SEC_CONTACT || 'Oil-Gas-Dashboard contact@example.com';
 
+// Fixed, operator-configured API keys — set per deployment (locally via
+// shell env, or in Railway's environment variable settings), never
+// committed to config.json/git and never editable from the Settings UI.
+// Injected into the served config.json below rather than exposed via a
+// separate endpoint, so the client's existing fetch('./config.json') just
+// picks them up transparently.
+const EIA_API_KEY = process.env.EIA_API_KEY || '';
+const FRED_API_KEY = process.env.FRED_API_KEY || '';
+
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -76,6 +85,30 @@ function handleProxy(req, res, reqUrl) {
     });
 }
 
+// Serves config.json with the operator-configured API keys injected, so
+// the file on disk (and in git) never has to contain real keys.
+function handleConfig(req, res) {
+  fs.readFile(path.join(ROOT, 'config.json'), 'utf8', (err, data) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end('Not found');
+      return;
+    }
+    let config;
+    try {
+      config = JSON.parse(data);
+    } catch {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('config.json is not valid JSON');
+      return;
+    }
+    config.eiaApiKey = EIA_API_KEY;
+    config.fredApiKey = FRED_API_KEY;
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify(config));
+  });
+}
+
 function handleStatic(req, res, reqUrl) {
   const requestedPath = reqUrl.pathname === '/' ? '/index.html' : reqUrl.pathname;
   const filePath = path.join(ROOT, path.normalize(decodeURIComponent(requestedPath)));
@@ -111,6 +144,11 @@ const server = http.createServer((req, res) => {
       return;
     }
     handleProxy(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname === '/config.json') {
+    handleConfig(req, res);
     return;
   }
 

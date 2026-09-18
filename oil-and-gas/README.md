@@ -38,13 +38,13 @@ Then open `http://localhost:3000` in your browser.
 
 | Tab | Description |
 |---|---|
-| **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Requires FRED API key. |
+| **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. |
 | **Oil Prices** | Brent (BZ=F), WTI (CL=F), Nat Gas (NG=F), Heating Oil (HO=F), RBOB Gasoline (RB=F). Spread calculator with a historical chart (1M–5Y) overlaying both indexes' actual prices, gap between them shaded green/red by which is on top. |
-| **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires EIA API key. |
+| **Gas Prices** | EIA weekly retail gasoline by grade (Regular/Midgrade/Premium/Diesel) + 3-2-1 crack spread. Requires an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-gas-prices-tab) below) — not something a visitor enters. |
 | **Stocks** | Configurable O&G stock watchlist with price, % change, volume, 30-day sparkline. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
 | **Documents** | SEC EDGAR 10-K, 10-Q, 8-K, Proxy filings + earnings transcript links. Configurable company list. |
-| **⚙ Settings** | All configuration: EIA key, tickers, RSS feeds, companies. Persisted to localStorage. Import/Export/Reset. Behind an admin login; sections are collapsible. |
+| **⚙ Settings** | Tickers, RSS feeds, companies, thresholds, and more — persisted to localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
 
 ## Configuration
 
@@ -53,37 +53,35 @@ All settings are stored in `localStorage` under the key `oilgas_config` and seed
 You can edit settings live in the **⚙ Settings** tab — no page reload required. Each settings section can be
 collapsed independently (click its header); they're all expanded by default.
 
-### Admin login
-
-The Settings tab is gated by a login screen, default **admin / admin**. Change the username/password under
-**Settings → Admin Account** (requires the current password). Credentials are stored hashed in this browser's
-localStorage, separately from the rest of the config — they're never included in Export/Import/Reset.
-
-**This is a lightweight, client-side-only lock, not real access control.** The app has no backend or database:
-the whole check runs in JS delivered to the browser, so anyone with DevTools access to the page can read the
-stored hash, flip the session flag directly, or just edit localStorage — none of that requires the password.
-It's meant to keep settings from being casually changed on a shared screen (e.g. a dashboard on an office TV),
-not to protect data from a motivated user. Don't rely on it once this app is deployed somewhere public (see
-[Deploying to Railway](#deploying-to-railway)) — anyone who bypasses the login has the same access as an admin.
-
 ### EIA API Key (required for Gas Prices tab)
+
+This is **fixed, per-deployment configuration** — set once by whoever runs the app, not something a visitor
+types into Settings (the Settings tab has no field for it at all).
 
 1. Register for free at [eia.gov/opendata](https://www.eia.gov/opendata/)
 2. Copy your API key
-3. Paste it in **⚙ Settings → EIA API Key**
-4. Click **Save Changes**
+3. Set it as the **`EIA_API_KEY`** environment variable when running the server:
+   ```bash
+   EIA_API_KEY=your-key-here ./run.sh
+   ```
+   On Railway, add it under the service's **Variables** tab instead (see [Deploying to Railway](#deploying-to-railway)).
 
-The key is stored in your browser's localStorage. It is not sent anywhere except the EIA API itself.
+`server.js` injects it into the `config.json` it serves to the browser — it's never written to the `config.json`
+file on disk or committed to git, and a visitor can't change or export it from Settings.
 
 ### FRED API Key (required for Economic Indicators tab)
 
+Same model as the EIA key above — fixed per-deployment configuration, not a Settings field.
+
 1. Register for free at [fred.stlouisfed.org/docs/api/api_key.html](https://fred.stlouisfed.org/docs/api/api_key.html)
 2. Copy your API key
-3. Paste it in **⚙ Settings → FRED API Key**
-4. Click **Save Changes**
+3. Set it as the **`FRED_API_KEY`** environment variable when running the server:
+   ```bash
+   FRED_API_KEY=your-key-here ./run.sh
+   ```
+   On Railway, add it under the service's **Variables** tab.
 
-Like the EIA key, this is stored in your browser's localStorage and sent only to the FRED API (via this app's
-same-origin relay — see the CORS note below).
+Both keys can be set together, e.g. `EIA_API_KEY=xxx FRED_API_KEY=yyy ./run.sh`.
 
 ## Data Sources
 
@@ -119,7 +117,6 @@ oil-and-gas/
 │   ├── Stocks.js       # Stock watchlist + sparklines
 │   ├── News.js         # RSS news aggregator
 │   ├── Documents.js    # SEC EDGAR document collector
-│   ├── Login.js        # Admin login form (Settings gate)
 │   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
 │   └── DualLineChart.js # Shared two-series overlay chart w/ crossing-shaded fill (SVG)
 ├── services/
@@ -132,7 +129,6 @@ oil-and-gas/
     ├── config.js       # localStorage config persistence
     ├── formatters.js   # Currency, percent, date formatters
     ├── spread.js       # Spread + crack spread calculations
-    ├── auth.js         # Admin credential storage/verification (client-side only)
     └── dateRange.js    # Shared range-picker options for historical charts
 ```
 
@@ -149,7 +145,7 @@ to be told to build from this subdirectory.
 4. Railway injects `PORT` itself; `server.js` reads `process.env.PORT`, so no config is needed there.
 5. Deploy, then open the generated `*.up.railway.app` domain. Everything (SPA + `/proxy` relay) is served from that single domain/port.
 6. Optional: set an env var **SEC_CONTACT** (e.g. `YourApp you@example.com`) — SEC EDGAR requires a real identifying User-Agent on automated requests or it starts 403'ing.
-7. In the app's **⚙ Settings** tab, add your EIA API key (Gas Prices tab) — it's stored in the browser's localStorage, per visitor, not on the server.
+7. Set **EIA_API_KEY** / **FRED_API_KEY** under the service's **Variables** tab to enable the Gas Prices / Economic Indicators tabs for everyone visiting this deployment — see [EIA API Key](#eia-api-key-required-for-gas-prices-tab) / [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) above. These are fixed for the whole deployment, not something each visitor sets.
 
 If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-gas/` directory run `railway login`, `railway init`, `railway up`.
 

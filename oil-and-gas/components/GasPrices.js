@@ -204,9 +204,9 @@ export default {
 
       <!-- No EIA key notice — only blocks the retail sections below -->
       <div class="notice warn" v-if="!hasKey">
-        <strong>EIA API key required</strong> for the retail gasoline/diesel prices below.
-        Enter your free API key in the <strong>⚙ Settings</strong> tab to enable this.
-        Get one at <a href="https://www.eia.gov/opendata/" target="_blank">eia.gov/opendata</a>.
+        <strong>EIA API key not configured</strong> — the retail gasoline/diesel prices below need one.
+        This is a fixed setting for this deployment, not something you can enter here: whoever is
+        running this app needs to set the <code>EIA_API_KEY</code> environment variable (see the README).
         The crack spread above uses live futures and doesn't need this key.
       </div>
 

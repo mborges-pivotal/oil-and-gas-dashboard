@@ -1,6 +1,4 @@
 {
-  "eiaApiKey": "",
-  "fredApiKey": "",
   "stocks": {
     "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG", "NOV", "KMI"]
   },
@@ -20,20 +18,23 @@
   },
   "news": {
     "feeds": [
-      { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml", "enabled": true },
-      { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main", "enabled": true },
-      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx", "enabled": true },
-      { "name": "FRED Blog (St. Louis Fed)", "url": "https://fredblog.stlouisfed.org/feed/", "enabled": true }
+      { "name": "Reuters Business", "url": "https://feeds.reuters.com/reuters/businessNews", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "EIA Today in Energy", "url": "https://www.eia.gov/rss/todayinenergy.xml", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "CNBC Top Biz News", "url": "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "OilPrice.com", "url": "https://oilprice.com/rss/main", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "Rigzone", "url": "https://www.rigzone.com/news/rss/rigzone_latest.aspx", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "FRED Blog (St. Louis Fed)", "url": "https://fredblog.stlouisfed.org/feed/", "enabled": true, "showInEconomicIndicators": true },
+      { "name": "NOV Press Releases", "url": "https://investors.nov.com/rss/news-releases.xml", "enabled": true, "showInEconomicIndicators": false },
+      { "name": "NOV SEC Fillings", "url": "https://investors.nov.com/rss/sec-fillings.xml", "enabled": true, "showInEconomicIndicators": false }
     ],
-    "rssProxy": "rss2json"
+    "rssProxy": "rss2json",
+    "economicNewsDays": 7
   },
   "documents": {
     "companies": [
-      { "ticker": "XOM", "name": "ExxonMobil" },
-      { "ticker": "CVX", "name": "Chevron" },
-      { "ticker": "COP", "name": "ConocoPhillips" },
-      { "ticker": "SLB", "name": "SLB (Schlumberger)" },
-      { "ticker": "OXY", "name": "Occidental Petroleum" }
+      { "ticker": "KMI", "name": "Kinder Morgan" },
+      { "ticker": "NOV", "name": "NOV" },
+      { "ticker": "VLO", "name": "Valero Energy" }
     ]
   },
   "ui": {

@@ -1,30 +1,47 @@
 const CONFIG_KEY = 'oilgas_config';
 
+// eiaApiKey/fredApiKey are fixed, operator-configured application settings
+// (see server.js, which injects them from EIA_API_KEY/FRED_API_KEY env
+// vars) — never user-editable, never persisted to localStorage. Every
+// loadConfig() call re-fetches config.json to pick up their current value,
+// even when the rest of the config already lives in localStorage.
+const API_KEY_FIELDS = ['eiaApiKey', 'fredApiKey'];
+
 /**
  * Load config from localStorage, falling back to config.json defaults.
  * Returns a plain object (deep clone so mutations don't corrupt the cache).
  */
 export async function loadConfig() {
+  const res = await fetch('./config.json', { cache: 'no-store' });
+  const serverDefaults = await res.json();
+
+  let config = null;
   const stored = localStorage.getItem(CONFIG_KEY);
   if (stored) {
     try {
-      return JSON.parse(stored);
+      config = JSON.parse(stored);
     } catch {
       // corrupted — fall through to defaults
     }
   }
-  // Fetch defaults from bundled config.json
-  const res = await fetch('./config.json', { cache: 'no-store' });
-  const defaults = await res.json();
-  saveConfig(defaults);
-  return defaults;
+  if (!config) {
+    config = serverDefaults;
+    saveConfig(config);
+  }
+
+  for (const field of API_KEY_FIELDS) config[field] = serverDefaults[field] ?? '';
+  return config;
 }
 
 /**
- * Persist config to localStorage.
+ * Persist config to localStorage. API keys are always excluded — they're
+ * fixed application configuration, not something a visitor's save should
+ * be able to write.
  */
 export function saveConfig(config) {
-  localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+  const toStore = { ...config };
+  for (const field of API_KEY_FIELDS) delete toStore[field];
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(toStore));
 }
 
 /**

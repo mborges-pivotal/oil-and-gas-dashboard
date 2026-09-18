@@ -1,9 +1,12 @@
 const { ref, reactive, computed, onMounted, onUnmounted } = Vue;
 import { fetchSeriesHistory, fetchCPIYoYHistory } from '../services/fred.js';
+import { fetchFeed, mergeFeeds } from '../services/rss.js';
 import { formatPercentLevel, formatPct, formatDate, changeClass } from '../utils/formatters.js';
 import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 import HistoryChart from './HistoryChart.js';
 import DualLineChart from './DualLineChart.js';
+
+const NEWS_STAGGER_MS = 600; // delay between feed requests to respect rate limits
 
 // `fred` is the series ID to fetch, except 'CPI_YOY' which is a derived
 // series (see fetchCPIYoYHistory) — FRED doesn't publish YoY inflation
@@ -101,8 +104,63 @@ export default {
       lastUpdated.value = new Date().toLocaleTimeString();
     }
 
+    // ── Related news ─────────────────────────────────────────────────────
+    // Opt-in per feed (Settings → News RSS Feeds → "Econ Indicators"
+    // checkbox) — most news feeds aren't about macro data, so this stays
+    // empty/hidden unless the user tags at least one.
+    const relatedFeeds = computed(() =>
+      (props.config.news?.feeds ?? []).filter(f => f.enabled !== false && f.showInEconomicIndicators)
+    );
+    const newsDays = computed(() => props.config.news?.economicNewsDays ?? 7);
+    const relatedNews = ref([]);
+    const relatedNewsLoading = ref(true);
+    const relatedNewsError = ref(null);
+
+    async function fetchRelatedNews() {
+      if (!relatedFeeds.value.length) {
+        relatedNews.value = [];
+        relatedNewsLoading.value = false;
+        return;
+      }
+      relatedNewsLoading.value = relatedNews.value.length === 0;
+      relatedNewsError.value = null;
+      const proxy = props.config.news?.rssProxy ?? 'rss2json';
+      const results = [];
+      for (let i = 0; i < relatedFeeds.value.length; i++) {
+        const feed = relatedFeeds.value[i];
+        if (i > 0) await new Promise(r => setTimeout(r, NEWS_STAGGER_MS)); // stagger to respect proxy rate limits
+        try {
+          results.push(await fetchFeed(feed.url, feed.name, proxy));
+        } catch (e) {
+          relatedNewsError.value = e.message;
+          results.push([]);
+        }
+      }
+      const cutoffMs = Date.now() - newsDays.value * 24 * 60 * 60 * 1000;
+      relatedNews.value = mergeFeeds(results).filter(a => a.pubDate && new Date(a.pubDate).getTime() >= cutoffMs);
+      relatedNewsLoading.value = false;
+    }
+
+    function relativeTime(isoStr) {
+      if (!isoStr) return '';
+      const diff = Date.now() - new Date(isoStr).getTime();
+      const mins = Math.floor(diff / 60000);
+      if (mins < 60) return `${mins}m ago`;
+      const hrs = Math.floor(mins / 60);
+      if (hrs < 24) return `${hrs}h ago`;
+      const days = Math.floor(hrs / 24);
+      return `${days}d ago`;
+    }
+
+    // Some feed-provided image URLs 404 or block hotlinking — hide the
+    // broken image instead of showing the browser's broken-image icon.
+    function onImageError(e) {
+      e.target.closest('a').style.display = 'none';
+    }
+
     onMounted(() => {
       fetchAll();
+      fetchRelatedNews();
       // Daily series (Treasury yields) update once a day, not intraday —
       // a long interval avoids burning API calls for data that isn't moving.
       refreshTimer = setInterval(fetchAll, 30 * 60 * 1000);
@@ -113,6 +171,7 @@ export default {
       SERIES, indicators, hasKey, lastUpdated,
       selectedSeries, historyRange, showHistoryTable, filteredHistory,
       isYieldCurve, yieldCurveDual, yieldCurveDualLoading, yieldCurveDualError,
+      relatedFeeds, newsDays, relatedNews, relatedNewsLoading, relatedNewsError, relativeTime, onImageError,
       formatterFor, RANGE_OPTIONS,
       formatPercentLevel, formatPct, formatDate, changeClass,
     };
@@ -125,8 +184,9 @@ export default {
       </div>
 
       <div class="notice warn" v-if="!hasKey">
-        <strong>FRED API key required.</strong> Enter your free API key in the <strong>⚙ Settings</strong> tab
-        to enable this page. Get one at <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank">fred.stlouisfed.org</a>.
+        <strong>FRED API key not configured.</strong> This is a fixed setting for this deployment, not
+        something you can enter here: whoever is running this app needs to set the
+        <code>FRED_API_KEY</code> environment variable (see the README).
       </div>
 
       <template v-if="hasKey">
@@ -150,6 +210,44 @@ export default {
             <template v-else>
               <div class="text-muted text-sm">No data</div>
             </template>
+          </div>
+        </div>
+
+        <!-- Related News -->
+        <div class="card mb-24" v-if="relatedFeeds.length">
+          <div class="card-title">Recent News (last {{ newsDays }} days)</div>
+          <div class="notice error" v-if="relatedNewsError">Failed to load news: {{ relatedNewsError }}</div>
+          <template v-else-if="relatedNewsLoading">
+            <div class="news-grid">
+              <div class="news-card" v-for="i in 3" :key="i">
+                <div class="skeleton news-card-image"></div>
+                <div class="news-card-body">
+                  <div class="skeleton" style="width:40%;height:12px;margin-bottom:8px"></div>
+                  <div class="skeleton" style="width:90%;height:14px;margin-bottom:4px"></div>
+                  <div class="skeleton" style="width:70%;height:14px"></div>
+                </div>
+              </div>
+            </div>
+          </template>
+          <div class="news-grid" v-else-if="relatedNews.length">
+            <div class="news-card" v-for="(article, i) in relatedNews" :key="article.link || i">
+              <a v-if="article.image" :href="article.link" target="_blank" rel="noopener">
+                <img class="news-card-image" :src="article.image" alt="" loading="lazy" @error="onImageError" />
+              </a>
+              <div class="news-card-body">
+                <div class="news-meta">
+                  <span class="source-badge">{{ article.source }}</span>
+                  <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
+                </div>
+                <div class="news-title">
+                  <a :href="article.link" target="_blank" rel="noopener">{{ article.title }}</a>
+                </div>
+                <div class="news-snippet" v-if="article.description">{{ article.description }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="notice text-sm" v-else>
+            No news from the last {{ newsDays }} days. Adjust the day count in ⚙ Settings → News RSS Feeds.
           </div>
         </div>
 

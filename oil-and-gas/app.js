@@ -1,6 +1,5 @@
 import { loadConfig, saveConfig, exportConfig } from './utils/config.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
-import { getCredentials, verifyLogin, updateCredentials, isSessionAuthed, setSessionAuthed } from './utils/auth.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
@@ -9,13 +8,12 @@ import GasPricesComponent from './components/GasPrices.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
 import DocumentsComponent from './components/Documents.js';
-import LoginComponent from './components/Login.js';
 
 const { createApp, ref, reactive, provide, onMounted } = Vue;
 
 // ── Settings Panel component ────────────────────────────────────────────────
 const SettingsPanel = {
-  emits: ['save', 'export', 'reset', 'logout'],
+  emits: ['save', 'export', 'reset'],
   props: ['config'],
   setup(props, { emit }) {
     // Work on a deep clone so changes aren't live until saved
@@ -27,13 +25,16 @@ const SettingsPanel = {
     if (!local.crackSpreadThresholds) {
       local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
     }
+    if (local.news && local.news.economicNewsDays == null) {
+      local.news.economicNewsDays = 7;
+    }
 
     // Each settings section can be collapsed independently; open by default
     // so existing behavior (everything visible) is unchanged until a user
     // chooses to collapse something.
     const sections = reactive({
-      eia: true, fred: true, refresh: true, proxy: true, crack: true,
-      tickers: true, feeds: true, companies: true, admin: true,
+      refresh: true, proxy: true, crack: true,
+      tickers: true, feeds: true, companies: true,
     });
     function toggleSection(key) { sections[key] = !sections[key]; }
 
@@ -81,10 +82,17 @@ const SettingsPanel = {
     }
     function removeCompany(i) { local.documents.companies.splice(i, 1); }
 
+    // eiaApiKey/fredApiKey are fixed, operator-configured values (see
+    // server.js) — this panel never shows or edits them, and neither an
+    // exported file nor an imported one should be able to carry them.
+    function stripApiKeys(obj) {
+      const { eiaApiKey, fredApiKey, ...rest } = obj;
+      return rest;
+    }
+
     function save() { emit('save', JSON.parse(JSON.stringify(local))); }
-    function exportCfg() { emit('export', JSON.parse(JSON.stringify(local))); }
+    function exportCfg() { emit('export', stripApiKeys(JSON.parse(JSON.stringify(local)))); }
     function reset() { emit('reset'); }
-    function logout() { emit('logout'); }
 
     // Import Config — populates the form from an exported JSON file; the
     // user still has to click "Save Changes" to persist it, same as any
@@ -111,13 +119,16 @@ const SettingsPanel = {
           return;
         }
 
-        Object.assign(local, parsed);
+        Object.assign(local, stripApiKeys(parsed));
         // Configs exported before these settings existed won't have them
         if (!local.yahooFinance) {
           local.yahooFinance = { corsProxy: 'local', localProxyUrl: '/proxy?url=' };
         }
         if (!local.crackSpreadThresholds) {
           local.crackSpreadThresholds = { modestMax: 15, healthyMax: 25, veryStrongMax: 35 };
+        }
+        if (local.news && local.news.economicNewsDays == null) {
+          local.news.economicNewsDays = 7;
         }
         importStatus.value = { type: 'success', message: `Imported "${file.name}" — review below, then click Save Changes.` };
       };
@@ -127,67 +138,13 @@ const SettingsPanel = {
       reader.readAsText(file);
     }
 
-    // Admin Account — kept entirely separate from `local`/config: it's
-    // stored under its own localStorage key so it's never swept up by
-    // Export/Import/Reset Config.
-    const adminUsername = ref('');
-    const newAdminUsername = ref('');
-    const currentPassword = ref('');
-    const newPassword = ref('');
-    const confirmPassword = ref('');
-    const adminStatus = ref(null); // { type: 'success'|'error', message }
-
-    onMounted(async () => {
-      const creds = await getCredentials();
-      adminUsername.value = creds.username;
-      newAdminUsername.value = creds.username;
-    });
-
-    async function updateAdmin() {
-      adminStatus.value = null;
-
-      if (!currentPassword.value) {
-        adminStatus.value = { type: 'error', message: 'Enter your current password to confirm this change.' };
-        return;
-      }
-      const ok = await verifyLogin(adminUsername.value, currentPassword.value);
-      if (!ok) {
-        adminStatus.value = { type: 'error', message: 'Current password is incorrect.' };
-        return;
-      }
-      if (!newAdminUsername.value.trim()) {
-        adminStatus.value = { type: 'error', message: 'Username cannot be empty.' };
-        return;
-      }
-      if (newPassword.value || confirmPassword.value) {
-        if (newPassword.value.length < 4) {
-          adminStatus.value = { type: 'error', message: 'New password must be at least 4 characters.' };
-          return;
-        }
-        if (newPassword.value !== confirmPassword.value) {
-          adminStatus.value = { type: 'error', message: 'New passwords do not match.' };
-          return;
-        }
-      }
-
-      const finalPassword = newPassword.value || currentPassword.value;
-      await updateCredentials(newAdminUsername.value.trim(), finalPassword);
-      adminUsername.value = newAdminUsername.value.trim();
-      currentPassword.value = '';
-      newPassword.value = '';
-      confirmPassword.value = '';
-      adminStatus.value = { type: 'success', message: 'Admin account updated.' };
-    }
-
     return {
       local, sections, toggleSection,
       newTicker, addTicker, removeTicker,
       newFeedName, newFeedUrl, addFeed, removeFeed, toggleFeed,
       newCompanyTicker, newCompanyName, addCompany, removeCompany,
-      save, exportCfg, reset, logout,
+      save, exportCfg, reset,
       fileInput, importStatus, triggerImport, onImportFile,
-      adminUsername, newAdminUsername, currentPassword, newPassword, confirmPassword,
-      adminStatus, updateAdmin,
     };
   },
   template: `
@@ -200,48 +157,11 @@ const SettingsPanel = {
           <button @click="exportCfg">Export Config</button>
           <button class="danger" @click="reset">Reset to Defaults</button>
           <button class="primary" @click="save">Save Changes</button>
-          <button @click="logout">Log Out</button>
         </div>
       </div>
 
       <div v-if="importStatus" class="notice" :class="{ error: importStatus.type === 'error' }" style="margin-bottom:16px">
         {{ importStatus.type === 'error' ? '✗' : '✓' }} {{ importStatus.message }}
-      </div>
-
-      <!-- EIA API Key -->
-      <div class="accordion-item">
-        <div class="accordion-header" :class="{ open: sections.eia }" @click="toggleSection('eia')">
-          <span>EIA API Key</span>
-          <span class="chevron">▶</span>
-        </div>
-        <div class="accordion-body padded" v-if="sections.eia">
-          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-            Required for Gas Prices tab. Get a free key at
-            <a href="https://www.eia.gov/opendata/" target="_blank">eia.gov/opendata</a>.
-            The key is stored locally and visible in browser DevTools — this is expected for public EIA keys.
-          </p>
-          <div class="settings-row">
-            <input v-model="local.eiaApiKey" placeholder="Enter your free EIA API key…" style="max-width:400px" />
-          </div>
-        </div>
-      </div>
-
-      <!-- FRED API Key -->
-      <div class="accordion-item">
-        <div class="accordion-header" :class="{ open: sections.fred }" @click="toggleSection('fred')">
-          <span>FRED API Key</span>
-          <span class="chevron">▶</span>
-        </div>
-        <div class="accordion-body padded" v-if="sections.fred">
-          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-            Required for the Economic Indicators tab (inflation, unemployment, fed funds rate, Treasury
-            yields). Get a free key at
-            <a href="https://fred.stlouisfed.org/docs/api/api_key.html" target="_blank">fred.stlouisfed.org</a>.
-          </p>
-          <div class="settings-row">
-            <input v-model="local.fredApiKey" placeholder="Enter your free FRED API key…" style="max-width:400px" />
-          </div>
-        </div>
       </div>
 
       <!-- Refresh Interval -->
@@ -344,6 +264,10 @@ const SettingsPanel = {
           <div v-for="(feed, i) in local.news.feeds" :key="i" class="settings-row" style="margin-bottom:6px">
             <input v-model="feed.name" placeholder="Name" style="width:160px;flex:none" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
             <input v-model="feed.url" placeholder="RSS URL" style="flex:1" :style="feed.enabled === false ? 'opacity:0.45' : ''" />
+            <label style="display:flex;align-items:center;gap:4px;white-space:nowrap;margin:0;font-weight:normal" title="Show this feed's recent articles as news cards on the Economic Indicators tab">
+              <input type="checkbox" v-model="feed.showInEconomicIndicators" style="width:auto" />
+              <span class="text-sm">Econ Indicators</span>
+            </label>
             <button @click="toggleFeed(i)" :title="feed.enabled === false ? 'Enable feed' : 'Pause feed'">{{ feed.enabled === false ? '▶ Enable' : '⏸ Pause' }}</button>
             <button class="danger" @click="removeFeed(i)">Remove</button>
           </div>
@@ -358,6 +282,11 @@ const SettingsPanel = {
               <option value="rss2json">rss2json.com (recommended, 10 req/hr)</option>
               <option value="allorigins">allorigins.win (raw XML, no rate limit)</option>
             </select>
+          </div>
+          <div class="settings-row" style="margin-top:10px">
+            <label style="display:inline;margin:0;margin-right:8px">Economic Indicators news cards: show articles from the last</label>
+            <input v-model.number="local.news.economicNewsDays" type="number" min="1" max="90" style="width:60px" />
+            <span class="text-muted text-sm">days</span>
           </div>
         </div>
       </div>
@@ -382,42 +311,6 @@ const SettingsPanel = {
         </div>
       </div>
 
-      <!-- Admin Account -->
-      <div class="accordion-item">
-        <div class="accordion-header" :class="{ open: sections.admin }" @click="toggleSection('admin')">
-          <span>Admin Account</span>
-          <span class="chevron">▶</span>
-        </div>
-        <div class="accordion-body padded" v-if="sections.admin">
-          <p class="text-muted text-sm mb-16" style="margin-bottom:10px">
-            Changes the username/password for the Settings login on this browser. This is a
-            lightweight client-side lock, not real access control — it isn't a substitute for
-            keeping this dashboard off a network you don't trust.
-          </p>
-          <div class="settings-row" style="margin-bottom:8px">
-            <label style="display:inline;margin:0;margin-right:8px;width:140px">New username</label>
-            <input v-model="newAdminUsername" style="max-width:220px" />
-          </div>
-          <div class="settings-row" style="margin-bottom:8px">
-            <label style="display:inline;margin:0;margin-right:8px;width:140px">New password</label>
-            <input v-model="newPassword" type="password" placeholder="Leave blank to keep current password" style="max-width:220px" autocomplete="new-password" />
-          </div>
-          <div class="settings-row" style="margin-bottom:8px">
-            <label style="display:inline;margin:0;margin-right:8px;width:140px">Confirm new password</label>
-            <input v-model="confirmPassword" type="password" style="max-width:220px" autocomplete="new-password" />
-          </div>
-          <div class="settings-row" style="margin-bottom:8px">
-            <label style="display:inline;margin:0;margin-right:8px;width:140px">Current password</label>
-            <input v-model="currentPassword" type="password" placeholder="Required to confirm" style="max-width:220px" autocomplete="current-password" />
-          </div>
-          <div class="notice" :class="{ error: adminStatus.type === 'error' }" style="margin-bottom:8px" v-if="adminStatus">
-            {{ adminStatus.type === 'error' ? '✗' : '✓' }} {{ adminStatus.message }}
-          </div>
-          <div class="settings-row">
-            <button class="primary" @click="updateAdmin">Update Admin Account</button>
-          </div>
-        </div>
-      </div>
     </div>
   `,
 };
@@ -432,7 +325,6 @@ const App = {
     News: NewsComponent,
     Documents: DocumentsComponent,
     SettingsPanel,
-    Login: LoginComponent,
   },
   setup() {
     const config = ref(null);
@@ -443,10 +335,6 @@ const App = {
     // into local state once at setup(), so it needs a fresh instance to
     // pick up the reset values instead of showing stale form state.
     const settingsKey = ref(0);
-    // Settings tab requires logging in (client-side gate only — see utils/auth.js).
-    // Backed by sessionStorage so a page reload within the same tab session
-    // doesn't force a re-login, but a new tab/browser session does.
-    const settingsAuthed = ref(isSessionAuthed());
 
     const tabs = [
       { id: 'econ',      label: 'Economic Indicators' },
@@ -465,9 +353,14 @@ const App = {
     });
 
     function onSaveConfig(updated) {
-      config.value = updated;
-      saveConfig(updated);
-      configureYahooFinance(updated.yahooFinance);
+      // eiaApiKey/fredApiKey are fixed, operator-configured values (never
+      // edited in Settings) — re-apply whatever's currently live rather
+      // than trust the SettingsPanel's clone, which could be a stale
+      // snapshot from whenever that panel was mounted. saveConfig() also
+      // strips them before writing to localStorage regardless.
+      config.value = { ...updated, eiaApiKey: config.value.eiaApiKey, fredApiKey: config.value.fredApiKey };
+      saveConfig(config.value);
+      configureYahooFinance(config.value.yahooFinance);
       saveNotice.value = true;
       setTimeout(() => { saveNotice.value = false; }, 2500);
     }
@@ -484,22 +377,12 @@ const App = {
 
     function onExportConfig(cfg) { exportConfig(cfg); }
 
-    function onLoginSuccess() {
-      settingsAuthed.value = true;
-      setSessionAuthed(true);
-    }
-
-    function onLogout() {
-      settingsAuthed.value = false;
-      setSessionAuthed(false);
-    }
-
     // Provide config to all child components
     provide('config', config);
 
     return {
-      config, configLoaded, activeTab, tabs, saveNotice, settingsKey, settingsAuthed,
-      onSaveConfig, onResetConfig, onExportConfig, onLoginSuccess, onLogout,
+      config, configLoaded, activeTab, tabs, saveNotice, settingsKey,
+      onSaveConfig, onResetConfig, onExportConfig,
     };
   },
   template: `
@@ -531,15 +414,11 @@ const App = {
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Documents     v-if="activeTab === 'documents'" :config="config" />
 
-          <template v-if="activeTab === 'settings'">
-            <Login v-if="!settingsAuthed" @success="onLoginSuccess" />
-            <SettingsPanel v-else :key="settingsKey" :config="config"
-              @save="onSaveConfig"
-              @export="onExportConfig"
-              @reset="onResetConfig"
-              @logout="onLogout"
-            />
-          </template>
+          <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config"
+            @save="onSaveConfig"
+            @export="onExportConfig"
+            @reset="onResetConfig"
+          />
         </template>
       </main>
     </div>
