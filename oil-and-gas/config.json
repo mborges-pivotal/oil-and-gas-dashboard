@@ -34,7 +34,7 @@
     "economicNewsDays": 7
   },
   "ui": {
-    "theme": "dark",
+    "theme": "system",
     "refreshIntervalSeconds": 60
   }
 }

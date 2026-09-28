@@ -57,6 +57,7 @@ Then open `http://localhost:3000` in your browser.
 | **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Expand a ticker for two tabs: **Historical Chart** (price history with 1M–5Y range buttons) and **Documents** (SEC EDGAR filings — 10-K, 10-Q, 8-K, Proxy — plus earnings transcript links), for whichever tickers are in the watchlist — no separate company list to maintain. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
 | **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — saved to your account profile when signed in, otherwise to this browser's localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
+| **Theme switch** (header, ☀ ☾ ◐) | Light, Dark, or System (follows the OS light/dark setting, live). Saved with the rest of the settings — to the profile when signed in — and applied before first paint, so there's no flash of the wrong theme on reload. |
 | **Sign In / 👤 Account** | Optional user accounts: register and sign in with email + password. A signed-in user's dashboard settings are stored in their profile in the server database, so they follow them to any browser/device. The profile page edits the display name, changes the password (signing out other devices), and signs out. |
 
 ## Configuration
@@ -134,7 +135,7 @@ API (same origin, JSON): `POST /api/auth/register`, `POST /api/auth/login`, `POS
 ## Tech Stack
 
 - **Vue 3** via CDN (no build step)
-- **Plain CSS** with CSS variables (dark theme)
+- **Plain CSS** with CSS variables — dark and light palettes, switched via `<html data-theme>`
 - No external UI libraries, no bundler
 
 ## Project Structure
@@ -144,7 +145,7 @@ oil-and-gas/
 ├── index.html          # Entry point
 ├── config.json         # Default configuration seed
 ├── app.js              # Root Vue app + Settings panel
-├── styles.css          # Dark theme CSS
+├── styles.css          # Styles + dark/light theme palettes
 ├── server.js           # Static file server + same-origin CORS relay + /api (single process/port)
 ├── server/
 │   ├── auth.js         # /api routes: register, login/logout, profile, password change
@@ -169,6 +170,7 @@ oil-and-gas/
 │   └── edgar.js        # SEC EDGAR API + helpers
 └── utils/
     ├── config.js       # Config persistence (user profile when signed in, else localStorage)
+    ├── theme.js        # Light/dark/system theme preference → <html data-theme>
     ├── formatters.js   # Currency, percent, date formatters
     ├── spread.js       # Spread + crack spread calculations
     └── dateRange.js    # Shared range-picker options for historical charts

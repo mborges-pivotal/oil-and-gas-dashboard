@@ -1,6 +1,7 @@
 import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/config.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
 import { fetchCurrentUser } from './services/auth.js';
+import { THEME_OPTIONS, applyTheme, normalizeTheme } from './utils/theme.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
@@ -304,7 +305,7 @@ const App = {
     const config = ref(null);
     // Signed-in user's profile (services/auth.js), or null when anonymous.
     const user = ref(null);
-    const activeTab = ref('markets');
+    const activeTab = ref('econ');
     const configLoaded = ref(false);
     const saveNotice = ref(null); // message string while shown
     const saveError = ref(null);
@@ -333,6 +334,7 @@ const App = {
     // setup(), so it needs a fresh instance to show the new values.
     function applyConfig(cfg) {
       config.value = cfg;
+      applyTheme(cfg.ui?.theme);
       configureYahooFinance(cfg.yahooFinance);
       settingsKey.value++;
     }
@@ -349,6 +351,7 @@ const App = {
         config.value = await loadConfig();
       }
       configureYahooFinance(config.value.yahooFinance);
+      applyTheme(config.value.ui?.theme);
       configLoaded.value = true;
     });
 
@@ -358,7 +361,14 @@ const App = {
       // than trust the SettingsPanel's clone, which could be a stale
       // snapshot from whenever that panel was mounted. saveConfig() also
       // strips them before writing to localStorage regardless.
-      const next = { ...updated, eiaApiKey: config.value.eiaApiKey, fredApiKey: config.value.fredApiKey };
+      // Same for the theme: it's changed from the header switch, not this
+      // panel, so the panel's clone may hold an outdated value.
+      const next = {
+        ...updated,
+        ui: { ...updated.ui, theme: config.value.ui?.theme },
+        eiaApiKey: config.value.eiaApiKey,
+        fredApiKey: config.value.fredApiKey,
+      };
       try {
         await saveConfig(next, user.value);
       } catch (err) {
@@ -402,6 +412,20 @@ const App = {
 
     function onUserUpdated(updatedUser) { user.value = updatedUser; }
 
+    // Header light/dark/system switch — applies instantly and saves like
+    // any other setting (to the profile when signed in, else this browser).
+    const themePreference = computed(() => normalizeTheme(config.value?.ui?.theme));
+    async function setTheme(theme) {
+      if (theme === themePreference.value) return;
+      applyTheme(theme);
+      config.value = { ...config.value, ui: { ...config.value.ui, theme } };
+      try {
+        await saveConfig(config.value, user.value);
+      } catch (err) {
+        saveError.value = `Theme was applied but not saved: ${err.message}`;
+      }
+    }
+
     // Provide config to all child components
     provide('config', config);
 
@@ -409,6 +433,7 @@ const App = {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme,
     };
   },
   template: `
@@ -425,6 +450,17 @@ const App = {
             @click="activeTab = tab.id"
           >{{ tab.label }}</button>
         </nav>
+        <div class="theme-switch" role="group" aria-label="Color theme">
+          <button
+            v-for="opt in themeOptions"
+            :key="opt.value"
+            type="button"
+            :aria-pressed="themePreference === opt.value"
+            :title="opt.label + ' theme'"
+            :disabled="!configLoaded"
+            @click="setTheme(opt.value)"
+          >{{ opt.icon }}</button>
+        </div>
       </header>
 
       <main class="tab-content">

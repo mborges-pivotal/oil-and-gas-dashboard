@@ -1,7 +1,11 @@
 /* ============================================================
-   CSS Variables — Dark Theme
+   CSS Variables — Themes
+   Dark is the base palette; <html data-theme="light"> overrides it.
+   data-theme always holds the *resolved* theme (utils/theme.js turns
+   the "System" preference into dark/light), so no media query here.
    ============================================================ */
 :root {
+  color-scheme: dark;
   --bg: #0d1117;
   --surface: #161b22;
   --surface-2: #21262d;
@@ -13,9 +17,32 @@
   --positive: #3fb950;
   --negative: #f85149;
   --warning: #d29922;
+  --warning-bg: rgba(210, 153, 34, 0.08);
+  --negative-bg: rgba(248, 81, 73, 0.08);
+  --positive-fill: rgba(63, 185, 80, 0.18);
+  --negative-fill: rgba(248, 81, 73, 0.18);
   --radius: 6px;
   --font: -apple-system, "Segoe UI", system-ui, sans-serif;
   --transition: 0.15s ease;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f8fa;
+  --surface: #ffffff;
+  --surface-2: #eef1f4;
+  --border: #d0d7de;
+  --text: #1f2328;
+  --text-muted: #59636e;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --positive: #1a7f37;
+  --negative: #cf222e;
+  --warning: #9a6700;
+  --warning-bg: rgba(154, 103, 0, 0.08);
+  --negative-bg: rgba(207, 34, 46, 0.07);
+  --positive-fill: rgba(26, 127, 55, 0.16);
+  --negative-fill: rgba(207, 34, 46, 0.14);
 }
 
 /* ============================================================
@@ -97,6 +124,7 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .app-header .logo span { color: var(--accent); }
 
 .tab-bar {
+  margin-left: auto;
   display: flex;
   gap: 2px;
   align-items: center;
@@ -274,12 +302,12 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .notice.warn {
   border-color: var(--warning);
   color: var(--warning);
-  background: rgba(210, 153, 34, 0.08);
+  background: var(--warning-bg);
 }
 .notice.error {
   border-color: var(--negative);
   color: var(--negative);
-  background: rgba(248, 81, 73, 0.08);
+  background: var(--negative-bg);
 }
 
 /* ============================================================
@@ -552,8 +580,8 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
    between them filled, colored by which line is on top at each point */
 .chart-line-a { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .chart-line-b { stroke: var(--warning); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
-.chart-area-positive { fill: rgba(63, 185, 80, 0.18); }
-.chart-area-negative { fill: rgba(248, 81, 73, 0.18); }
+.chart-area-positive { fill: var(--positive-fill); }
+.chart-area-negative { fill: var(--negative-fill); }
 .chart-legend { display: flex; gap: 16px; margin-bottom: 10px; font-size: 12px; color: var(--text-muted); }
 .chart-legend .legend-item { display: flex; align-items: center; gap: 6px; }
 .chart-legend .legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
@@ -591,7 +619,8 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 @media (max-width: 768px) {
   /* Logo on its own row; tabs scroll sideways instead of overflowing. */
   .app-header { height: auto; flex-wrap: wrap; padding-top: 10px; }
-  .tab-bar { width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .theme-switch { margin-left: auto; }
+  .tab-bar { order: 2; width: 100%; overflow-x: auto; scrollbar-width: none; }
   .tab-btn { padding: 14px 10px 12px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
   .tab-content { padding: 16px 12px; }
   .price-grid { grid-template-columns: repeat(2, 1fr); }
@@ -615,4 +644,26 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .account-form input:disabled { opacity: 0.6; cursor: not-allowed; }
 .account-form button[type="submit"] { align-self: flex-start; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Header light/dark/system switch */
+.theme-switch {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.theme-switch button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-muted);
+  padding: 3px 9px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.theme-switch button + button { border-left: 1px solid var(--border); }
+.theme-switch button:hover { background: var(--surface-2); color: var(--text); }
+.theme-switch button[aria-pressed="true"] { background: var(--surface-2); color: var(--accent); }
 .tab-btn.account-tab { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
