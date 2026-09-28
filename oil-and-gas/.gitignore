@@ -16,3 +16,6 @@ oilgas-config.json
 
 # Logs
 *.log
+
+# SQLite database (user accounts, sessions, profiles) — see server/db.js
+data/

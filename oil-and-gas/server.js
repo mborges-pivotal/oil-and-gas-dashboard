@@ -47,6 +47,9 @@ function loadDotEnv(filePath) {
 }
 loadDotEnv(path.join(ROOT, '.env'));
 
+// Required after loadDotEnv so DATABASE_PATH can come from .env too.
+const { handleApi } = require('./server/auth');
+
 const PORT = process.env.PORT || 3000;
 const ALLOWED_HOSTS = new Set([
   'query1.finance.yahoo.com',
@@ -146,10 +149,28 @@ function handleConfig(req, res) {
 
 function handleStatic(req, res, reqUrl) {
   const requestedPath = reqUrl.pathname === '/' ? '/index.html' : reqUrl.pathname;
-  const filePath = path.join(ROOT, path.normalize(decodeURIComponent(requestedPath)));
+  let decodedPath;
+  try {
+    decodedPath = decodeURIComponent(requestedPath);
+  } catch {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('Bad request');
+    return;
+  }
+  const filePath = path.join(ROOT, path.normalize(decodedPath));
 
-  // Prevent path traversal outside the app directory
-  if (!filePath.startsWith(ROOT)) {
+  // Prevent path traversal outside the app directory, and never serve
+  // dotfiles (.env holds the API keys), the SQLite database (data/), or
+  // the server-side modules (server/).
+  const relative = path.relative(ROOT, filePath);
+  const [topLevel] = relative.split(path.sep);
+  if (
+    relative.startsWith('..') ||
+    path.isAbsolute(relative) ||
+    relative.split(path.sep).some((segment) => segment.startsWith('.')) ||
+    topLevel === 'data' ||
+    topLevel === 'server'
+  ) {
     res.writeHead(403, { 'Content-Type': 'text/plain' });
     res.end('Forbidden');
     return;
@@ -179,6 +200,11 @@ const server = http.createServer((req, res) => {
       return;
     }
     handleProxy(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname.startsWith('/api/')) {
+    handleApi(req, res, reqUrl);
     return;
   }
 

@@ -589,7 +589,10 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
    Responsive
    ============================================================ */
 @media (max-width: 768px) {
-  .tab-btn { padding: 14px 10px 12px; font-size: 12px; }
+  /* Logo on its own row; tabs scroll sideways instead of overflowing. */
+  .app-header { height: auto; flex-wrap: wrap; padding-top: 10px; }
+  .tab-bar { width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .tab-btn { padding: 14px 10px 12px; font-size: 12px; white-space: nowrap; flex-shrink: 0; }
   .tab-content { padding: 16px 12px; }
   .price-grid { grid-template-columns: repeat(2, 1fr); }
   .spread-widget { flex-direction: column; align-items: flex-start; }
@@ -601,3 +604,15 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   .price-grid { grid-template-columns: 1fr 1fr; }
   .app-header .logo { font-size: 13px; }
 }
+
+/* ============================================================
+   Account (sign in / register / profile)
+   ============================================================ */
+.account-page { max-width: 480px; margin: 0 auto; }
+.account-card { padding: 20px; }
+.account-form { display: flex; flex-direction: column; gap: 14px; }
+.account-form input { width: 100%; }
+.account-form input:disabled { opacity: 0.6; cursor: not-allowed; }
+.account-form button[type="submit"] { align-self: flex-start; }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.tab-btn.account-tab { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -1,6 +1,6 @@
 # Oil & Gas Market Dashboard
 
-A browser-only single-page app (SPA) for tracking oil prices, gas prices, O&G stocks, news, and SEC filings. No backend, no build step required.
+A single-page app (SPA) for tracking oil prices, gas prices, O&G stocks, news, and SEC filings, with optional user accounts that save settings to a profile. No build step and no npm dependencies — one small Node server (Node ≥ 22.13).
 
 ## Quick Start
 
@@ -56,11 +56,17 @@ Then open `http://localhost:3000` in your browser.
 | **Oil & Gas Markets** | Two sub-tabs. **Oil Price Indexes**: BZ=F, CL=F, NG=F, HO=F, RB=F with a spread calculator and historical spread chart. **Retail Gas Prices**: the 3-2-1 crack spread (live futures, no key needed) and EIA retail gasoline/diesel prices with their own historical chart. Retail prices require an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) below) — not something a visitor enters. |
 | **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Expand a ticker for two tabs: **Historical Chart** (price history with 1M–5Y range buttons) and **Documents** (SEC EDGAR filings — 10-K, 10-Q, 8-K, Proxy — plus earnings transcript links), for whichever tickers are in the watchlist — no separate company list to maintain. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
-| **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — persisted to localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
+| **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — saved to your account profile when signed in, otherwise to this browser's localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
+| **Sign In / 👤 Account** | Optional user accounts: register and sign in with email + password. A signed-in user's dashboard settings are stored in their profile in the server database, so they follow them to any browser/device. The profile page edits the display name, changes the password (signing out other devices), and signs out. |
 
 ## Configuration
 
-All settings are stored in `localStorage` under the key `oilgas_config` and seeded from `config.json` on first load.
+Settings are seeded from `config.json` on first load and stored in one of two places:
+
+- **Signed out:** this browser's `localStorage`, under the key `oilgas_config`.
+- **Signed in:** the user's profile in the server's SQLite database (see [User Accounts](#user-accounts)).
+  When an account is created, whatever settings the browser was already using are copied into the new
+  profile, so nothing set up anonymously is lost. Signing out switches back to the browser's own settings.
 
 You can edit settings live in the **⚙ Settings** tab — no page reload required. Each settings section can be
 collapsed independently (click its header); they're all expanded by default.
@@ -98,6 +104,22 @@ Same model as the EIA key above — fixed per-deployment configuration, not a Se
 Both keys go in the same `.env` file (see `.env.example`), or can be set together inline:
 `EIA_API_KEY=xxx FRED_API_KEY=yyy ./run.sh`.
 
+## User Accounts
+
+Accounts, sessions, and profiles live in a SQLite database using Node's built-in `node:sqlite` (Node ≥ 22.13) —
+still no `npm install`. The file defaults to `data/app.db` (gitignored, never served over HTTP); set
+**`DATABASE_PATH`** to put it elsewhere.
+
+- Passwords are hashed with scrypt (`node:crypto`); minimum 8 characters.
+- Sessions are an HttpOnly, `SameSite=Lax` cookie (`Secure` when served over HTTPS) valid for 30 days. Only
+  a SHA-256 of the session token is stored, so a copy of the database can't be used to hijack sessions.
+- Changing the password signs out every other device.
+- Sign-in/registration is rate-limited to 20 attempts per IP per 15 minutes (in memory, per process).
+- API keys (`EIA_API_KEY`/`FRED_API_KEY`) are never stored in a profile — they stay per-deployment.
+
+API (same origin, JSON): `POST /api/auth/register`, `POST /api/auth/login`, `POST /api/auth/logout`,
+`GET /api/auth/me`, `GET`/`PUT /api/profile` (`{ displayName?, settings? }`), `PUT /api/profile/password`.
+
 ## Data Sources
 
 | Data | Source | Key Required |
@@ -123,7 +145,11 @@ oil-and-gas/
 ├── config.json         # Default configuration seed
 ├── app.js              # Root Vue app + Settings panel
 ├── styles.css          # Dark theme CSS
-├── server.js           # Static file server + same-origin CORS relay (single process/port)
+├── server.js           # Static file server + same-origin CORS relay + /api (single process/port)
+├── server/
+│   ├── auth.js         # /api routes: register, login/logout, profile, password change
+│   └── db.js           # SQLite (node:sqlite) schema + queries: users, profiles, sessions
+├── data/               # SQLite database file (created on first run; gitignored)
 ├── package.json        # `npm start` → node server.js (used by Railway)
 ├── .env.example        # Template for local API keys — copy to .env (gitignored)
 ├── components/
@@ -131,6 +157,7 @@ oil-and-gas/
 │   ├── OilGasMarkets.js  # Oil indexes + spread, crack spread, EIA retail gas prices
 │   ├── Stocks.js       # Market indexes + stock watchlist + sparklines + per-ticker SEC filings
 │   ├── News.js         # RSS news aggregator
+│   ├── Account.js      # Sign in / register / profile page
 │   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
 │   └── DualLineChart.js # Shared two-series overlay chart w/ crossing-shaded fill (SVG)
 ├── services/
@@ -138,9 +165,10 @@ oil-and-gas/
 │   ├── eia.js          # EIA API calls
 │   ├── fred.js         # FRED (economic data) API calls
 │   ├── rss.js          # RSS feed fetching + caching
+│   ├── auth.js         # Client for the /api account + profile routes
 │   └── edgar.js        # SEC EDGAR API + helpers
 └── utils/
-    ├── config.js       # localStorage config persistence
+    ├── config.js       # Config persistence (user profile when signed in, else localStorage)
     ├── formatters.js   # Currency, percent, date formatters
     ├── spread.js       # Spread + crack spread calculations
     └── dateRange.js    # Shared range-picker options for historical charts
@@ -159,7 +187,10 @@ to be told to build from this subdirectory.
 4. Railway injects `PORT` itself; `server.js` reads `process.env.PORT`, so no config is needed there.
 5. Deploy, then open the generated `*.up.railway.app` domain. Everything (SPA + `/proxy` relay) is served from that single domain/port.
 6. Optional: set an env var **SEC_CONTACT** (e.g. `YourApp you@example.com`) — SEC EDGAR requires a real identifying User-Agent on automated requests or it starts 403'ing.
-7. Set **EIA_API_KEY** / **FRED_API_KEY** under the service's **Variables** tab to enable retail gas prices / the Economic Indicators tab for everyone visiting this deployment — see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) / [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) above. These are fixed for the whole deployment, not something each visitor sets.
+7. **Persist user accounts:** Railway's container filesystem is wiped on every deploy, so add a **Volume**
+   to the service (e.g. mounted at `/data`) and set **`DATABASE_PATH=/data/app.db`** under **Variables**.
+   Without this, accounts and saved profiles are lost on each redeploy.
+8. Set **EIA_API_KEY** / **FRED_API_KEY** under the service's **Variables** tab to enable retail gas prices / the Economic Indicators tab for everyone visiting this deployment — see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) / [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) above. These are fixed for the whole deployment, not something each visitor sets.
 
 If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-gas/` directory run `railway login`, `railway init`, `railway up`.
 

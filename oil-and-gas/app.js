@@ -1,18 +1,20 @@
-import { loadConfig, saveConfig, exportConfig } from './utils/config.js';
+import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/config.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
+import { fetchCurrentUser } from './services/auth.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
 import OilGasMarketsComponent from './components/OilGasMarkets.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
+import AccountComponent from './components/Account.js';
 
-const { createApp, ref, reactive, provide, onMounted } = Vue;
+const { createApp, ref, reactive, computed, provide, onMounted } = Vue;
 
 // ── Settings Panel component ────────────────────────────────────────────────
 const SettingsPanel = {
-  emits: ['save', 'export', 'reset'],
-  props: ['config'],
+  emits: ['save', 'export', 'reset', 'go-account'],
+  props: ['config', 'user'],
   setup(props, { emit }) {
     // Work on a deep clone so changes aren't live until saved
     const local = reactive(JSON.parse(JSON.stringify(props.config)));
@@ -141,6 +143,16 @@ const SettingsPanel = {
           <button class="danger" @click="reset">Reset to Defaults</button>
           <button class="primary" @click="save">Save Changes</button>
         </div>
+      </div>
+
+      <div class="notice" style="margin-bottom:16px">
+        <template v-if="user">
+          Settings are saved to your account (<strong>{{ user.email }}</strong>) and follow you to any device you sign in on.
+        </template>
+        <template v-else>
+          Settings are saved in this browser only.
+          <a href="#" @click.prevent="$emit('go-account')">Sign in or create an account</a> to save them to a profile.
+        </template>
       </div>
 
       <div v-if="importStatus" class="notice" :class="{ error: importStatus.type === 'error' }" style="margin-bottom:16px">
@@ -285,63 +297,118 @@ const App = {
     OilGasMarkets: OilGasMarketsComponent,
     Stocks: StocksComponent,
     News: NewsComponent,
+    Account: AccountComponent,
     SettingsPanel,
   },
   setup() {
     const config = ref(null);
+    // Signed-in user's profile (services/auth.js), or null when anonymous.
+    const user = ref(null);
     const activeTab = ref('markets');
     const configLoaded = ref(false);
-    const saveNotice = ref(false);
+    const saveNotice = ref(null); // message string while shown
+    const saveError = ref(null);
     // Bumped on reset to force SettingsPanel to remount — it clones config
     // into local state once at setup(), so it needs a fresh instance to
     // pick up the reset values instead of showing stale form state.
     const settingsKey = ref(0);
 
-    const tabs = [
+    const tabs = computed(() => [
       { id: 'econ',      label: 'Economic Indicators' },
       { id: 'markets',   label: 'Oil & Gas Markets' },
       { id: 'stocks',    label: 'Stocks' },
       { id: 'news',      label: 'News' },
       { id: 'settings',  label: '⚙ Settings' },
-    ];
+      { id: 'account',   label: user.value ? `👤 ${user.value.displayName || user.value.email}` : 'Sign In' },
+    ]);
+
+    function showNotice(message) {
+      saveError.value = null;
+      saveNotice.value = message;
+      setTimeout(() => { if (saveNotice.value === message) saveNotice.value = null; }, 2500);
+    }
+
+    // Swaps in a freshly loaded config (after sign-in/out or reset) and
+    // remounts SettingsPanel — it clones config into local state once at
+    // setup(), so it needs a fresh instance to show the new values.
+    function applyConfig(cfg) {
+      config.value = cfg;
+      configureYahooFinance(cfg.yahooFinance);
+      settingsKey.value++;
+    }
 
     onMounted(async () => {
-      config.value = await loadConfig();
+      user.value = await fetchCurrentUser();
+      try {
+        config.value = await loadConfig(user.value);
+      } catch (err) {
+        // Profile couldn't be read/seeded — fall back to this browser's
+        // settings rather than leaving the whole dashboard on "Loading…".
+        saveError.value = `Couldn't load your profile settings (${err.message}); showing this browser's settings.`;
+        user.value = null;
+        config.value = await loadConfig();
+      }
       configureYahooFinance(config.value.yahooFinance);
       configLoaded.value = true;
     });
 
-    function onSaveConfig(updated) {
+    async function onSaveConfig(updated) {
       // eiaApiKey/fredApiKey are fixed, operator-configured values (never
       // edited in Settings) — re-apply whatever's currently live rather
       // than trust the SettingsPanel's clone, which could be a stale
       // snapshot from whenever that panel was mounted. saveConfig() also
       // strips them before writing to localStorage regardless.
-      config.value = { ...updated, eiaApiKey: config.value.eiaApiKey, fredApiKey: config.value.fredApiKey };
-      saveConfig(config.value);
+      const next = { ...updated, eiaApiKey: config.value.eiaApiKey, fredApiKey: config.value.fredApiKey };
+      try {
+        await saveConfig(next, user.value);
+      } catch (err) {
+        saveError.value = `Settings were not saved: ${err.message}`;
+        return;
+      }
+      config.value = next;
       configureYahooFinance(config.value.yahooFinance);
-      saveNotice.value = true;
-      setTimeout(() => { saveNotice.value = false; }, 2500);
+      showNotice(user.value ? '✓ Settings saved to your profile.' : '✓ Settings saved.');
     }
 
     async function onResetConfig() {
-      if (!confirm('Reset all settings to defaults? This cannot be undone.')) return;
-      localStorage.removeItem('oilgas_config');
-      const res = await fetch('./config.json', { cache: 'no-store' });
-      config.value = await res.json();
-      saveConfig(config.value);
-      configureYahooFinance(config.value.yahooFinance);
-      settingsKey.value++;
+      const where = user.value ? 'your profile' : 'this browser';
+      if (!confirm(`Reset all settings in ${where} to defaults? This cannot be undone.`)) return;
+      try {
+        applyConfig(await resetConfig(user.value));
+      } catch (err) {
+        saveError.value = `Settings were not reset: ${err.message}`;
+      }
     }
 
     function onExportConfig(cfg) { exportConfig(cfg); }
+
+    async function onSignedIn(signedInUser, { isNew } = {}) {
+      user.value = signedInUser;
+      try {
+        applyConfig(await loadConfig(signedInUser));
+        showNotice(isNew
+          ? '✓ Account created — your current settings were saved to your profile.'
+          : '✓ Signed in — loaded your saved settings.');
+      } catch (err) {
+        saveError.value = `Signed in, but couldn't load your profile settings: ${err.message}`;
+      }
+    }
+
+    async function onSignedOut() {
+      user.value = null;
+      applyConfig(await loadConfig());
+      showNotice('✓ Signed out — using this browser\'s settings.');
+    }
+
+    function onUserUpdated(updatedUser) { user.value = updatedUser; }
 
     // Provide config to all child components
     provide('config', config);
 
     return {
-      config, configLoaded, activeTab, tabs, saveNotice, settingsKey,
+      config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
+      onSignedIn, onSignedOut, onUserUpdated,
     };
   },
   template: `
@@ -353,7 +420,8 @@ const App = {
             v-for="tab in tabs"
             :key="tab.id"
             class="tab-btn"
-            :class="{ active: activeTab === tab.id }"
+            :class="{ active: activeTab === tab.id, 'account-tab': tab.id === 'account' }"
+            :title="tab.id === 'account' && user ? user.email : null"
             @click="activeTab = tab.id"
           >{{ tab.label }}</button>
         </nav>
@@ -364,17 +432,25 @@ const App = {
           <div class="loading-text">Loading…</div>
         </template>
         <template v-else>
-          <div v-if="saveNotice" class="notice" style="margin-bottom:16px">✓ Settings saved.</div>
+          <div v-if="saveNotice" class="notice" style="margin-bottom:16px">{{ saveNotice }}</div>
+          <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
           <EconomicIndicators v-if="activeTab === 'econ'" :config="config" />
           <OilGasMarkets v-if="activeTab === 'markets'"   :config="config" />
           <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
           <News          v-if="activeTab === 'news'"      :config="config" />
 
-          <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config"
+          <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"
             @export="onExportConfig"
             @reset="onResetConfig"
+            @go-account="activeTab = 'account'"
+          />
+
+          <Account v-if="activeTab === 'account'" :user="user"
+            @signed-in="onSignedIn"
+            @signed-out="onSignedOut"
+            @updated="onUserUpdated"
           />
         </template>
       </main>
