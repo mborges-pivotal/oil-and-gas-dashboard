@@ -1,4 +1,4 @@
-const { ref, reactive, onMounted, onUnmounted, computed } = Vue;
+const { ref, reactive, onMounted, onUnmounted, computed, nextTick } = Vue;
 import { fetchQuote, fetchChart } from '../services/yahooFinance.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
 import { formatUSD, formatNumber, formatPct, formatVolume, formatDate, changeClass } from '../utils/formatters.js';
@@ -59,8 +59,141 @@ export default {
   name: 'Stocks',
   components: { HistoryChart },
   props: ['config'],
-  setup(props) {
-    const tickers = computed(() => props.config.stocks?.tickers ?? []);
+  emits: ['reorder-tickers'],
+  setup(props, { emit }) {
+    const configTickers = computed(() => props.config.stocks?.tickers ?? []);
+
+    // ── Watchlist reordering ────────────────────────────────────────────────
+    // Drag a card by its ⠿ handle (mouse or touch, via Pointer Events —
+    // native HTML5 drag-and-drop doesn't work on most touch browsers), or
+    // focus the handle and use ↑/↓. While dragging, the list renders from
+    // `dragOrder` and reorders live as the pointer passes a neighbor's
+    // midpoint; on release the new order is emitted once, and the parent
+    // saves it into config.stocks.tickers like any other setting.
+    const dragOrder = ref(null);   // working order while a drag is active
+    const tickers = computed(() => dragOrder.value ?? configTickers.value);
+    const draggingTicker = ref(null);
+    const watchlistEl = ref(null);
+    let lastPointerY = 0;
+    let autoScrollFrame = null;
+    const AUTO_SCROLL_EDGE_PX = 60;
+    const AUTO_SCROLL_MAX_SPEED = 14;
+
+    function watchlistItems() {
+      return [...watchlistEl.value.querySelectorAll(':scope > .watchlist-item')];
+    }
+
+    // Move the dragged ticker one slot at a time while the pointer is past
+    // a neighbor's midpoint. Comparing only against neighbors (rather than
+    // every card) keeps it stable when cards differ in height — e.g. when
+    // one of them is expanded to show its chart.
+    function repositionDragged() {
+      const order = dragOrder.value;
+      const items = watchlistItems();
+      let i = order.indexOf(draggingTicker.value);
+      let moved = false;
+      while (i > 0) {
+        const r = items[i - 1].getBoundingClientRect();
+        if (lastPointerY >= r.top + r.height / 2) break;
+        [order[i - 1], order[i]] = [order[i], order[i - 1]];
+        [items[i - 1], items[i]] = [items[i], items[i - 1]];
+        i--; moved = true;
+      }
+      while (!moved && i < order.length - 1) {
+        const r = items[i + 1].getBoundingClientRect();
+        if (lastPointerY <= r.top + r.height / 2) break;
+        [order[i + 1], order[i]] = [order[i], order[i + 1]];
+        [items[i + 1], items[i]] = [items[i], items[i + 1]];
+        i++;
+      }
+    }
+
+    // Pointer capture stops a touch drag from scrolling the page, so scroll
+    // it ourselves when the pointer nears the top/bottom of the viewport.
+    function autoScrollStep() {
+      if (!draggingTicker.value) return;
+      const y = lastPointerY;
+      let speed = 0;
+      if (y < AUTO_SCROLL_EDGE_PX) speed = -AUTO_SCROLL_MAX_SPEED * (1 - y / AUTO_SCROLL_EDGE_PX);
+      else if (y > window.innerHeight - AUTO_SCROLL_EDGE_PX) speed = AUTO_SCROLL_MAX_SPEED * (1 - (window.innerHeight - y) / AUTO_SCROLL_EDGE_PX);
+      if (speed) {
+        window.scrollBy(0, speed);
+        repositionDragged();
+      }
+      autoScrollFrame = requestAnimationFrame(autoScrollStep);
+    }
+
+    // Move/up are tracked on window rather than via setPointerCapture on
+    // the handle: reordering can make Vue move the dragged card's DOM node,
+    // and moving a node silently drops its pointer capture — the drop would
+    // never arrive and the drag would get stuck.
+    let activePointerId = null;
+    // Releasing a drag fires a click on the card header (the press began on
+    // the handle inside it), which would toggle that card open — swallow
+    // the one click that immediately follows a drop.
+    let suppressHeaderClick = false;
+
+    function onHandlePointerDown(e, sym) {
+      if (e.button !== 0 || draggingTicker.value || configTickers.value.length < 2) return;
+      e.preventDefault(); // no text selection / focus-scroll while dragging
+      activePointerId = e.pointerId;
+      lastPointerY = e.clientY;
+      dragOrder.value = [...configTickers.value];
+      draggingTicker.value = sym;
+      window.addEventListener('pointermove', onDragMove);
+      window.addEventListener('pointerup', endDrag);
+      window.addEventListener('pointercancel', endDrag);
+      window.addEventListener('blur', endDrag);
+      autoScrollFrame = requestAnimationFrame(autoScrollStep);
+    }
+
+    function onDragMove(e) {
+      if (e.pointerId !== activePointerId) return;
+      lastPointerY = e.clientY;
+      repositionDragged();
+    }
+
+    function stopListening() {
+      window.removeEventListener('pointermove', onDragMove);
+      window.removeEventListener('pointerup', endDrag);
+      window.removeEventListener('pointercancel', endDrag);
+      window.removeEventListener('blur', endDrag);
+      cancelAnimationFrame(autoScrollFrame);
+    }
+
+    // Drop — also on pointercancel and window blur (e.g. alt-tab mid-drag),
+    // which keep whatever order was reached rather than leave a drag open.
+    function endDrag(e) {
+      if (e?.pointerId !== undefined && e.pointerId !== activePointerId) return;
+      if (!draggingTicker.value) return;
+      stopListening();
+      suppressHeaderClick = true;
+      setTimeout(() => { suppressHeaderClick = false; }, 0); // click, if any, fires before this
+      const order = dragOrder.value;
+      const changed = order.some((t, i) => t !== configTickers.value[i]);
+      draggingTicker.value = null;
+      // Parent updates config synchronously on emit, so there's no frame
+      // where the list snaps back to the old order before it's saved.
+      if (changed) emit('reorder-tickers', [...order]);
+      dragOrder.value = null;
+    }
+
+    async function onHandleKeydown(e, sym) {
+      const delta = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+      if (!delta) return;
+      e.preventDefault();
+      const order = [...configTickers.value];
+      const from = order.indexOf(sym);
+      const to = from + delta;
+      if (to < 0 || to >= order.length) return;
+      [order[from], order[to]] = [order[to], order[from]];
+      emit('reorder-tickers', order);
+      // Moving a DOM node can drop its focus — put it back on the handle.
+      await nextTick();
+      watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"] .drag-handle`)?.focus();
+    }
+
+    onUnmounted(stopListening);
 
     // ── Quotes (ticker → { price, change, pctChange, volume, shortName, loading, error }) ──
     const stockQuotes = reactive({});
@@ -182,6 +315,7 @@ export default {
     }
 
     function toggleDetail(ticker) {
+      if (suppressHeaderClick) return;
       ensureDetail(ticker);
       details[ticker].open = !details[ticker].open;
       if (details[ticker].open) loadActiveTab(ticker);
@@ -217,6 +351,8 @@ export default {
 
     return {
       tickers, stockQuotes, sparklines, lastUpdated,
+      watchlistEl, draggingTicker,
+      onHandlePointerDown, onHandleKeydown,
       indexSymbols, indexes, INDEX_LABELS,
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData,
       FORM_TABS, RANGE_OPTIONS,
@@ -260,9 +396,22 @@ export default {
         No tickers configured. Add tickers in the ⚙ Settings tab.
       </div>
 
-      <!-- Watchlist as accordions — expand a ticker to see its SEC filings -->
-      <div class="accordion-item" v-for="sym in tickers" :key="sym">
+      <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
+      <!-- drag a card by its handle to reorder (saved to settings). -->
+      <div ref="watchlistEl" class="watchlist" :class="{ 'is-dragging': draggingTicker }">
+      <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
+           :class="{ dragging: draggingTicker === sym }">
         <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)">
+          <button
+            v-if="tickers.length > 1"
+            type="button"
+            class="drag-handle"
+            :aria-label="'Reorder ' + sym + ' — drag, or use the up/down arrow keys'"
+            title="Drag to reorder (or focus and press ↑/↓)"
+            @click.stop
+            @pointerdown="onHandlePointerDown($event, sym)"
+            @keydown="onHandleKeydown($event, sym)"
+          >⠿</button>
           <div class="stock-row-main">
             <div class="stock-row-id">
               <span class="stock-row-ticker">{{ sym }}</span>
@@ -399,9 +548,11 @@ export default {
         </div>
       </div>
 
+      </div>
+
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">
         Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.
-        SEC filings from SEC EDGAR (data.sec.gov), no API key required. Both load when you expand a ticker. Manage tickers in ⚙ Settings.
+        SEC filings from SEC EDGAR (data.sec.gov), no API key required. Both load when you expand a ticker. Drag a card by its ⠿ handle to reorder; manage tickers in ⚙ Settings.
       </div>
     </div>
   `,

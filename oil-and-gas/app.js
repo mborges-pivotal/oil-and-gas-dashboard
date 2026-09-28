@@ -412,18 +412,29 @@ const App = {
 
     function onUserUpdated(updatedUser) { user.value = updatedUser; }
 
-    // Header light/dark/system switch — applies instantly and saves like
-    // any other setting (to the profile when signed in, else this browser).
+    // Settings changed in place (outside the Settings panel) apply
+    // immediately and save like any other setting — to the profile when
+    // signed in, else this browser. `what` labels a failed save.
+    async function persistConfig(next, what) {
+      config.value = next;
+      try {
+        await saveConfig(next, user.value);
+      } catch (err) {
+        saveError.value = `${what} was applied but not saved: ${err.message}`;
+      }
+    }
+
+    // Header light/dark/system switch
     const themePreference = computed(() => normalizeTheme(config.value?.ui?.theme));
-    async function setTheme(theme) {
+    function setTheme(theme) {
       if (theme === themePreference.value) return;
       applyTheme(theme);
-      config.value = { ...config.value, ui: { ...config.value.ui, theme } };
-      try {
-        await saveConfig(config.value, user.value);
-      } catch (err) {
-        saveError.value = `Theme was applied but not saved: ${err.message}`;
-      }
+      persistConfig({ ...config.value, ui: { ...config.value.ui, theme } }, 'Theme');
+    }
+
+    // Stock watchlist cards dragged into a new order on the Stocks tab
+    function onReorderTickers(tickers) {
+      persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist order');
     }
 
     // Provide config to all child components
@@ -433,7 +444,7 @@ const App = {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onReorderTickers,
     };
   },
   template: `
@@ -473,7 +484,7 @@ const App = {
 
           <EconomicIndicators v-if="activeTab === 'econ'" :config="config" />
           <OilGasMarkets v-if="activeTab === 'markets'"   :config="config" />
-          <Stocks        v-if="activeTab === 'stocks'"    :config="config" />
+          <Stocks        v-if="activeTab === 'stocks'"    :config="config" @reorder-tickers="onReorderTickers" />
           <News          v-if="activeTab === 'news'"      :config="config" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
