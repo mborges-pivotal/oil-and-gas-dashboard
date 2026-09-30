@@ -31,7 +31,8 @@
       { "name": "NOV SEC Fillings", "url": "https://investors.nov.com/rss/sec-fillings.xml", "enabled": true, "showInEconomicIndicators": false }
     ],
     "rssProxy": "rss2json",
-    "economicNewsDays": 7
+    "economicNewsDays": 7,
+    "openArticlesIn": "popup"
   },
   "ui": {
     "theme": "system",

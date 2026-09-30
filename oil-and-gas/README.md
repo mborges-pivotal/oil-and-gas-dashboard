@@ -55,7 +55,7 @@ Then open `http://localhost:3000` in your browser.
 | **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. |
 | **Oil & Gas Markets** | Two sub-tabs. **Oil Price Indexes**: BZ=F, CL=F, NG=F, HO=F, RB=F with a spread calculator and historical spread chart. **Retail Gas Prices**: the 3-2-1 crack spread (live futures, no key needed) and EIA retail gasoline/diesel prices with their own historical chart. Retail prices require an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) below) — not something a visitor enters. |
 | **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Reorder the watchlist by dragging a card by its ⠿ handle (mouse or touch), or focus the handle and press ↑/↓; the new order is saved to settings (your profile when signed in). Expand a ticker for two tabs: **Historical Chart** (price history with 1M–5Y range buttons) and **Documents** (SEC EDGAR filings — 10-K, 10-Q, 8-K, Proxy — plus earnings transcript links), for whichever tickers are in the watchlist — no separate company list to maintain. |
-| **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. |
+| **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. Articles open in a popup viewer inside the dashboard by default (or a new tab — **Settings → News RSS Feeds → Open articles in**). Sites that forbid being framed (e.g. Reuters, CNBC, Rigzone) are detected by the server (`/api/frame-check`), and the popup offers "Open in new tab" instead of a broken frame. Cmd/Ctrl-click always opens a new tab. |
 | **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — saved to your account profile when signed in, otherwise to this browser's localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
 | **Theme switch** (header, ☀ ☾ ◐) | Light, Dark, or System (follows the OS light/dark setting, live). Saved with the rest of the settings — to the profile when signed in — and applied before first paint, so there's no flash of the wrong theme on reload. |
 | **Sign In / 👤 Account** | Optional user accounts: register and sign in with email + password. A signed-in user's dashboard settings are stored in their profile in the server database, so they follow them to any browser/device. The profile page edits the display name, changes the password (signing out other devices), and signs out. |
@@ -149,6 +149,7 @@ oil-and-gas/
 ├── server.js           # Static file server + same-origin CORS relay + /api (single process/port)
 ├── server/
 │   ├── auth.js         # /api routes: register, login/logout, profile, password change
+│   ├── frameCheck.js   # /api/frame-check: can an article URL be shown in an iframe?
 │   └── db.js           # SQLite (node:sqlite) schema + queries: users, profiles, sessions
 ├── data/               # SQLite database file (created on first run; gitignored)
 ├── package.json        # `npm start` → node server.js (used by Railway)
@@ -159,6 +160,7 @@ oil-and-gas/
 │   ├── Stocks.js       # Market indexes + stock watchlist + sparklines + per-ticker SEC filings
 │   ├── News.js         # RSS news aggregator
 │   ├── Account.js      # Sign in / register / profile page
+│   ├── ArticleViewer.js # Popup viewer for news articles (sandboxed iframe)
 │   ├── HistoryChart.js # Shared single-series historical line chart (SVG)
 │   └── DualLineChart.js # Shared two-series overlay chart w/ crossing-shaded fill (SVG)
 ├── services/
@@ -170,6 +172,7 @@ oil-and-gas/
 │   └── edgar.js        # SEC EDGAR API + helpers
 └── utils/
     ├── config.js       # Config persistence (user profile when signed in, else localStorage)
+    ├── articleViewer.js # Popup-vs-new-tab article opening + safe link helper
     ├── theme.js        # Light/dark/system theme preference → <html data-theme>
     ├── formatters.js   # Currency, percent, date formatters
     ├── spread.js       # Spread + crack spread calculations

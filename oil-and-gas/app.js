@@ -2,6 +2,7 @@ import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/confi
 import { configureYahooFinance } from './services/yahooFinance.js';
 import { fetchCurrentUser } from './services/auth.js';
 import { THEME_OPTIONS, applyTheme, normalizeTheme } from './utils/theme.js';
+import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
@@ -9,6 +10,7 @@ import OilGasMarketsComponent from './components/OilGasMarkets.js';
 import StocksComponent from './components/Stocks.js';
 import NewsComponent from './components/News.js';
 import AccountComponent from './components/Account.js';
+import ArticleViewer from './components/ArticleViewer.js';
 
 const { createApp, ref, reactive, computed, provide, onMounted } = Vue;
 
@@ -28,6 +30,9 @@ const SettingsPanel = {
     }
     if (local.news && local.news.economicNewsDays == null) {
       local.news.economicNewsDays = 7;
+    }
+    if (local.news && local.news.openArticlesIn == null) {
+      local.news.openArticlesIn = OPEN_ARTICLES_IN_DEFAULT;
     }
 
     // Each settings section can be collapsed independently; open by default
@@ -116,6 +121,9 @@ const SettingsPanel = {
         }
         if (local.news && local.news.economicNewsDays == null) {
           local.news.economicNewsDays = 7;
+        }
+        if (local.news && local.news.openArticlesIn == null) {
+          local.news.openArticlesIn = OPEN_ARTICLES_IN_DEFAULT;
         }
         importStatus.value = { type: 'success', message: `Imported "${file.name}" — review below, then click Save Changes.` };
       };
@@ -280,6 +288,17 @@ const SettingsPanel = {
             </select>
           </div>
           <div class="settings-row" style="margin-top:10px">
+            <label style="display:inline;margin:0;margin-right:8px">Open articles in:</label>
+            <select v-model="local.news.openArticlesIn">
+              <option value="popup">Popup viewer (inside the dashboard)</option>
+              <option value="newTab">New browser tab</option>
+            </select>
+          </div>
+          <p class="text-muted text-sm" style="margin:-2px 0 0" v-if="local.news.openArticlesIn === 'popup'">
+            Some sites (e.g. Reuters, CNBC, Rigzone) don't allow being shown inside other pages — for those the
+            popup offers to open the article in a new tab instead. Cmd/Ctrl-click always opens a new tab.
+          </p>
+          <div class="settings-row" style="margin-top:10px">
             <label style="display:inline;margin:0;margin-right:8px">Economic Indicators news cards: show articles from the last</label>
             <input v-model.number="local.news.economicNewsDays" type="number" min="1" max="90" style="width:60px" />
             <span class="text-muted text-sm">days</span>
@@ -299,6 +318,7 @@ const App = {
     Stocks: StocksComponent,
     News: NewsComponent,
     Account: AccountComponent,
+    ArticleViewer,
     SettingsPanel,
   },
   setup() {
@@ -501,6 +521,8 @@ const App = {
           />
         </template>
       </main>
+
+      <ArticleViewer />
     </div>
   `,
 };

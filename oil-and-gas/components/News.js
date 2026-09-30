@@ -1,6 +1,7 @@
 const { ref, computed, onMounted } = Vue;
 import { fetchFeed, mergeFeeds, clearFeedCache } from '../services/rss.js';
 import { formatDate } from '../utils/formatters.js';
+import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 
 const STAGGER_MS = 600; // delay between feed requests to respect rate limits
 
@@ -119,6 +120,7 @@ export default {
       articles, loading, feedErrors, lastUpdated, feeds, refresh, relativeTime, formatDate, onImageError,
       searchQuery, sourceFilter, freshnessFilter, freshnessOptions, sourceOptions,
       filteredArticles, filtersActive, clearFilters,
+      safeArticleUrl, onArticleClick,
     };
   },
   template: `
@@ -184,7 +186,7 @@ export default {
       <!-- Article grid -->
       <div class="news-grid" v-else-if="filteredArticles.length">
         <div class="news-card" v-for="(article, i) in filteredArticles" :key="article.link || i">
-          <a v-if="article.image" :href="article.link" target="_blank" rel="noopener">
+          <a v-if="article.image" :href="safeArticleUrl(article.link)" target="_blank" rel="noopener" @click="onArticleClick($event, article, config)">
             <img class="news-card-image" :src="article.image" alt="" loading="lazy" @error="onImageError" />
           </a>
           <div class="news-card-body">
@@ -193,7 +195,7 @@ export default {
               <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
             </div>
             <div class="news-title">
-              <a :href="article.link" target="_blank" rel="noopener">{{ article.title }}</a>
+              <a :href="safeArticleUrl(article.link)" target="_blank" rel="noopener" @click="onArticleClick($event, article, config)">{{ article.title }}</a>
             </div>
             <div class="news-snippet" v-if="article.description">{{ article.description }}</div>
           </div>

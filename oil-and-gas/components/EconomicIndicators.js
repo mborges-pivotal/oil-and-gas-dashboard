@@ -5,6 +5,7 @@ import { formatPercentLevel, formatPct, formatDate, changeClass } from '../utils
 import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 import HistoryChart from './HistoryChart.js';
 import DualLineChart from './DualLineChart.js';
+import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 
 const NEWS_STAGGER_MS = 600; // delay between feed requests to respect rate limits
 
@@ -174,6 +175,7 @@ export default {
       relatedFeeds, newsDays, relatedNews, relatedNewsLoading, relatedNewsError, relativeTime, onImageError,
       formatterFor, RANGE_OPTIONS,
       formatPercentLevel, formatPct, formatDate, changeClass,
+      safeArticleUrl, onArticleClick,
     };
   },
   template: `
@@ -231,7 +233,7 @@ export default {
           </template>
           <div class="news-grid" v-else-if="relatedNews.length">
             <div class="news-card" v-for="(article, i) in relatedNews" :key="article.link || i">
-              <a v-if="article.image" :href="article.link" target="_blank" rel="noopener">
+              <a v-if="article.image" :href="safeArticleUrl(article.link)" target="_blank" rel="noopener" @click="onArticleClick($event, article, config)">
                 <img class="news-card-image" :src="article.image" alt="" loading="lazy" @error="onImageError" />
               </a>
               <div class="news-card-body">
@@ -240,7 +242,7 @@ export default {
                   <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
                 </div>
                 <div class="news-title">
-                  <a :href="article.link" target="_blank" rel="noopener">{{ article.title }}</a>
+                  <a :href="safeArticleUrl(article.link)" target="_blank" rel="noopener" @click="onArticleClick($event, article, config)">{{ article.title }}</a>
                 </div>
                 <div class="news-snippet" v-if="article.description">{{ article.description }}</div>
               </div>
