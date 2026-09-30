@@ -1,7 +1,8 @@
 const { ref, reactive, onMounted, onUnmounted, computed, nextTick } = Vue;
-import { fetchQuote, fetchChart } from '../services/yahooFinance.js';
+import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews } from '../services/yahooFinance.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
-import { formatUSD, formatNumber, formatPct, formatVolume, formatDate, changeClass } from '../utils/formatters.js';
+import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
+import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 import HistoryChart from './HistoryChart.js';
 
@@ -27,25 +28,35 @@ const FORM_TABS = [
 ];
 
 /**
- * Build a minimal inline SVG sparkline from an array of close prices.
+ * Build a minimal inline SVG sparkline from an array of close prices, with
+ * an optional dashed reference line at today's open — green when the latest
+ * price is at/above it, red when below.
  * Returns an SVG string (safe to use with v-html).
  */
-function buildSparklineSVG(closes, width = 80, height = 30) {
+function buildSparklineSVG(closes, { open = null, price = null } = {}, width = 80, height = 30) {
   const vals = closes.filter(v => v != null);
   if (vals.length < 2) return '';
-  const min = Math.min(...vals);
-  const max = Math.max(...vals);
+  const hasOpen = open != null && price != null;
+  // Include the open in the scale so its line never falls outside the box.
+  const min = Math.min(...vals, ...(hasOpen ? [open] : []));
+  const max = Math.max(...vals, ...(hasOpen ? [open] : []));
   const range = max - min || 1;
   const step = width / (vals.length - 1);
+  const yFor = v => height - ((v - min) / range) * (height - 4) - 2;
   const points = vals.map((v, i) => {
     const x = i * step;
-    const y = height - ((v - min) / range) * (height - 4) - 2;
+    const y = yFor(v);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
   const lastVal = vals[vals.length - 1];
   const firstVal = vals[0];
   const color = lastVal >= firstVal ? 'var(--positive)' : 'var(--negative)';
+  const openLine = hasOpen
+    ? `<line x1="0" x2="${width}" y1="${yFor(open).toFixed(1)}" y2="${yFor(open).toFixed(1)}"
+        stroke="${price >= open ? 'var(--positive)' : 'var(--negative)'}" stroke-width="1" stroke-dasharray="2 2" opacity="0.8"/>`
+    : '';
   return `<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
+    ${openLine}
     <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
 }
@@ -210,7 +221,7 @@ export default {
           stockQuotes[sym] = { ...q, loading: false, error: null };
           // Sparkline is best-effort — don't let a slow/failed chart block the quote
           fetchChart(sym, '1mo', '1d')
-            .then(chart => { sparklines[sym] = buildSparklineSVG(chart.closes); })
+            .then(chart => { sparklines[sym] = buildSparklineSVG(chart.closes, q); })
             .catch(() => { sparklines[sym] = ''; });
         } catch (e) {
           stockQuotes[sym] = { price: null, change: null, pctChange: null, volume: null, shortName: '', loading: false, error: e.message };
@@ -263,6 +274,8 @@ export default {
           open: false,
           tab: 'chart',
           chart: { loading: false, loaded: false, error: null, series: [], range: '1Y' },
+          stats: { loading: false, loaded: false, data: null },
+          news: { loading: false, loaded: false, error: null, items: [] },
           docs: { loading: false, loaded: false, error: null, cik: null, filings: [], activeTab: '10-K' },
         };
       }
@@ -290,6 +303,67 @@ export default {
       }
     }
 
+    // Key statistics under the chart. Best-effort: fetchKeyStats never
+    // throws per-field, so a failure here just leaves those values as '—'.
+    async function loadStats(ticker) {
+      const d = details[ticker].stats;
+      if (d.loaded || d.loading) return;
+      d.loading = true;
+      try {
+        d.data = await fetchKeyStats(ticker);
+        d.loaded = true;
+      } catch {
+        d.data = null;
+      } finally {
+        d.loading = false;
+      }
+    }
+
+    // Day values come from the live quote (refreshed with the watchlist);
+    // P/E, market cap and yield are recomputed against the live price.
+    function keyStats(ticker) {
+      const q = stockQuotes[ticker] ?? {};
+      const s = details[ticker]?.stats.data ?? {};
+      const price = q.price;
+      const pe = price != null && s.eps > 0 ? price / s.eps : null;
+      const marketCap = price != null && s.sharesOutstanding ? price * s.sharesOutstanding : null;
+      const divYield = price && s.dividendsTTM != null ? (s.dividendsTTM / price) * 100 : null;
+      return [
+        { label: 'Open', value: formatUSD(q.open) },
+        { label: 'High', value: formatUSD(q.dayHigh) },
+        { label: 'Low', value: formatUSD(q.dayLow) },
+        { label: 'Vol', value: formatVolume(q.volume) },
+        { label: 'Avg Vol (3M)', fromStats: true, value: formatVolume(s.avgVolume) },
+        { label: 'Mkt Cap', fromStats: true, value: formatLargeUSD(marketCap) },
+        { label: 'P/E (TTM)', fromStats: true, value: formatNumber(pe) },
+        { label: 'EPS (TTM)', fromStats: true, value: formatUSD(s.eps) },
+        { label: 'Div Yield (TTM)', fromStats: true, value: formatPercentLevel(divYield) },
+        { label: 'Beta (5Y)', fromStats: true, value: formatNumber(s.beta) },
+        { label: '52W High', value: formatUSD(q.fiftyTwoWeekHigh) },
+        { label: '52W Low', value: formatUSD(q.fiftyTwoWeekLow) },
+      ];
+    }
+
+    async function loadNews(ticker) {
+      const d = details[ticker].news;
+      if (d.loaded || d.loading) return;
+      d.loading = true;
+      d.error = null;
+      try {
+        d.items = await fetchTickerNews(ticker);
+        d.loaded = true;
+      } catch (e) {
+        d.error = e.message;
+      } finally {
+        d.loading = false;
+      }
+    }
+
+    // Some thumbnail URLs 404 or block hotlinking — hide the broken image.
+    function onNewsImageError(e) {
+      e.target.style.display = 'none';
+    }
+
     async function loadDocs(ticker) {
       const d = details[ticker].docs;
       if (d.loaded || d.loading) return;
@@ -310,7 +384,10 @@ export default {
     }
 
     function loadActiveTab(ticker) {
-      if (details[ticker].tab === 'chart') loadChart(ticker);
+      if (details[ticker].tab === 'chart') {
+        loadChart(ticker);
+        loadStats(ticker);
+      } else if (details[ticker].tab === 'news') loadNews(ticker);
       else loadDocs(ticker);
     }
 
@@ -354,10 +431,11 @@ export default {
       watchlistEl, draggingTicker,
       onHandlePointerDown, onHandleKeydown,
       indexSymbols, indexes, INDEX_LABELS,
-      details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData,
+      details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       FORM_TABS, RANGE_OPTIONS,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
-      formatUSD, formatNumber, formatPct, formatVolume, formatDate, changeClass,
+      formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
+      safeArticleUrl, onArticleClick,
     };
   },
   template: `
@@ -426,11 +504,21 @@ export default {
               </template>
               <template v-else>
                 <span class="stock-row-num">{{ formatUSD(stockQuotes[sym]?.price) }}</span>
-                <span class="stock-row-num" :class="changeClass(stockQuotes[sym]?.change)">{{ formatUSD(stockQuotes[sym]?.change) }}</span>
-                <span class="stock-row-num" :class="changeClass(stockQuotes[sym]?.pctChange)">{{ formatPct(stockQuotes[sym]?.pctChange) }}</span>
-                <span class="stock-row-num text-muted">{{ formatVolume(stockQuotes[sym]?.volume) }}</span>
+                <span class="stock-row-num">
+                  <span class="stock-row-label">Chg</span>
+                  <span :class="changeClass(stockQuotes[sym]?.change)">{{ formatUSD(stockQuotes[sym]?.change) }}</span>
+                </span>
+                <span class="stock-row-num">
+                  <span class="stock-row-label">Chg %</span>
+                  <span :class="changeClass(stockQuotes[sym]?.pctChange)">{{ formatPct(stockQuotes[sym]?.pctChange) }}</span>
+                </span>
+                <span class="stock-row-num">
+                  <span class="stock-row-label">Vol</span>
+                  <span class="text-muted">{{ formatVolume(stockQuotes[sym]?.volume) }}</span>
+                </span>
               </template>
-              <span class="stock-row-sparkline" v-if="sparklines[sym]" v-html="sparklines[sym]"></span>
+              <span class="stock-row-sparkline" v-if="sparklines[sym]" v-html="sparklines[sym]"
+                    :title="stockQuotes[sym]?.open != null ? 'Dashed line: open at ' + formatUSD(stockQuotes[sym].open) : null"></span>
               <span class="stock-row-sparkline" v-else></span>
             </div>
           </div>
@@ -442,6 +530,7 @@ export default {
         <div class="accordion-body" v-if="details[sym]?.open">
           <div class="filing-tabs">
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Historical Chart</button>
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'news' }" @click.stop="setDetailTab(sym, 'news')">News</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')">Documents</button>
           </div>
 
@@ -468,6 +557,44 @@ export default {
             </div>
             <div class="text-muted text-sm" style="padding:16px" v-else>
               No price history available for this range.
+            </div>
+
+            <!-- Key statistics -->
+            <div class="key-stats">
+              <div class="key-stat" v-for="stat in keyStats(sym)" :key="stat.label">
+                <span class="key-stat-label">{{ stat.label }}</span>
+                <span class="skeleton key-stat-skeleton" v-if="stat.fromStats && details[sym]?.stats.loading"></span>
+                <span class="key-stat-value" v-else>{{ stat.value }}</span>
+              </div>
+            </div>
+          </template>
+
+          <!-- News (Yahoo Finance, tagged to this ticker) -->
+          <template v-else-if="details[sym]?.tab === 'news'">
+            <div style="padding:12px 16px" v-if="details[sym]?.news.loading">
+              <div class="stock-news-item" v-for="i in 4" :key="i">
+                <div class="skeleton stock-news-thumb"></div>
+                <div style="flex:1">
+                  <div class="skeleton" style="width:85%;height:14px;margin-bottom:6px"></div>
+                  <div class="skeleton" style="width:35%;height:11px"></div>
+                </div>
+              </div>
+            </div>
+            <div class="notice error" style="margin:12px" v-else-if="details[sym]?.news.error">
+              {{ details[sym].news.error }}
+            </div>
+            <div class="text-muted text-sm" style="padding:16px" v-else-if="!details[sym]?.news.items.length">
+              No recent news for {{ sym }}.
+            </div>
+            <div class="stock-news" v-else>
+              <div class="stock-news-item" v-for="article in details[sym].news.items" :key="article.link">
+                <img v-if="article.image" class="stock-news-thumb" :src="article.image" alt="" loading="lazy" @error="onNewsImageError" />
+                <div class="stock-news-text">
+                  <a class="stock-news-title" :href="safeArticleUrl(article.link)" target="_blank" rel="noopener"
+                     @click.stop="onArticleClick($event, article, config)">{{ article.title }}</a>
+                  <div class="text-muted text-sm">{{ article.source }} · {{ formatRelativeTime(article.pubDate) }}</div>
+                </div>
+              </div>
             </div>
           </template>
 
@@ -552,7 +679,7 @@ export default {
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">
         Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.
-        SEC filings from SEC EDGAR (data.sec.gov), no API key required. Both load when you expand a ticker. Drag a card by its ⠿ handle to reorder; manage tickers in ⚙ Settings.
+        Ticker news from Yahoo Finance. SEC filings from SEC EDGAR (data.sec.gov), no API key required. Each tab loads the first time you open it. Drag a card by its ⠿ handle to reorder; manage tickers in ⚙ Settings.
       </div>
     </div>
   `,

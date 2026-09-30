@@ -1,6 +1,6 @@
 const { ref, computed, onMounted } = Vue;
 import { fetchFeed, mergeFeeds, clearFeedCache } from '../services/rss.js';
-import { formatDate } from '../utils/formatters.js';
+import { formatDate, formatRelativeTime } from '../utils/formatters.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 
 const STAGGER_MS = 600; // delay between feed requests to respect rate limits
@@ -99,17 +99,6 @@ export default {
 
     function refresh() { fetchAll(true); }
 
-    function relativeTime(isoStr) {
-      if (!isoStr) return '';
-      const diff = Date.now() - new Date(isoStr).getTime();
-      const mins = Math.floor(diff / 60000);
-      if (mins < 60) return `${mins}m ago`;
-      const hrs = Math.floor(mins / 60);
-      if (hrs < 24) return `${hrs}h ago`;
-      const days = Math.floor(hrs / 24);
-      return `${days}d ago`;
-    }
-
     // Some feed-provided image URLs 404 or block hotlinking — hide the
     // broken image instead of showing the browser's broken-image icon.
     function onImageError(e) {
@@ -117,7 +106,7 @@ export default {
     }
 
     return {
-      articles, loading, feedErrors, lastUpdated, feeds, refresh, relativeTime, formatDate, onImageError,
+      articles, loading, feedErrors, lastUpdated, feeds, refresh, formatRelativeTime, formatDate, onImageError,
       searchQuery, sourceFilter, freshnessFilter, freshnessOptions, sourceOptions,
       filteredArticles, filtersActive, clearFilters,
       safeArticleUrl, onArticleClick,
@@ -192,7 +181,7 @@ export default {
           <div class="news-card-body">
             <div class="news-meta">
               <span class="source-badge">{{ article.source }}</span>
-              <span class="news-date">{{ relativeTime(article.pubDate) }}</span>
+              <span class="news-date">{{ formatRelativeTime(article.pubDate) }}</span>
             </div>
             <div class="news-title">
               <a :href="safeArticleUrl(article.link)" target="_blank" rel="noopener" @click="onArticleClick($event, article, config)">{{ article.title }}</a>

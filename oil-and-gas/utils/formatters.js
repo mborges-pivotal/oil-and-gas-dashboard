@@ -58,6 +58,31 @@ export function formatVolume(value) {
 }
 
 /**
+ * Large dollar amount abbreviation (e.g. $662.96B, $1.20T) — for market cap.
+ */
+export function formatLargeUSD(value) {
+  if (value == null || isNaN(value)) return '—';
+  if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+  if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+  if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+  return formatUSD(value);
+}
+
+/**
+ * Relative age of an ISO timestamp — "5m ago", "3h ago", "2d ago".
+ */
+export function formatRelativeTime(isoStr) {
+  if (!isoStr) return '';
+  const diff = Date.now() - new Date(isoStr).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+/**
  * Format a date string or epoch to "MMM D, YYYY".
  */
 export function formatDate(value) {

@@ -492,6 +492,8 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   flex: none;
 }
 .stock-row-num { text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; font-weight: 600; }
+.stock-row-num > span { display: block; }
+.stock-row-label { font-size: 10px; font-weight: 400; color: var(--text-muted); line-height: 1.2; }
 .stock-row-sparkline { display: flex; justify-content: flex-end; width: 80px; flex: none; }
 
 /* Watchlist reordering — drag handle + the card being dragged */
@@ -783,3 +785,48 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--warning-bg);
   color: var(--text-muted);
 }
+
+/* ============================================================
+   Stock Key Statistics (under the historical chart)
+   ============================================================ */
+.key-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  column-gap: 24px;
+  padding: 4px 16px 16px;
+}
+.key-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.key-stat-label { color: var(--text-muted); white-space: nowrap; }
+.key-stat-value { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.key-stat-skeleton { width: 48px; height: 12px; }
+
+/* ============================================================
+   Stock News (per-ticker tab in the watchlist card)
+   ============================================================ */
+.stock-news { padding: 4px 16px 8px; }
+.stock-news-item {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.stock-news-item:last-child { border-bottom: none; }
+.stock-news-thumb {
+  width: 56px;
+  height: 56px;
+  flex: none;
+  object-fit: cover;
+  border-radius: 6px;
+  background: var(--surface);
+}
+.stock-news-text { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.stock-news-title { font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }

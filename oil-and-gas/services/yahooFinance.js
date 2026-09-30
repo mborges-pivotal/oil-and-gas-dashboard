@@ -54,7 +54,8 @@ async function fetchWithFallback(url) {
 
 /**
  * Fetch current quote data for a single symbol.
- * Returns: { symbol, shortName, price, previousClose, change, pctChange, volume, currency }
+ * Returns: { symbol, shortName, price, previousClose, change, pctChange, volume, currency,
+ *            open, dayHigh, dayLow, fiftyTwoWeekHigh, fiftyTwoWeekLow }
  */
 export async function fetchQuote(symbol) {
   const url = `${BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
@@ -62,6 +63,8 @@ export async function fetchQuote(symbol) {
   const result = data?.chart?.result?.[0];
   if (!result) throw new Error(`No data for ${symbol}`);
   const meta = result.meta;
+  // The chart meta has no regularMarketOpen — take it from the latest daily bar.
+  const opens = result.indicators?.quote?.[0]?.open ?? [];
   const price = meta.regularMarketPrice ?? meta.chartPreviousClose;
   const prev = meta.previousClose ?? meta.chartPreviousClose;
   const change = price - prev;
@@ -75,7 +78,115 @@ export async function fetchQuote(symbol) {
     pctChange,
     volume: meta.regularMarketVolume ?? null,
     currency: meta.currency ?? 'USD',
+    open: opens[opens.length - 1] ?? null,
+    dayHigh: meta.regularMarketDayHigh ?? null,
+    dayLow: meta.regularMarketDayLow ?? null,
+    fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? null,
+    fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? null,
   };
+}
+
+const DAY_S = 86400;
+const AVG_VOLUME_DAYS = 63; // ~3 months of sessions, matching Yahoo's "Avg. Volume"
+
+// Monthly returns keyed by 'YYYY-MM', from a 1mo-interval chart result.
+// The last bar is the current, still-open month, so it's dropped.
+function monthlyReturns(result) {
+  const ts = result.timestamp ?? [];
+  const adj = result.indicators?.adjclose?.[0]?.adjclose ?? result.indicators?.quote?.[0]?.close ?? [];
+  const out = {};
+  for (let i = 1; i < ts.length - 1; i++) {
+    if (adj[i] == null || adj[i - 1] == null) continue;
+    out[new Date(ts[i] * 1000).toISOString().slice(0, 7)] = adj[i] / adj[i - 1] - 1;
+  }
+  return out;
+}
+
+// Beta = cov(stock, market) / var(market) over months both series have.
+function computeBeta(stock, market) {
+  const months = Object.keys(stock).filter(m => m in market);
+  if (months.length < 12) return null;
+  const s = months.map(m => stock[m]);
+  const k = months.map(m => market[m]);
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const ms = mean(s), mk = mean(k);
+  let cov = 0, varK = 0;
+  for (let i = 0; i < months.length; i++) {
+    cov += (s[i] - ms) * (k[i] - mk);
+    varK += (k[i] - mk) ** 2;
+  }
+  return varK ? cov / varK : null;
+}
+
+function latestReported(timeseries, type) {
+  const series = timeseries.find(r => r.meta?.type?.[0] === type)?.[type] ?? [];
+  const last = series.filter(Boolean).pop();
+  return last ? { value: last.reportedValue?.raw ?? null, asOfDate: last.asOfDate } : null;
+}
+
+/**
+ * Fetch slower-moving key statistics for the stock detail panel. Each piece
+ * is best-effort: a field whose source request fails (or that doesn't apply,
+ * e.g. EPS for an ETF) comes back null instead of failing the whole call.
+ *
+ * Price-dependent ratios (P/E, market cap, yield) are left to the caller to
+ * compute against the live quote — the inputs returned here are:
+ *   eps                TTM diluted EPS
+ *   sharesOutstanding  implied from Yahoo's latest reported market cap ÷ that day's close
+ *   dividendsTTM       sum of dividends paid in the last 365 days
+ *   avgVolume          mean daily volume over the last ~3 months of completed sessions
+ *   beta               5-year monthly beta vs. the S&P 500 (Yahoo's methodology)
+ */
+export async function fetchKeyStats(symbol) {
+  const sym = encodeURIComponent(symbol);
+  const now = Math.floor(Date.now() / 1000);
+  const [fundamentals, daily, monthly, marketMonthly] = await Promise.allSettled([
+    fetchWithFallback(`${BASE}/ws/fundamentals-timeseries/v1/finance/timeseries/${sym}?type=trailingDilutedEPS,trailingMarketCap&period1=${now - 400 * DAY_S}&period2=${now}`),
+    fetchWithFallback(`${BASE}/v8/finance/chart/${sym}?interval=1d&range=1y&events=div`),
+    fetchWithFallback(`${BASE}/v8/finance/chart/${sym}?interval=1mo&range=5y`),
+    fetchWithFallback(`${BASE}/v8/finance/chart/%5EGSPC?interval=1mo&range=5y`),
+  ]);
+  const value = r => (r.status === 'fulfilled' ? r.value : null);
+
+  const series = value(fundamentals)?.timeseries?.result ?? [];
+  const eps = latestReported(series, 'trailingDilutedEPS')?.value ?? null;
+  const reportedCap = latestReported(series, 'trailingMarketCap');
+
+  const stats = { eps, sharesOutstanding: null, dividendsTTM: null, avgVolume: null, beta: null };
+
+  const day = value(daily)?.chart?.result?.[0];
+  if (day) {
+    const ts = day.timestamp ?? [];
+    const quote = day.indicators?.quote?.[0] ?? {};
+    const offset = day.meta?.gmtoffset ?? 0;
+    const dateOf = t => new Date((t + offset) * 1000).toISOString().slice(0, 10);
+
+    // Exclude the latest bar — it may be today's still-open session.
+    const vols = (quote.volume ?? []).slice(0, -1).filter(v => v != null).slice(-AVG_VOLUME_DAYS);
+    if (vols.length) stats.avgVolume = vols.reduce((a, b) => a + b, 0) / vols.length;
+
+    const divs = Object.values(day.events?.dividends ?? {});
+    stats.dividendsTTM = divs
+      .filter(d => d.date >= now - 365 * DAY_S)
+      .reduce((sum, d) => sum + d.amount, 0);
+
+    if (reportedCap?.value) {
+      // Close on (or the last session before) the market cap's as-of date.
+      let close = null;
+      for (let i = 0; i < ts.length && dateOf(ts[i]) <= reportedCap.asOfDate; i++) {
+        if (quote.close?.[i] != null) close = quote.close[i];
+      }
+      if (close) stats.sharesOutstanding = reportedCap.value / close;
+    }
+  }
+
+  const stockMonthly = value(monthly)?.chart?.result?.[0];
+  const marketResult = value(marketMonthly)?.chart?.result?.[0];
+  if (stockMonthly && marketResult) {
+    stats.beta = computeBeta(monthlyReturns(stockMonthly), monthlyReturns(marketResult));
+  }
+
+  return stats;
 }
 
 /**
@@ -90,4 +201,34 @@ export async function fetchChart(symbol, range = '1mo', interval = '1d') {
   const timestamps = result.timestamp ?? [];
   const closes = result.indicators?.quote?.[0]?.close ?? [];
   return { symbol, timestamps, closes };
+}
+
+// Smallest thumbnail rendition — the news list shows it at ~56px.
+function pickThumbnail(thumbnail) {
+  const res = thumbnail?.resolutions ?? [];
+  const small = res.find(r => r.tag === '140x140') ?? res.slice().sort((a, b) => a.width - b.width)[0];
+  return small?.url ?? null;
+}
+
+/**
+ * Fetch recent news tagged to a ticker, via Yahoo's search endpoint.
+ * Items use the same shape as services/rss.js articles
+ * ({ title, link, pubDate, description, image, source }) so the shared
+ * article viewer (utils/articleViewer.js) handles them unchanged.
+ * Yahoo supplies no summary text, so `description` is always ''.
+ */
+export async function fetchTickerNews(symbol, count = 20) {
+  const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(symbol)}&quotesCount=0&newsCount=${count}`;
+  const data = await fetchWithFallback(url);
+  return (data?.news ?? [])
+    .filter(n => n.title && n.link)
+    .map(n => ({
+      title: n.title,
+      link: n.link,
+      pubDate: n.providerPublishTime ? new Date(n.providerPublishTime * 1000).toISOString() : '',
+      description: '',
+      image: pickThumbnail(n.thumbnail),
+      source: n.publisher ?? 'Yahoo Finance',
+    }))
+    .sort((a, b) => (b.pubDate || '').localeCompare(a.pubDate || ''));
 }
