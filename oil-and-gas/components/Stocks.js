@@ -81,8 +81,9 @@ export default {
 
     // ── Watchlist reordering ────────────────────────────────────────────────
     // Drag a card by its ⠿ handle (mouse or touch, via Pointer Events —
-    // native HTML5 drag-and-drop doesn't work on most touch browsers), or
-    // focus the handle and use ↑/↓. While dragging, the list renders from
+    // native HTML5 drag-and-drop doesn't work on most touch browsers), on a
+    // touch screen long-press anywhere on the card, or focus the handle and
+    // use ↑/↓. While dragging, the list renders from
     // `dragOrder` and reorders live as the pointer passes a neighbor's
     // midpoint; on release the new order is emitted once, and the parent
     // saves it into config.stocks.tickers like any other setting.
@@ -106,7 +107,8 @@ export default {
     function repositionDragged() {
       const order = dragOrder.value;
       const items = watchlistItems();
-      let i = order.indexOf(draggingTicker.value);
+      const start = order.indexOf(draggingTicker.value);
+      let i = start;
       let moved = false;
       while (i > 0) {
         const r = items[i - 1].getBoundingClientRect();
@@ -122,6 +124,13 @@ export default {
         [items[i + 1], items[i]] = [items[i], items[i + 1]];
         i++;
       }
+      if (i !== start) buzz(5); // a light tick each time the card changes slot
+    }
+
+    // Haptic feedback where supported (Android Chrome; iOS Safari has no
+    // Vibration API, so this is a silent no-op there).
+    function buzz(ms) {
+      try { navigator.vibrate?.(ms); } catch { /* ignore */ }
     }
 
     // Pointer capture stops a touch drag from scrolling the page, so scroll
@@ -152,15 +161,74 @@ export default {
     function onHandlePointerDown(e, sym) {
       if (e.button !== 0 || draggingTicker.value || configTickers.value.length < 2) return;
       e.preventDefault(); // no text selection / focus-scroll while dragging
-      activePointerId = e.pointerId;
-      lastPointerY = e.clientY;
+      startDrag(e.pointerId, e.clientY, sym);
+    }
+
+    function startDrag(pointerId, y, sym) {
+      activePointerId = pointerId;
+      lastPointerY = y;
       dragOrder.value = [...configTickers.value];
       draggingTicker.value = sym;
       window.addEventListener('pointermove', onDragMove);
       window.addEventListener('pointerup', endDrag);
       window.addEventListener('pointercancel', endDrag);
       window.addEventListener('blur', endDrag);
+      // The card itself allows touch panning (unlike the handle's
+      // touch-action: none), and touch-action can't change mid-gesture —
+      // so a long-press drag blocks the page scroll by cancelling touchmove.
+      window.addEventListener('touchmove', blockTouchScroll, { passive: false });
       autoScrollFrame = requestAnimationFrame(autoScrollStep);
+      buzz(15);
+    }
+
+    function blockTouchScroll(e) {
+      if (draggingTicker.value) e.preventDefault();
+    }
+
+    // ── Long-press to drag (touch only) ──
+    // Hold a card still for LONG_PRESS_MS to pick it up. Moving the finger
+    // first means a scroll, and a quick tap still expands the card.
+    const LONG_PRESS_MS = 400;
+    const LONG_PRESS_SLOP_PX = 8;
+    let pressTimer = null;
+    let press = null; // { pointerId, sym, x, y }
+
+    function onCardPointerDown(e, sym) {
+      if (e.pointerType !== 'touch' || draggingTicker.value || press || configTickers.value.length < 2) return;
+      if (e.target.closest('.drag-handle')) return; // the handle drags immediately
+      press = { pointerId: e.pointerId, sym, x: e.clientX, y: e.clientY };
+      window.addEventListener('pointermove', onPressMove);
+      window.addEventListener('pointerup', cancelPress);
+      window.addEventListener('pointercancel', cancelPress);
+      // Registered now (not when the drag starts) so it's in place before
+      // the browser decides whether the gesture is a scroll.
+      window.addEventListener('touchmove', blockTouchScroll, { passive: false });
+      pressTimer = setTimeout(() => {
+        const { pointerId, sym: pressed, y } = press;
+        cancelPress();
+        startDrag(pointerId, y, pressed);
+      }, LONG_PRESS_MS);
+    }
+
+    function onPressMove(e) {
+      if (e.pointerId !== press?.pointerId) return;
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > LONG_PRESS_SLOP_PX) cancelPress();
+      else press.y = e.clientY;
+    }
+
+    function cancelPress() {
+      clearTimeout(pressTimer);
+      press = null;
+      window.removeEventListener('pointermove', onPressMove);
+      window.removeEventListener('pointerup', cancelPress);
+      window.removeEventListener('pointercancel', cancelPress);
+      if (!draggingTicker.value) window.removeEventListener('touchmove', blockTouchScroll);
+    }
+
+    // Long-pressing also opens the browser's context menu / text-selection
+    // callout on some phones — suppress it while a press or drag is live.
+    function onCardContextMenu(e) {
+      if (press || draggingTicker.value) e.preventDefault();
     }
 
     function onDragMove(e) {
@@ -174,6 +242,7 @@ export default {
       window.removeEventListener('pointerup', endDrag);
       window.removeEventListener('pointercancel', endDrag);
       window.removeEventListener('blur', endDrag);
+      window.removeEventListener('touchmove', blockTouchScroll);
       cancelAnimationFrame(autoScrollFrame);
     }
 
@@ -184,13 +253,18 @@ export default {
       if (!draggingTicker.value) return;
       stopListening();
       suppressHeaderClick = true;
-      setTimeout(() => { suppressHeaderClick = false; }, 0); // click, if any, fires before this
+      // The click, if any, follows the drop — on touch screens a little later
+      // than the pointerup, so hold the flag briefly rather than one tick.
+      setTimeout(() => { suppressHeaderClick = false; }, 350);
       const order = dragOrder.value;
       const changed = order.some((t, i) => t !== configTickers.value[i]);
       draggingTicker.value = null;
       // Parent updates config synchronously on emit, so there's no frame
       // where the list snaps back to the old order before it's saved.
-      if (changed) emit('reorder-tickers', [...order]);
+      if (changed) {
+        emit('reorder-tickers', [...order]);
+        buzz(10);
+      }
       dragOrder.value = null;
     }
 
@@ -209,7 +283,7 @@ export default {
       watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"] .drag-handle`)?.focus();
     }
 
-    onUnmounted(stopListening);
+    onUnmounted(() => { cancelPress(); stopListening(); });
 
     // ── Quotes (ticker → { price, change, pctChange, volume, shortName, loading, error }) ──
     const stockQuotes = reactive({});
@@ -451,7 +525,7 @@ export default {
     return {
       tickers, stockQuotes, sparklines, lastUpdated,
       watchlistEl, draggingTicker,
-      onHandlePointerDown, onHandleKeydown,
+      onHandlePointerDown, onHandleKeydown, onCardPointerDown, onCardContextMenu,
       indexSymbols, indexes, INDEX_LABELS,
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
@@ -494,7 +568,8 @@ export default {
       <div ref="watchlistEl" class="watchlist" :class="{ 'is-dragging': draggingTicker }">
       <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
            :class="{ dragging: draggingTicker === sym }">
-        <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)">
+        <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)"
+             @pointerdown="onCardPointerDown($event, sym)" @contextmenu="onCardContextMenu">
           <button
             v-if="tickers.length > 1"
             type="button"

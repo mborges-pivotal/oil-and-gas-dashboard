@@ -1,4 +1,5 @@
 const { ref, computed } = Vue;
+import { useChartSize, maxTicksFor } from '../utils/chartSize.js';
 import { formatUSD, formatPct, formatDate } from '../utils/formatters.js';
 import { monthlyTicks, hourlyTicks, dropEdgeTickCollisions } from '../utils/dateRange.js';
 
@@ -21,10 +22,12 @@ export default {
   // data: ascending array of { period, value }
   props: { data: Array, formatValue: Function, intraday: Boolean, baseline: Number },
   setup(props) {
-    const width = 720, height = 260;
+    // Drawn at the container's real width so text stays legible on phones.
+    const wrap = ref(null);
+    const { width, height } = useChartSize(wrap);
     const padding = { top: 16, right: 16, bottom: 26, left: 56 };
-    const plotW = width - padding.left - padding.right;
-    const plotH = height - padding.top - padding.bottom;
+    const plotW = computed(() => width.value - padding.left - padding.right);
+    const plotH = computed(() => height.value - padding.top - padding.bottom);
 
     const fmt = computed(() => props.formatValue ?? formatUSD);
 
@@ -42,11 +45,11 @@ export default {
 
     function xAt(i) {
       const n = props.data.length;
-      return padding.left + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+      return padding.left + (n <= 1 ? plotW.value / 2 : (i / (n - 1)) * plotW.value);
     }
     function yAt(v) {
       const range = yMax.value - yMin.value || 1;
-      return padding.top + plotH - ((v - yMin.value) / range) * plotH;
+      return padding.top + plotH.value - ((v - yMin.value) / range) * plotH.value;
     }
 
     const linePath = computed(() =>
@@ -65,7 +68,7 @@ export default {
     // separately-exposed `data` array) so it can't desync from props.data
     // when the parent swaps in a differently-sized array on range change.
     const xTickLabels = computed(() => {
-      const ticks = props.intraday ? hourlyTicks(props.data, 8) : monthlyTicks(props.data, 15);
+      const ticks = props.intraday ? hourlyTicks(props.data, maxTicksFor(plotW.value, 8)) : monthlyTicks(props.data, maxTicksFor(plotW.value, 15));
       const mapped = ticks.map((t, pos) => ({
         i: t.i,
         x: xAt(t.i),
@@ -82,9 +85,9 @@ export default {
     function onMove(evt) {
       if (!props.data.length) return;
       const rect = evt.currentTarget.getBoundingClientRect();
-      const px = (evt.clientX - rect.left) * (width / rect.width);
+      const px = (evt.clientX - rect.left) * (width.value / rect.width);
       const n = props.data.length;
-      const rel = n <= 1 ? 0 : (px - padding.left) / plotW;
+      const rel = n <= 1 ? 0 : (px - padding.left) / plotW.value;
       hoverIndex.value = Math.min(Math.max(Math.round(rel * (n - 1)), 0), n - 1);
     }
     function onLeave() { hoverIndex.value = null; }
@@ -92,7 +95,7 @@ export default {
     const hoverPoint = computed(() => (hoverIndex.value === null ? null : props.data[hoverIndex.value]));
     const hoverX = computed(() => (hoverIndex.value === null ? 0 : xAt(hoverIndex.value)));
     const hoverY = computed(() => (hoverIndex.value === null ? 0 : yAt(Number(hoverPoint.value.value))));
-    const tooltipLeftPct = computed(() => Math.min(Math.max((hoverX.value / width) * 100, 8), 92));
+    const tooltipLeftPct = computed(() => Math.min(Math.max((hoverX.value / width.value) * 100, 8), 92));
 
     const lastIndex = computed(() => props.data.length - 1);
     const lastPoint = computed(() => props.data[lastIndex.value] ?? null);
@@ -115,7 +118,7 @@ export default {
     }
 
     return {
-      width, height, padding, plotW, plotH, hasBaseline, formatPeriod,
+      wrap, width, height, padding, plotW, plotH, hasBaseline, formatPeriod,
       linePath, yTicks, xTickLabels, xAt, yAt, fmt,
       onMove, onLeave, hoverPoint, hoverX, hoverY, tooltipLeftPct,
       lastIndex, lastPoint, periodChange,
@@ -123,7 +126,7 @@ export default {
     };
   },
   template: `
-    <div class="history-chart-wrap">
+    <div class="history-chart-wrap" ref="wrap">
       <div class="chart-corner-label" v-if="lastPoint">
         <span class="chart-corner-value">{{ fmt(Number(lastPoint.value)) }}</span>
         <span v-if="periodChange" class="chart-corner-change" :class="periodChange.pct >= 0 ? 'positive' : 'negative'">
@@ -131,7 +134,8 @@ export default {
         </span>
       </div>
       <svg :viewBox="'0 0 ' + width + ' ' + height" class="history-chart-svg"
-           @mousemove="onMove" @mouseleave="onLeave">
+           @pointerdown="onMove" @pointermove="onMove"
+           @pointerleave="onLeave" @pointercancel="onLeave">
         <g v-for="(t, i) in yTicks" :key="'grid'+i">
           <line :x1="padding.left" :x2="width - padding.right" :y1="yAt(t)" :y2="yAt(t)" class="chart-gridline" />
           <text :x="padding.left - 8" :y="yAt(t) + 3" class="chart-axis-label" text-anchor="end">{{ fmt(t) }}</text>

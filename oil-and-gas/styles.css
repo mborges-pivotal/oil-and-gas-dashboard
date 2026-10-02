@@ -532,6 +532,22 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   touch-action: none; /* let pointer events drive the drag on touch screens */
 }
 .drag-handle:hover { background: var(--border); color: var(--text); }
+/* Touch screens: a ~44px hit area (Apple/Google's minimum touch target);
+   the negative margins keep the row from growing to fit it. Also no
+   text-selection callout when long-pressing a card to pick it up. */
+@media (pointer: coarse) {
+  .drag-handle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -10px 2px -10px -12px;
+    font-size: 20px;
+  }
+  .drag-handle:hover { background: transparent; color: var(--text-muted); }
+  .stock-row-header { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
 .drag-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .watchlist.is-dragging { user-select: none; }
 .watchlist.is-dragging, .watchlist.is-dragging * { cursor: grabbing !important; }
@@ -602,7 +618,17 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .range-btn:hover { background: var(--border); }
 .range-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .history-chart-wrap { position: relative; }
-.history-chart-svg { width: 100%; height: auto; display: block; }
+.history-chart-svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  /* Touch: a sideways drag scrubs the crosshair (pointer events), an up/down
+     swipe still scrolls the page — the browser then sends pointercancel. */
+  touch-action: pan-y;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
 .chart-gridline { stroke: var(--border); stroke-width: 1; }
 .chart-axis-label { fill: var(--text-muted); font-size: 10px; }
 .chart-line { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
@@ -699,6 +725,15 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   .subtab-bar-fit .subtab-btn { flex: 1 1 0; padding: 10px 4px; text-align: center; }
   .subtab-bar-fit .label-full { display: none; }
   .subtab-bar-fit .label-short { display: inline; }
+  /* Chart range buttons (1D…5Y): one full-width row of equal buttons
+     instead of wrapping the last one onto a line of its own. */
+  .chart-filters { width: 100%; }
+  .range-btn-group { flex-wrap: nowrap; width: 100%; gap: 3px; }
+  .range-btn { flex: 1 1 0; min-width: 0; padding: 5px 0; text-align: center; }
+}
+@media (max-width: 360px) {
+  .range-btn-group { gap: 2px; }
+  .range-btn { font-size: 11px; }
   .app-header .logo { font-size: 13px; }
 }
 
