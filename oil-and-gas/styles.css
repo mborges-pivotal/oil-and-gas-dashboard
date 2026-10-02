@@ -161,6 +161,15 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   margin-bottom: 20px;
 }
 .label-short { display: none; }
+/* Markets sub-tab change by swipe: the new section slides in from the side
+   the finger came from. */
+.markets-content.slide-from-right { animation: slide-from-right 180ms ease-out; }
+.markets-content.slide-from-left  { animation: slide-from-left 180ms ease-out; }
+@keyframes slide-from-right { from { transform: translateX(24px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@keyframes slide-from-left  { from { transform: translateX(-24px); opacity: 0.4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .markets-content.slide-from-right, .markets-content.slide-from-left { animation: none; }
+}
 .subtab-btn {
   background: transparent;
   border: none;

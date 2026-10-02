@@ -34,7 +34,15 @@ function resolve(pref) {
 /** Apply a theme preference to the page and remember it for first paint. */
 export function applyTheme(pref) {
   preference = normalizeTheme(pref);
-  document.documentElement.dataset.theme = resolve(preference);
+  const theme = resolve(preference);
+  document.documentElement.dataset.theme = theme;
+  // Browser/status-bar tint (and the home-screen app's title bar) follows
+  // the app's theme, not just the OS setting the <meta> media queries see.
+  // Matches --surface in styles.css.
+  const tint = theme === 'light' ? '#ffffff' : '#161b22';
+  document.querySelectorAll('meta[name="theme-color"]').forEach(m => {
+    m.setAttribute('content', tint);
+  });
   try {
     localStorage.setItem(THEME_CACHE_KEY, preference);
   } catch {
