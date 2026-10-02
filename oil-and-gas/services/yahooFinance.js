@@ -65,8 +65,15 @@ export async function fetchQuote(symbol) {
   const meta = result.meta;
   // The chart meta has no regularMarketOpen — take it from the latest daily bar.
   const opens = result.indicators?.quote?.[0]?.open ?? [];
+  const closes = result.indicators?.quote?.[0]?.close ?? [];
   const price = meta.regularMarketPrice ?? meta.chartPreviousClose;
-  const prev = meta.previousClose ?? meta.chartPreviousClose;
+  // With range=2d, meta.previousClose is absent and chartPreviousClose is the
+  // close *before* the 2-day window (two sessions back), which would make
+  // change/pctChange a 2-day move. Yesterday's close is the second-to-last
+  // daily bar.
+  const prev = meta.previousClose
+    ?? (closes.length >= 2 && closes[closes.length - 2] != null ? closes[closes.length - 2] : null)
+    ?? meta.chartPreviousClose;
   const change = price - prev;
   const pctChange = prev !== 0 ? (change / prev) * 100 : 0;
   return {

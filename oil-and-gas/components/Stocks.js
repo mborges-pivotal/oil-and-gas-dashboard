@@ -4,6 +4,10 @@ import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl
 import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
+
+// Stock charts also get a 1D (intraday) range; the shared RANGE_OPTIONS
+// serve daily/weekly series where a single day doesn't make sense.
+const STOCK_RANGE_OPTIONS = [{ id: '1D', label: '1D' }, ...RANGE_OPTIONS];
 import HistoryChart from './HistoryChart.js';
 
 const INDEX_LABELS = {
@@ -28,18 +32,19 @@ const FORM_TABS = [
 ];
 
 /**
- * Build a minimal inline SVG sparkline from an array of close prices, with
- * an optional dashed reference line at today's open — green when the latest
- * price is at/above it, red when below.
+ * Build a minimal inline SVG sparkline from today's intraday prices, with an
+ * optional dashed reference line at the previous close. Both are green when
+ * the price is at/above the previous close, red when below — the same
+ * comparison as the Chg / Chg % columns.
  * Returns an SVG string (safe to use with v-html).
  */
-function buildSparklineSVG(closes, { open = null, price = null } = {}, width = 80, height = 30) {
+function buildSparklineSVG(closes, { previousClose = null, price = null } = {}, width = 80, height = 30) {
   const vals = closes.filter(v => v != null);
   if (vals.length < 2) return '';
-  const hasOpen = open != null && price != null;
-  // Include the open in the scale so its line never falls outside the box.
-  const min = Math.min(...vals, ...(hasOpen ? [open] : []));
-  const max = Math.max(...vals, ...(hasOpen ? [open] : []));
+  const hasPrev = previousClose != null;
+  // Include the previous close in the scale so its line never falls outside the box.
+  const min = Math.min(...vals, ...(hasPrev ? [previousClose] : []));
+  const max = Math.max(...vals, ...(hasPrev ? [previousClose] : []));
   const range = max - min || 1;
   const step = width / (vals.length - 1);
   const yFor = v => height - ((v - min) / range) * (height - 4) - 2;
@@ -48,15 +53,15 @@ function buildSparklineSVG(closes, { open = null, price = null } = {}, width = 8
     const y = yFor(v);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   }).join(' ');
-  const lastVal = vals[vals.length - 1];
-  const firstVal = vals[0];
-  const color = lastVal >= firstVal ? 'var(--positive)' : 'var(--negative)';
-  const openLine = hasOpen
-    ? `<line x1="0" x2="${width}" y1="${yFor(open).toFixed(1)}" y2="${yFor(open).toFixed(1)}"
-        stroke="${price >= open ? 'var(--positive)' : 'var(--negative)'}" stroke-width="1" stroke-dasharray="2 2" opacity="0.8"/>`
+  const last = price ?? vals[vals.length - 1];
+  const up = hasPrev ? last >= previousClose : last >= vals[0];
+  const color = up ? 'var(--positive)' : 'var(--negative)';
+  const prevLine = hasPrev
+    ? `<line x1="0" x2="${width}" y1="${yFor(previousClose).toFixed(1)}" y2="${yFor(previousClose).toFixed(1)}"
+        stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.8"/>`
     : '';
   return `<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">
-    ${openLine}
+    ${prevLine}
     <polyline points="${points}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`;
 }
@@ -209,6 +214,9 @@ export default {
     // ── Quotes (ticker → { price, change, pctChange, volume, shortName, loading, error }) ──
     const stockQuotes = reactive({});
     const sparklines = reactive({});   // ticker → SVG string
+    // ticker → { series: [{ period (ISO timestamp), value }], previousClose, error }
+    // Today's 5-minute prices — drives both the sparkline and the 1D chart.
+    const intraday = reactive({});
     const lastUpdated = ref(null);
     watch(lastUpdated, v => emit('updated', v));
     let refreshTimer = null;
@@ -220,10 +228,22 @@ export default {
         try {
           const q = await fetchQuote(sym);
           stockQuotes[sym] = { ...q, loading: false, error: null };
-          // Sparkline is best-effort — don't let a slow/failed chart block the quote
-          fetchChart(sym, '1mo', '1d')
-            .then(chart => { sparklines[sym] = buildSparklineSVG(chart.closes, q); })
-            .catch(() => { sparklines[sym] = ''; });
+          // Intraday is best-effort — don't let a slow/failed chart block the quote
+          fetchChart(sym, '1d', '5m')
+            .then(chart => {
+              const series = [];
+              chart.timestamps.forEach((ts, i) => {
+                const close = chart.closes[i];
+                if (close != null) series.push({ period: new Date(ts * 1000).toISOString(), value: close });
+              });
+              intraday[sym] = { series, previousClose: q.previousClose, error: null };
+              sparklines[sym] = buildSparklineSVG(chart.closes, q);
+            })
+            .catch(e => {
+              sparklines[sym] = '';
+              // Keep the last good series on a failed refresh.
+              if (!intraday[sym]?.series.length) intraday[sym] = { series: [], previousClose: null, error: e.message };
+            });
         } catch (e) {
           stockQuotes[sym] = { price: null, change: null, pctChange: null, volume: null, shortName: '', loading: false, error: e.message };
         }
@@ -420,6 +440,7 @@ export default {
     function filteredChartData(ticker) {
       const d = details[ticker]?.chart;
       if (!d) return [];
+      if (d.range === '1D') return intraday[ticker]?.series ?? [];
       const cutoff = cutoffDateFor(d.range);
       return d.series
         .filter(r => new Date(r.period) >= cutoff)
@@ -433,7 +454,7 @@ export default {
       onHandlePointerDown, onHandleKeydown,
       indexSymbols, indexes, INDEX_LABELS,
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
-      FORM_TABS, RANGE_OPTIONS,
+      intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
       safeArticleUrl, onArticleClick,
@@ -512,7 +533,7 @@ export default {
                 </span>
               </template>
               <span class="stock-row-sparkline" v-if="sparklines[sym]" v-html="sparklines[sym]"
-                    :title="stockQuotes[sym]?.open != null ? 'Dashed line: open at ' + formatUSD(stockQuotes[sym].open) : null"></span>
+                    :title="stockQuotes[sym]?.previousClose != null ? 'Today · dashed line: previous close ' + formatUSD(stockQuotes[sym].previousClose) : null"></span>
               <span class="stock-row-sparkline" v-else></span>
             </div>
           </div>
@@ -533,14 +554,29 @@ export default {
             <div class="chart-filters" style="padding:12px 16px 0">
               <div class="range-btn-group">
                 <button
-                  v-for="r in RANGE_OPTIONS" :key="r.id"
+                  v-for="r in STOCK_RANGE_OPTIONS" :key="r.id"
                   class="range-btn" :class="{ active: details[sym]?.chart.range === r.id }"
                   @click.stop="details[sym].chart.range = r.id"
                 >{{ r.label }}</button>
               </div>
             </div>
 
-            <div style="padding:12px 16px" v-if="details[sym]?.chart.loading">
+            <!-- 1D reads the intraday series the sparkline already fetched -->
+            <template v-if="details[sym]?.chart.range === '1D'">
+              <div style="padding:12px 16px" v-if="!intraday[sym]">
+                <div class="skeleton" style="width:100%;height:220px"></div>
+              </div>
+              <div class="notice error" style="margin:12px" v-else-if="intraday[sym].error">
+                {{ intraday[sym].error }}
+              </div>
+              <div style="padding:12px 16px" v-else-if="intraday[sym].series.length">
+                <HistoryChart :data="intraday[sym].series" intraday :baseline="intraday[sym].previousClose" />
+              </div>
+              <div class="text-muted text-sm" style="padding:16px" v-else>
+                No intraday prices yet today.
+              </div>
+            </template>
+            <div style="padding:12px 16px" v-else-if="details[sym]?.chart.loading">
               <div class="skeleton" style="width:100%;height:220px"></div>
             </div>
             <div class="notice error" style="margin:12px" v-else-if="details[sym]?.chart.error">

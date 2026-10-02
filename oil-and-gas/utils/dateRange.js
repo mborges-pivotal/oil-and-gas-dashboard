@@ -51,6 +51,29 @@ export function monthlyTicks(data, maxTicks = 12) {
   });
 }
 
+/**
+ * Intraday counterpart of monthlyTicks(): tick indices at the first point of
+ * each clock hour (local time) in an ascending series of { period } ISO
+ * timestamps, thinned to at most `maxTicks`. Labels are "10 AM", "1 PM", ...
+ */
+export function hourlyTicks(data, maxTicks = 8) {
+  const hourStarts = [];
+  let lastKey = null;
+  data.forEach((d, i) => {
+    const date = new Date(d.period);
+    const key = `${date.toDateString()}-${date.getHours()}`;
+    if (key !== lastKey) {
+      // Skip a partial first hour (e.g. a 9:30 open) — it'd crowd the next tick.
+      if (lastKey !== null || date.getMinutes() === 0) hourStarts.push({ i, date });
+      lastKey = key;
+    }
+  });
+  const stride = Math.max(1, Math.ceil(hourStarts.length / maxTicks));
+  return hourStarts
+    .filter((_, idx) => idx % stride === 0)
+    .map(({ i, date }) => ({ i, label: date.toLocaleTimeString('en-US', { hour: 'numeric' }) }));
+}
+
 // Rough average glyph width for the 10px chart-axis-label font — precise
 // enough to catch the one collision that matters here: the edge-anchored
 // first/last tick (which draws its full label width to one side of its

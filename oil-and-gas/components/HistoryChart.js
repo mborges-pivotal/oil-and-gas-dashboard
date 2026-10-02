@@ -1,6 +1,6 @@
 const { ref, computed } = Vue;
 import { formatUSD, formatPct, formatDate } from '../utils/formatters.js';
-import { monthlyTicks, dropEdgeTickCollisions } from '../utils/dateRange.js';
+import { monthlyTicks, hourlyTicks, dropEdgeTickCollisions } from '../utils/dateRange.js';
 
 /**
  * Generic single-series historical line chart — inline SVG, no chart
@@ -10,10 +10,16 @@ import { monthlyTicks, dropEdgeTickCollisions } from '../utils/dateRange.js';
  *
  * `formatValue` lets callers pick the axis/tooltip formatter (defaults to
  * USD) — e.g. Economic Indicators passes a percent formatter instead.
+ *
+ * `intraday` switches the x-axis and tooltip from dates to times of day
+ * (periods are then full ISO timestamps). `baseline` draws a dashed
+ * reference line at that value and measures the corner change against it
+ * instead of the first point — e.g. a stock's previous close on the 1D chart.
  */
 export default {
   name: 'HistoryChart',
-  props: ['data', 'formatValue'], // data: ascending array of { period, value }
+  // data: ascending array of { period, value }
+  props: { data: Array, formatValue: Function, intraday: Boolean, baseline: Number },
   setup(props) {
     const width = 720, height = 260;
     const padding = { top: 16, right: 16, bottom: 26, left: 56 };
@@ -25,8 +31,11 @@ export default {
     const hoverIndex = ref(null);
 
     const values = computed(() => props.data.map(d => Number(d.value)));
-    const minV = computed(() => (values.value.length ? Math.min(...values.value) : 0));
-    const maxV = computed(() => (values.value.length ? Math.max(...values.value) : 1));
+    const hasBaseline = computed(() => props.baseline != null && !isNaN(props.baseline));
+    // Scale includes the baseline so its line stays inside the plot.
+    const scaleValues = computed(() => (hasBaseline.value ? [...values.value, props.baseline] : values.value));
+    const minV = computed(() => (values.value.length ? Math.min(...scaleValues.value) : 0));
+    const maxV = computed(() => (values.value.length ? Math.max(...scaleValues.value) : 1));
     const yPad = computed(() => (maxV.value - minV.value) * 0.12 || 0.1);
     const yMin = computed(() => minV.value - yPad.value);
     const yMax = computed(() => maxV.value + yPad.value);
@@ -56,12 +65,16 @@ export default {
     // separately-exposed `data` array) so it can't desync from props.data
     // when the parent swaps in a differently-sized array on range change.
     const xTickLabels = computed(() => {
-      const ticks = monthlyTicks(props.data, 15);
+      const ticks = props.intraday ? hourlyTicks(props.data, 8) : monthlyTicks(props.data, 15);
       const mapped = ticks.map((t, pos) => ({
         i: t.i,
         x: xAt(t.i),
         label: t.label,
-        anchor: pos === 0 ? 'start' : (pos === ticks.length - 1 ? 'end' : 'middle'),
+        // Monthly ticks pin the outermost labels to the edges; hourly ticks
+        // usually sit inside the plot, so only a tick on an end point is pinned.
+        anchor: props.intraday
+          ? (t.i === 0 ? 'start' : (t.i === props.data.length - 1 ? 'end' : 'middle'))
+          : (pos === 0 ? 'start' : (pos === ticks.length - 1 ? 'end' : 'middle')),
       }));
       return dropEdgeTickCollisions(mapped);
     });
@@ -90,14 +103,19 @@ export default {
     // button (1M/1Y/5Y/...) the parent has selected.
     const periodChange = computed(() => {
       if (!firstPoint.value || !lastPoint.value) return null;
-      const first = Number(firstPoint.value.value);
+      const first = hasBaseline.value ? props.baseline : Number(firstPoint.value.value);
       const last = Number(lastPoint.value.value);
       if (!first) return null;
       return { abs: last - first, pct: ((last - first) / Math.abs(first)) * 100 };
     });
 
+    function formatPeriod(period) {
+      if (!props.intraday) return formatDate(period);
+      return new Date(period).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    }
+
     return {
-      width, height, padding, plotW, plotH,
+      width, height, padding, plotW, plotH, hasBaseline, formatPeriod,
       linePath, yTicks, xTickLabels, xAt, yAt, fmt,
       onMove, onLeave, hoverPoint, hoverX, hoverY, tooltipLeftPct,
       lastIndex, lastPoint, periodChange,
@@ -121,6 +139,8 @@ export default {
         <text v-for="t in xTickLabels" :key="'xt'+t.i" :x="t.x" :y="height - 8" class="chart-axis-label" :text-anchor="t.anchor">
           {{ t.label }}
         </text>
+        <line v-if="hasBaseline" :x1="padding.left" :x2="width - padding.right"
+              :y1="yAt(baseline)" :y2="yAt(baseline)" class="chart-baseline" />
         <path :d="linePath" class="chart-line" fill="none" />
         <circle v-if="lastPoint" :cx="xAt(lastIndex)" :cy="yAt(Number(lastPoint.value))" r="4" class="chart-end-dot" />
         <template v-if="hoverPoint">
@@ -130,7 +150,7 @@ export default {
       </svg>
       <div v-if="hoverPoint" class="chart-tooltip" :style="{ left: tooltipLeftPct + '%' }">
         <div class="chart-tooltip-value">{{ fmt(Number(hoverPoint.value)) }}</div>
-        <div class="chart-tooltip-date">{{ formatDate(hoverPoint.period) }}</div>
+        <div class="chart-tooltip-date">{{ formatPeriod(hoverPoint.period) }}</div>
       </div>
     </div>
   `,
