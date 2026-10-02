@@ -1,4 +1,4 @@
-const { ref, reactive, computed, onMounted, onUnmounted } = Vue;
+const { ref, reactive, computed, onMounted, onUnmounted, watch } = Vue;
 import { fetchSeriesHistory, fetchCPIYoYHistory } from '../services/fred.js';
 import { fetchFeed, mergeFeeds } from '../services/rss.js';
 import { formatPercentLevel, formatPct, formatDate, changeClass } from '../utils/formatters.js';
@@ -26,12 +26,14 @@ export default {
   name: 'EconomicIndicators',
   components: { HistoryChart, DualLineChart },
   props: ['config'],
-  setup(props) {
+  emits: ['updated'],
+  setup(props, { emit }) {
     // id → { history: [{period, value}] (ascending), loading, error }
     const indicators = reactive(Object.fromEntries(
       SERIES.map(s => [s.id, { history: [], loading: true, error: null }])
     ));
     const lastUpdated = ref(null);
+    watch(lastUpdated, v => emit('updated', v));
     let refreshTimer = null;
 
     const hasKey = computed(() => !!props.config.fredApiKey?.trim());
@@ -180,11 +182,6 @@ export default {
   },
   template: `
     <div>
-      <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Economic Indicators</div>
-        <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
-      </div>
-
       <div class="notice warn" v-if="!hasKey">
         <strong>FRED API key not configured.</strong> This is a fixed setting for this deployment, not
         something you can enter here: whoever is running this app needs to set the

@@ -10,7 +10,7 @@ A single-page app (SPA) for tracking oil prices, gas prices, O&G stocks, news, a
 
 This runs `server.js`, a single dependency-free Node process that serves the
 static app and relays the third-party APIs that don't send CORS headers
-(needed for Oil & Gas Markets + Stocks tabs), and always serves from this
+(needed for the Markets tab), and always serves from this
 directory regardless of where you run it from. On macOS you can also just
 double-click `run.command`.
 
@@ -46,19 +46,18 @@ Then open `http://localhost:3000` in your browser.
 > `server.js` relays those requests server-side (same origin, at `/proxy`)
 > instead of depending on a public CORS-bypass proxy (those are unreliable
 > and are often blocked by corporate network filtering). Without the server
-> running, Oil & Gas Markets, Stocks, and Economic Indicators will show "Unavailable".
+> running, Markets will show "Unavailable".
 
 ## Features
 
 | Tab | Description |
 |---|---|
-| **Economic Indicators** | Inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. |
-| **Oil & Gas Markets** | Two sub-tabs. **Oil Price Indexes**: BZ=F, CL=F, NG=F, HO=F, RB=F with a spread calculator and historical spread chart. **Retail Gas Prices**: the 3-2-1 crack spread (live futures, no key needed) and EIA retail gasoline/diesel prices with their own historical chart. Retail prices require an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) below) — not something a visitor enters. |
-| **Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Reorder the watchlist by dragging a card by its ⠿ handle (mouse or touch), or focus the handle and press ↑/↓; the new order is saved to settings (your profile when signed in). Expand a ticker for two tabs: **Historical Chart** (price history with 1M–5Y range buttons) and **Documents** (SEC EDGAR filings — 10-K, 10-Q, 8-K, Proxy — plus earnings transcript links), for whichever tickers are in the watchlist — no separate company list to maintain. |
+| **Markets** | Four sub-tabs (the fourth, **Stocks**, is the row below). **Economic Indicators**: inflation (CPI YoY), unemployment, Fed funds rate, 2/10/30-Year Treasury yields, and the 10Y–2Y yield curve spread, via FRED. Historical chart (1M–5Y) per series; the yield curve option overlays the 10Y and 2Y lines directly with their crossing shaded, rather than just the spread value. Optional news cards (from feeds tagged in Settings) between the indicator cards and the chart, limited to a configurable recent-days window. Requires a FRED API key, set by whoever runs this deployment (see [FRED API Key](#fred-api-key-required-for-economic-indicators-tab) below) — not something a visitor enters. **Oil Price Indexes**: BZ=F, CL=F, NG=F, HO=F, RB=F with a spread calculator and historical spread chart. **Retail Gas Prices**: the 3-2-1 crack spread (live futures, no key needed) and EIA retail gasoline/diesel prices with their own historical chart. Retail prices require an EIA API key, set by whoever runs this deployment (see [EIA API Key](#eia-api-key-required-for-retail-gas-prices) below) — not something a visitor enters. |
+| **Markets → Stocks** | Major market indexes (S&P 500, Dow, Nasdaq, Russell 2000, VIX) plus a configurable O&G stock watchlist — price, % change, volume, 30-day sparkline. Reorder the watchlist by dragging a card by its ⠿ handle (mouse or touch), or focus the handle and press ↑/↓; the new order is saved to settings (your profile when signed in). Expand a ticker for two tabs: **Historical Chart** (price history with 1M–5Y range buttons) and **Documents** (SEC EDGAR filings — 10-K, 10-Q, 8-K, Proxy — plus earnings transcript links), for whichever tickers are in the watchlist — no separate company list to maintain. |
 | **News** | Aggregated RSS feeds — EIA Today in Energy, OilPrice.com, Rigzone, FRED Blog. Filterable by source/freshness/text search; configurable feed list. Articles open in a popup viewer inside the dashboard by default (or a new tab — **Settings → News RSS Feeds → Open articles in**). Sites that forbid being framed (e.g. Reuters, CNBC, Rigzone) are detected by the server (`/api/frame-check`), and the popup offers "Open in new tab" instead of a broken frame. Cmd/Ctrl-click always opens a new tab. |
-| **⚙ Settings** | Tickers, RSS feeds, thresholds, and more — saved to your account profile when signed in, otherwise to this browser's localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
-| **Theme switch** (header, ☀ ☾ ◐) | Light, Dark, or System (follows the OS light/dark setting, live). Saved with the rest of the settings — to the profile when signed in — and applied before first paint, so there's no flash of the wrong theme on reload. |
-| **Sign In / 👤 Account** | Optional user accounts: register and sign in with email + password. A signed-in user's dashboard settings are stored in their profile in the server database, so they follow them to any browser/device. The profile page edits the display name, changes the password (signing out other devices), and signs out. |
+| **Account menu → ⚙ Settings** | Tickers, RSS feeds, thresholds, and more — saved to your account profile when signed in, otherwise to this browser's localStorage. Import/Export/Reset. Sections are collapsible. EIA/FRED API keys are *not* here — they're fixed per-deployment configuration (below). |
+| **Theme switch** (header, ☀ ☾ ◐; inside the account menu on phones) | Light, Dark, or System (follows the OS light/dark setting, live). Saved with the rest of the settings — to the profile when signed in — and applied before first paint, so there's no flash of the wrong theme on reload. |
+| **Account menu** (header, right) | Opens Profile / Sign in, Settings and Sign out; shows your initials when signed in. Optional user accounts: register and sign in with email + password. A signed-in user's dashboard settings are stored in their profile in the server database, so they follow them to any browser/device. The profile page edits the display name, changes the password (signing out other devices), and signs out. |
 
 ## Configuration
 
@@ -203,6 +202,6 @@ If you'd rather deploy via CLI: `npm i -g @railway/cli`, then from the `oil-and-
 
 - **Yahoo Finance** is an unofficial API — it may break without notice.
 - **rss2json.com** free tier is limited to 10 requests/hour per IP. Results are cached for 30 minutes.
-- **Retail gas prices** (in Oil & Gas Markets) are hidden until an EIA API key is configured.
+- **Retail gas prices** (in Markets) are hidden until an EIA API key is configured.
 - Prices from Yahoo Finance may be delayed 15–20 minutes.
 - SEC EDGAR is rate-limited to 10 requests/second; the app staggers requests automatically.

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Oil drop on the dashboard's accent blue (dark theme accent color) -->
+  <rect width="64" height="64" rx="14" fill="#3b82d4"/>
+  <path d="M32 9C32 9 15 29 15 40a17 17 0 0 0 34 0C49 29 32 9 32 9z" fill="#fff"/>
+  <path d="M24 40a8 8 0 0 0 8 8" fill="none" stroke="#3b82d4" stroke-width="3.5" stroke-linecap="round"/>
+</svg>

@@ -39,11 +39,14 @@ const HISTORY_MAX_WEEKS = 270; // ~5 years + buffer
 export default {
   name: 'OilGasMarkets',
   components: { DualLineChart, HistoryChart },
-  props: ['config'],
-  setup(props) {
+  // `section` ('oil' | 'gas') is picked by the Markets tab's sub-tab bar.
+  props: ['config', 'section'],
+  emits: ['updated'],
+  setup(props, { emit }) {
     const lastUpdated = ref(null);
+    watch(lastUpdated, v => emit('updated', v));
     let refreshTimer = null;
-    const activeSection = ref('oil'); // 'oil' | 'gas'
+    const activeSection = computed(() => props.section ?? 'oil');
 
     // ── Oil price indexes ───────────────────────────────────────────────────
     const prices = reactive({});       // symbol → { price, change, pctChange, loading, error }
@@ -278,16 +281,6 @@ export default {
   },
   template: `
     <div>
-      <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Oil &amp; Gas Markets</div>
-        <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
-      </div>
-
-      <div class="subtab-bar">
-        <button class="subtab-btn" :class="{ active: activeSection === 'oil' }" @click="activeSection = 'oil'">Oil Price Indexes</button>
-        <button class="subtab-btn" :class="{ active: activeSection === 'gas' }" @click="activeSection = 'gas'">Retail Gas Prices</button>
-      </div>
-
       <template v-if="activeSection === 'oil'">
       <div class="price-grid mb-24">
         <div class="price-card" v-for="sym in symbols" :key="sym">

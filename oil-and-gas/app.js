@@ -1,16 +1,15 @@
 import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/config.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
-import { fetchCurrentUser } from './services/auth.js';
+import { fetchCurrentUser, logout } from './services/auth.js';
 import { THEME_OPTIONS, applyTheme, normalizeTheme } from './utils/theme.js';
 import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
-import EconomicIndicatorsComponent from './components/EconomicIndicators.js';
-import OilGasMarketsComponent from './components/OilGasMarkets.js';
-import StocksComponent from './components/Stocks.js';
+import MarketsComponent from './components/Markets.js';
 import NewsComponent from './components/News.js';
 import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
+import UserMenu from './components/UserMenu.js';
 
 const { createApp, ref, reactive, computed, provide, onMounted } = Vue;
 
@@ -313,19 +312,18 @@ const SettingsPanel = {
 // ── Root App ────────────────────────────────────────────────────────────────
 const App = {
   components: {
-    EconomicIndicators: EconomicIndicatorsComponent,
-    OilGasMarkets: OilGasMarketsComponent,
-    Stocks: StocksComponent,
+    Markets: MarketsComponent,
     News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
     SettingsPanel,
+    UserMenu,
   },
   setup() {
     const config = ref(null);
     // Signed-in user's profile (services/auth.js), or null when anonymous.
     const user = ref(null);
-    const activeTab = ref('econ');
+    const activeTab = ref('markets');
     const configLoaded = ref(false);
     const saveNotice = ref(null); // message string while shown
     const saveError = ref(null);
@@ -334,14 +332,12 @@ const App = {
     // pick up the reset values instead of showing stale form state.
     const settingsKey = ref(0);
 
-    const tabs = computed(() => [
-      { id: 'econ',      label: 'Economic Indicators' },
-      { id: 'markets',   label: 'Oil & Gas Markets' },
-      { id: 'stocks',    label: 'Stocks' },
+    // Content tabs only — Settings and Sign In / Profile are pages reached
+    // from the header's account menu (UserMenu).
+    const tabs = [
+      { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
-      { id: 'settings',  label: '⚙ Settings' },
-      { id: 'account',   label: user.value ? `👤 ${user.value.displayName || user.value.email}` : 'Sign In' },
-    ]);
+    ];
 
     function showNotice(message) {
       saveError.value = null;
@@ -430,6 +426,16 @@ const App = {
       showNotice('✓ Signed out — using this browser\'s settings.');
     }
 
+    // Sign out from the header menu (the Profile page has its own button).
+    async function onMenuSignOut() {
+      try {
+        await logout();
+      } finally {
+        if (activeTab.value === 'account') activeTab.value = 'markets';
+        await onSignedOut();
+      }
+    }
+
     function onUserUpdated(updatedUser) { user.value = updatedUser; }
 
     // Settings changed in place (outside the Settings panel) apply
@@ -452,7 +458,7 @@ const App = {
       persistConfig({ ...config.value, ui: { ...config.value.ui, theme } }, 'Theme');
     }
 
-    // Stock watchlist cards dragged into a new order on the Stocks tab
+    // Stock watchlist cards dragged into a new order on Markets → Stocks
     function onReorderTickers(tickers) {
       persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist order');
     }
@@ -463,7 +469,7 @@ const App = {
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
-      onSignedIn, onSignedOut, onUserUpdated,
+      onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
       themeOptions: THEME_OPTIONS, themePreference, setTheme, onReorderTickers,
     };
   },
@@ -476,12 +482,11 @@ const App = {
             v-for="tab in tabs"
             :key="tab.id"
             class="tab-btn"
-            :class="{ active: activeTab === tab.id, 'account-tab': tab.id === 'account' }"
-            :title="tab.id === 'account' && user ? user.email : null"
+            :class="{ active: activeTab === tab.id }"
             @click="activeTab = tab.id"
           >{{ tab.label }}</button>
         </nav>
-        <div class="theme-switch" role="group" aria-label="Color theme">
+        <div class="theme-switch header-theme-switch" role="group" aria-label="Color theme">
           <button
             v-for="opt in themeOptions"
             :key="opt.value"
@@ -492,6 +497,16 @@ const App = {
             @click="setTheme(opt.value)"
           >{{ opt.icon }}</button>
         </div>
+        <UserMenu
+          :user="user"
+          :active-tab="activeTab"
+          :theme-options="themeOptions"
+          :theme-preference="themePreference"
+          :theme-disabled="!configLoaded"
+          @navigate="activeTab = $event"
+          @set-theme="setTheme"
+          @sign-out="onMenuSignOut"
+        />
       </header>
 
       <main class="tab-content">
@@ -502,9 +517,7 @@ const App = {
           <div v-if="saveNotice" class="notice" style="margin-bottom:16px">{{ saveNotice }}</div>
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
-          <EconomicIndicators v-if="activeTab === 'econ'" :config="config" />
-          <OilGasMarkets v-if="activeTab === 'markets'"   :config="config" />
-          <Stocks        v-if="activeTab === 'stocks'"    :config="config" @reorder-tickers="onReorderTickers" />
+          <Markets       v-if="activeTab === 'markets'"   :config="config" @reorder-tickers="onReorderTickers" />
           <News          v-if="activeTab === 'news'"      :config="config" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
@@ -521,6 +534,11 @@ const App = {
           />
         </template>
       </main>
+
+      <footer class="app-footer">
+        <span>© {{ new Date().getFullYear() }} Oil &amp; Gas Dashboard</span>
+        <span>Data: EIA · FRED · Yahoo Finance · SEC EDGAR · RSS feeds. Market data may be delayed; not investment advice.</span>
+      </footer>
 
       <ArticleViewer />
     </div>

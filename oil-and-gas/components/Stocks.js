@@ -1,4 +1,4 @@
-const { ref, reactive, onMounted, onUnmounted, computed, nextTick } = Vue;
+const { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
 import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews } from '../services/yahooFinance.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
 import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
@@ -70,7 +70,7 @@ export default {
   name: 'Stocks',
   components: { HistoryChart },
   props: ['config'],
-  emits: ['reorder-tickers'],
+  emits: ['reorder-tickers', 'updated'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -210,6 +210,7 @@ export default {
     const stockQuotes = reactive({});
     const sparklines = reactive({});   // ticker → SVG string
     const lastUpdated = ref(null);
+    watch(lastUpdated, v => emit('updated', v));
     let refreshTimer = null;
 
     async function fetchStockQuotes() {
@@ -440,13 +441,6 @@ export default {
   },
   template: `
     <div>
-      <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Stocks</div>
-        <div class="flex gap-8" style="align-items:center">
-          <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
-        </div>
-      </div>
-
       <!-- Major Market Indexes -->
       <div class="card-title" style="margin-bottom:10px">Major Market Indexes</div>
       <div class="price-grid mb-24">
@@ -497,10 +491,10 @@ export default {
             </div>
             <div class="stock-row-metrics">
               <template v-if="stockQuotes[sym]?.loading && stockQuotes[sym]?.price == null">
-                <span class="skeleton" style="width:100%;height:14px;grid-column:span 4"></span>
+                <span class="skeleton" style="width:100%;height:14px;grid-column:1 / -2"></span>
               </template>
               <template v-else-if="stockQuotes[sym]?.error">
-                <span class="text-muted text-sm" style="grid-column:span 4">Unavailable</span>
+                <span class="text-muted text-sm" style="grid-column:1 / -2">Unavailable</span>
               </template>
               <template v-else>
                 <span class="stock-row-num">{{ formatUSD(stockQuotes[sym]?.price) }}</span>
@@ -512,7 +506,7 @@ export default {
                   <span class="stock-row-label">Chg %</span>
                   <span :class="changeClass(stockQuotes[sym]?.pctChange)">{{ formatPct(stockQuotes[sym]?.pctChange) }}</span>
                 </span>
-                <span class="stock-row-num">
+                <span class="stock-row-num stock-row-vol">
                   <span class="stock-row-label">Vol</span>
                   <span class="text-muted">{{ formatVolume(stockQuotes[sym]?.volume) }}</span>
                 </span>
