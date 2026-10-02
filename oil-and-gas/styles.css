@@ -160,6 +160,7 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   border-bottom: 1px solid var(--border);
   margin-bottom: 20px;
 }
+.label-short { display: none; }
 .subtab-btn {
   background: transparent;
   border: none;
@@ -693,6 +694,11 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 
 @media (max-width: 480px) {
   .price-grid { grid-template-columns: 1fr 1fr; }
+  /* Markets sub-tabs: short labels sharing the full width, no scrolling. */
+  .subtab-bar-fit { gap: 0; }
+  .subtab-bar-fit .subtab-btn { flex: 1 1 0; padding: 10px 4px; text-align: center; }
+  .subtab-bar-fit .label-full { display: none; }
+  .subtab-bar-fit .label-short { display: inline; }
   .app-header .logo { font-size: 13px; }
 }
 

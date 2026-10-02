@@ -3,11 +3,12 @@ import EconomicIndicators from './EconomicIndicators.js';
 import OilGasMarkets from './OilGasMarkets.js';
 import Stocks from './Stocks.js';
 
+// `short` is shown on phones so all four sub-tabs fit without scrolling.
 const SECTIONS = [
-  { id: 'econ', label: 'Economic Indicators' },
-  { id: 'oil',  label: 'Oil Price Indexes' },
-  { id: 'gas',  label: 'Retail Gas Prices' },
-  { id: 'stocks', label: 'Stocks' },
+  { id: 'econ',   label: 'Economic Indicators', short: 'Economy' },
+  { id: 'oil',    label: 'Oil Price Indexes',   short: 'Oil' },
+  { id: 'gas',    label: 'Retail Gas Prices',   short: 'Gas' },
+  { id: 'stocks', label: 'Stocks',              short: 'Stocks' },
 ];
 
 /**
@@ -43,12 +44,13 @@ export default {
         <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
       </div>
 
-      <div class="subtab-bar" ref="subtabBar">
+      <div class="subtab-bar subtab-bar-fit" ref="subtabBar">
         <button
           v-for="s in SECTIONS" :key="s.id"
           class="subtab-btn" :class="{ active: activeSection === s.id }"
+          :aria-label="s.label" :title="s.label"
           @click="activeSection = s.id"
-        >{{ s.label }}</button>
+        ><span class="label-full">{{ s.label }}</span><span class="label-short" aria-hidden="true">{{ s.short }}</span></button>
       </div>
 
       <EconomicIndicators v-if="activeSection === 'econ'" :config="config"
