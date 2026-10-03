@@ -7,11 +7,12 @@ import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import MarketsComponent from './components/Markets.js';
 import NewsComponent from './components/News.js';
+import StocksComponent from './components/Stocks.js';
 import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
 import UserMenu from './components/UserMenu.js';
 
-const { createApp, ref, reactive, computed, provide, onMounted } = Vue;
+const { createApp, ref, reactive, computed, provide, onMounted, watch } = Vue;
 
 // ── Settings Panel component ────────────────────────────────────────────────
 const SettingsPanel = {
@@ -313,6 +314,7 @@ const SettingsPanel = {
 const App = {
   components: {
     Markets: MarketsComponent,
+    Stocks: StocksComponent,
     News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
@@ -334,10 +336,19 @@ const App = {
 
     // Content tabs only — Settings and Sign In / Profile are pages reached
     // from the header's account menu (UserMenu).
-    const tabs = [
+    // Portfolio only appears while you hold at least one position.
+    const hasPositions = computed(() =>
+      Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
+    );
+    const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
-    ];
+      ...(hasPositions.value ? [{ id: 'portfolio', label: 'Portfolio' }] : []),
+    ]);
+    // Last position removed (or signed out / reset) while on Portfolio.
+    watch(hasPositions, has => {
+      if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
+    });
 
     function showNotice(message) {
       saveError.value = null;
@@ -382,6 +393,8 @@ const App = {
       const next = {
         ...updated,
         ui: { ...updated.ui, theme: config.value.ui?.theme },
+        // Portfolio positions are edited on the Stocks tab, not in this panel.
+        portfolio: config.value.portfolio,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
       };
@@ -465,6 +478,15 @@ const App = {
       persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist');
     }
 
+    // A stock's position (quantity + average cost) saved or removed on its
+    // Portfolio tab. config.portfolio is { SYMBOL: { quantity, avgCost } }.
+    function onSetPosition({ symbol, position }) {
+      const portfolio = { ...(config.value.portfolio ?? {}) };
+      if (position) portfolio[symbol] = position;
+      else delete portfolio[symbol];
+      persistConfig({ ...config.value, portfolio }, 'Portfolio position');
+    }
+
     // Provide config to all child components
     provide('config', config);
 
@@ -472,7 +494,7 @@ const App = {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition,
     };
   },
   template: `
@@ -520,8 +542,10 @@ const App = {
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
-            @set-tickers="onSetTickers" @go-account="activeTab = 'account'" />
+            @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'" />
           <News          v-if="activeTab === 'news'"      :config="config" />
+          <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
+            @set-position="onSetPosition" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"

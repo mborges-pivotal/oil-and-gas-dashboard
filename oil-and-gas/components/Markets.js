@@ -20,7 +20,7 @@ export default {
   name: 'Markets',
   components: { EconomicIndicators, OilGasMarkets, Stocks },
   props: ['config', 'user'],
-  emits: ['set-tickers', 'go-account'],
+  emits: ['set-tickers', 'set-position', 'go-account'],
   setup() {
     const activeSection = ref('econ');
     // Last refresh time reported by each child, shown in the header row.
@@ -126,6 +126,7 @@ export default {
         <Stocks v-else-if="activeSection === 'stocks'" :config="config" :user="user"
           @updated="updated.stocks = $event"
           @set-tickers="$emit('set-tickers', $event)"
+          @set-position="$emit('set-position', $event)"
           @go-account="$emit('go-account')" />
         <OilGasMarkets v-else :config="config" :section="activeSection"
           @updated="updated.oilgas = $event" />

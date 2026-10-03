@@ -27,6 +27,10 @@ function validateName(name) {
   if (trimmed.length > MAX_NAME_LENGTH) {
     throw new HttpError(400, `Watchlist name must be at most ${MAX_NAME_LENGTH} characters`);
   }
+  // "Default" (the settings-based list) and "Portfolio" (the virtual list of
+  // stocks with positions) are built in; a second one would be ambiguous.
+  const reserved = ['Default', 'Portfolio'].find(n => n.toLowerCase() === trimmed.toLowerCase());
+  if (reserved) throw new HttpError(400, `"${reserved}" is reserved — choose another name`);
   return trimmed;
 }
 

@@ -75,9 +75,12 @@ const CHART_FETCH_RANGE = '5y';
 export default {
   name: 'Stocks',
   components: { HistoryChart },
-  props: ['config', 'user'],
+  // portfolioOnly: render as the top-level Portfolio page (app.js) — just
+  // the stocks you hold a position in, with totals; no indexes or list picker.
+  props: { config: Object, user: Object, portfolioOnly: Boolean },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
-  emits: ['set-tickers', 'updated', 'go-account'],
+  // set-position: { symbol, position: { quantity, avgCost } | null } for config.portfolio
+  emits: ['set-tickers', 'set-position', 'updated', 'go-account'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -94,18 +97,34 @@ export default {
     const activeList = computed(() =>
       customLists.value.find(l => String(l.id) === activeListId.value) ?? null
     );
+    // The Portfolio page (portfolioOnly) is a virtual, read-only list: every
+    // ticker with a saved position (config.portfolio), in the order added.
+    const portfolioTickers = computed(() =>
+      Object.entries(props.config.portfolio ?? {})
+        .filter(([, p]) => p?.quantity > 0)
+        .map(([sym]) => sym)
+    );
+    const isPortfolioList = computed(() => props.portfolioOnly);
+    // Default has no Portfolio tab; your own lists and the Portfolio list do.
+    const hasPortfolioTab = computed(() => !!activeList.value || isPortfolioList.value);
+
     // While a remembered custom list is still loading, show nothing rather
     // than flashing the default list's cards.
     const activeTickers = computed(() => {
+      if (isPortfolioList.value) return portfolioTickers.value;
       if (activeList.value) return activeList.value.tickers;
       if (activeListId.value !== 'default' && listsLoading.value) return [];
       return configTickers.value;
     });
 
     function readSavedListId() {
-      try { return localStorage.getItem(LIST_STORAGE_KEY) || 'default'; } catch { return 'default'; }
+      let id = 'default';
+      try { id = localStorage.getItem(LIST_STORAGE_KEY) || 'default'; } catch { /* ignore */ }
+      // 'portfolio' was once a choice in the picker; it's its own page now.
+      return id === 'portfolio' ? 'default' : id;
     }
     watch(activeListId, id => {
+      if (props.portfolioOnly) return;
       try { localStorage.setItem(LIST_STORAGE_KEY, id); } catch { /* per-browser convenience only */ }
     });
 
@@ -127,7 +146,8 @@ export default {
       }
       if (!activeList.value) activeListId.value = 'default';
     }
-    watch(() => props.user?.id ?? null, loadLists, { immediate: true });
+    // The Portfolio page doesn't use the watchlists.
+    if (!props.portfolioOnly) watch(() => props.user?.id ?? null, loadLists, { immediate: true });
 
     function selectList(id) {
       activeListId.value = String(id);
@@ -137,6 +157,7 @@ export default {
 
     // Saves a new ticker array for whichever list is showing.
     async function saveTickers(order) {
+      if (isPortfolioList.value) return; // derived from positions — nothing to save
       const list = activeList.value;
       if (!list) {
         // Parent updates config synchronously, so the list never snaps back.
@@ -246,7 +267,9 @@ export default {
       else if (action === 'signin') emit('go-account');
     }
 
-    const searchShown = computed(() => searchVisible.value || (!tickers.value.length && !listsLoading.value));
+    const searchShown = computed(() =>
+      !isPortfolioList.value && (searchVisible.value || (!tickers.value.length && !listsLoading.value))
+    );
     function openSearch() {
       searchVisible.value = true;
       nextTick(() => searchInput.value?.focus());
@@ -424,7 +447,7 @@ export default {
     let suppressHeaderClick = false;
 
     function onHandlePointerDown(e, sym) {
-      if (e.button !== 0 || draggingTicker.value || activeTickers.value.length < 2) return;
+      if (e.button !== 0 || draggingTicker.value || activeTickers.value.length < 2 || isPortfolioList.value) return;
       e.preventDefault(); // no text selection / focus-scroll while dragging
       startDrag(e.pointerId, e.clientY, sym);
     }
@@ -459,7 +482,7 @@ export default {
     let press = null; // { pointerId, sym, x, y }
 
     function onCardPointerDown(e, sym) {
-      if (e.pointerType !== 'touch' || draggingTicker.value || press || activeTickers.value.length < 2) return;
+      if (e.pointerType !== 'touch' || draggingTicker.value || press || activeTickers.value.length < 2 || isPortfolioList.value) return;
       if (e.target.closest('.drag-handle')) return; // the handle drags immediately
       press = { pointerId: e.pointerId, sym, x: e.clientX, y: e.clientY };
       window.addEventListener('pointermove', onPressMove);
@@ -534,6 +557,7 @@ export default {
     }
 
     async function onHandleKeydown(e, sym) {
+      if (isPortfolioList.value) return;
       const delta = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
       if (!delta) return;
       e.preventDefault();
@@ -608,7 +632,7 @@ export default {
     }
 
     async function refreshAll() {
-      await Promise.all([fetchStockQuotes(), fetchIndexes()]);
+      await Promise.all([fetchStockQuotes(), props.portfolioOnly ? null : fetchIndexes()]);
     }
 
     // Switching lists or adding a ticker: fetch whatever has no quote yet.
@@ -750,16 +774,110 @@ export default {
     }
 
     function loadActiveTab(ticker) {
-      if (details[ticker].tab === 'chart') {
+      const tab = details[ticker].tab;
+      if (tab === 'chart') {
         loadChart(ticker);
         loadStats(ticker);
-      } else if (details[ticker].tab === 'news') loadNews(ticker);
-      else loadDocs(ticker);
+      } else if (tab === 'news') loadNews(ticker);
+      else if (tab === 'documents') loadDocs(ticker);
+      else if (tab === 'portfolio' && !positionFor(ticker)) startPositionEdit(ticker);
+    }
+
+    // ── Portfolio: your position in a ticker (quantity × average cost) ──
+    // Saved in config.portfolio — with the rest of the settings, so in the
+    // profile when signed in, else this browser — keyed by symbol, so the
+    // same holding shows in every watchlist that contains the ticker.
+    const positionForms = reactive({}); // ticker → { quantity, avgCost, error } while editing
+
+    // Only the additional (DB) watchlists get a Portfolio tab, not Default.
+    // Switching to Default moves any open Portfolio tab back to the chart
+    // (a pre-render watcher, so the hidden tab never flashes).
+    watch(hasPortfolioTab, has => {
+      if (has) return;
+      for (const [ticker, d] of Object.entries(details)) {
+        if (d.tab === 'portfolio') {
+          d.tab = 'chart';
+          if (d.open) loadActiveTab(ticker);
+        }
+      }
+    });
+
+    function positionFor(ticker) {
+      const p = props.config.portfolio?.[ticker];
+      return p && p.quantity > 0 ? p : null;
+    }
+
+    function startPositionEdit(ticker) {
+      const p = positionFor(ticker);
+      positionForms[ticker] = { quantity: p ? String(p.quantity) : '', avgCost: p ? String(p.avgCost) : '', error: null };
+    }
+
+    function cancelPositionEdit(ticker) {
+      delete positionForms[ticker];
+    }
+
+    function savePosition(ticker) {
+      const f = positionForms[ticker];
+      const quantity = Number(f.quantity);
+      const avgCost = Number(f.avgCost);
+      if (!(quantity > 0) || !Number.isFinite(quantity)) { f.error = 'Enter a quantity greater than 0.'; return; }
+      if (!(avgCost >= 0) || !Number.isFinite(avgCost) || String(f.avgCost).trim() === '') {
+        f.error = 'Enter an average cost of 0 or more.';
+        return;
+      }
+      emit('set-position', { symbol: ticker, position: { quantity, avgCost } });
+      delete positionForms[ticker];
+    }
+
+    function removePosition(ticker) {
+      if (!confirm(`Remove your ${ticker} position?`)) return;
+      emit('set-position', { symbol: ticker, position: null });
+      // Back to an empty form (the config prop hasn't re-rendered yet, so
+      // startPositionEdit would still see the old position).
+      positionForms[ticker] = { quantity: '', avgCost: '', error: null };
+    }
+
+    // Totals across the Portfolio list. Value and G/L wait until every
+    // position has a price, so they're never a misleading partial sum.
+    const portfolioTotals = computed(() => {
+      const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
+      if (!rows.length) return null;
+      const totalCost = rows.reduce((sum, r) => sum + r.totalCost, 0);
+      const priced = rows.every(r => r.value != null);
+      const value = priced ? rows.reduce((sum, r) => sum + r.value, 0) : null;
+      const gain = value != null ? value - totalCost : null;
+      const gainPct = gain != null && totalCost > 0 ? (gain / totalCost) * 100 : null;
+      const dayGain = rows.every(r => r.dayGain != null) ? rows.reduce((sum, r) => sum + r.dayGain, 0) : null;
+      // Today's % is relative to yesterday's value (today's value − today's G/L).
+      const dayPct = dayGain != null && value != null && value - dayGain > 0 ? (dayGain / (value - dayGain)) * 100 : null;
+      return { count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct };
+    });
+
+    // Whole or fractional shares, without trailing zeros (100, 12.5, 0.0035).
+    const sharesFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
+    function formatShares(n) { return sharesFormat.format(n); }
+    function signedUSD(v) { return (v > 0 ? '+' : '') + formatUSD(v); }
+
+    // Total cost, market value and gain/loss at the current quote. Value
+    // and G/L are null until a price has loaded.
+    function positionSummary(ticker) {
+      const p = positionFor(ticker);
+      if (!p) return null;
+      const q = stockQuotes[ticker];
+      const price = q?.price ?? null;
+      const totalCost = p.quantity * p.avgCost;
+      const value = price != null ? p.quantity * price : null;
+      const gain = value != null ? value - totalCost : null;
+      const gainPct = gain != null && totalCost > 0 ? (gain / totalCost) * 100 : null;
+      const dayGain = q?.change != null ? p.quantity * q.change : null;
+      return { ...p, price, totalCost, value, gain, gainPct, dayGain, dayPct: q?.pctChange ?? null };
     }
 
     function toggleDetail(ticker) {
       if (suppressHeaderClick || editMode.value) return;
       ensureDetail(ticker);
+      // In the Portfolio list, cards open straight to the position.
+      if (!details[ticker].open && isPortfolioList.value) details[ticker].tab = 'portfolio';
       details[ticker].open = !details[ticker].open;
       if (details[ticker].open) loadActiveTab(ticker);
     }
@@ -807,6 +925,8 @@ export default {
       indexSymbols, indexes, INDEX_LABELS,
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
+      positionForms, positionFor, positionSummary, formatShares, signedUSD,
+      isPortfolioList, hasPortfolioTab, portfolioTotals, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
       safeArticleUrl, onArticleClick,
@@ -814,6 +934,12 @@ export default {
   },
   template: `
     <div>
+      <div class="flex-between mb-16" v-if="portfolioOnly">
+        <div class="section-header" style="margin-bottom:0">Portfolio</div>
+        <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
+      </div>
+
+      <template v-if="!portfolioOnly">
       <!-- Major Market Indexes -->
       <div class="card-title" style="margin-bottom:10px">Major Market Indexes</div>
       <div class="price-grid mb-24">
@@ -834,21 +960,22 @@ export default {
           </template>
         </div>
       </div>
+      </template>
 
       <!-- Watchlist picker + list actions -->
-      <div class="watchlist-toolbar">
+      <div class="watchlist-toolbar" v-if="!portfolioOnly">
         <div class="watchlist-picker">
           <span class="card-title" style="margin-bottom:0">Watchlist</span>
           <select v-if="user && customLists.length" :value="activeListId"
                   aria-label="Choose watchlist" @change="selectList($event.target.value)">
-            <option value="default">My Watchlist</option>
+            <option value="default">Default</option>
             <option v-for="l in customLists" :key="l.id" :value="String(l.id)">{{ l.name }}</option>
           </select>
-          <span v-else class="watchlist-name">My Watchlist</span>
+          <span v-else class="watchlist-name">Default</span>
         </div>
         <div class="watchlist-actions">
           <button type="button" v-if="editMode" class="primary" @click="editMode = false">Done</button>
-          <button type="button" class="wl-icon-button" :class="{ active: searchShown }"
+          <button type="button" class="wl-icon-button" v-if="!isPortfolioList" :class="{ active: searchShown }"
                   :disabled="listFull && !searchShown"
                   :aria-label="listFull ? 'This watchlist is full (' + MAX_LIST_TICKERS + ' stocks)' : 'Search stocks to add'"
                   :title="listFull ? 'This watchlist is full (' + MAX_LIST_TICKERS + ' stocks)' : 'Search stocks to add'"
@@ -869,10 +996,10 @@ export default {
             </button>
             <div class="user-menu-panel wl-menu-panel" v-if="wlMenuOpen" ref="wlMenu" role="menu"
                  aria-label="Watchlist options" @keydown="onWlMenuKeydown">
-              <button type="button" role="menuitem" class="user-menu-item" v-if="tickers.length" @click="menuAction('edit')">
+              <button type="button" role="menuitem" class="user-menu-item" v-if="tickers.length && !isPortfolioList" @click="menuAction('edit')">
                 ✎ {{ editMode ? 'Stop editing' : 'Edit / remove stocks' }}
               </button>
-              <div class="user-menu-sep" v-if="tickers.length"></div>
+              <div class="user-menu-sep" v-if="tickers.length && !isPortfolioList"></div>
               <template v-if="user">
                 <button type="button" role="menuitem" class="user-menu-item" @click="menuAction('new')">＋ New list</button>
                 <button type="button" role="menuitem" class="user-menu-item" v-if="activeList" @click="menuAction('rename')">Rename list</button>
@@ -929,7 +1056,34 @@ export default {
 
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
+      <!-- Portfolio list: totals across every position -->
+      <div class="portfolio-totals" v-if="isPortfolioList && portfolioTotals">
+        <div class="portfolio-stat">
+          <span class="portfolio-label">Total cost</span>
+          <span class="portfolio-value">{{ formatUSD(portfolioTotals.totalCost) }}</span>
+        </div>
+        <div class="portfolio-stat">
+          <span class="portfolio-label">Market value</span>
+          <span class="portfolio-value">{{ portfolioTotals.value != null ? formatUSD(portfolioTotals.value) : '—' }}</span>
+        </div>
+        <div class="portfolio-stat">
+          <span class="portfolio-label">Total G/L</span>
+          <span class="portfolio-value" :class="changeClass(portfolioTotals.gain)">
+            {{ portfolioTotals.gain != null ? signedUSD(portfolioTotals.gain) + ' (' + formatPct(portfolioTotals.gainPct) + ')' : '—' }}
+          </span>
+        </div>
+        <div class="portfolio-stat">
+          <span class="portfolio-label">Today's G/L</span>
+          <span class="portfolio-value" :class="changeClass(portfolioTotals.dayGain)">
+            {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
+          </span>
+        </div>
+      </div>
+
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
+      <div class="notice" v-else-if="isPortfolioList && !tickers.length">
+        No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to enter quantity and average cost.
+      </div>
       <div class="notice" v-else-if="tickers.length === 0">
         This watchlist is empty — search above to add stocks.
       </div>
@@ -942,7 +1096,7 @@ export default {
         <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)"
              @pointerdown="onCardPointerDown($event, sym)" @contextmenu="onCardContextMenu">
           <button
-            v-if="tickers.length > 1"
+            v-if="tickers.length > 1 && !isPortfolioList"
             type="button"
             class="drag-handle"
             :aria-label="'Reorder ' + sym + ' — drag, or use the up/down arrow keys'"
@@ -996,6 +1150,7 @@ export default {
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Historical Chart</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'news' }" @click.stop="setDetailTab(sym, 'news')">News</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')">Documents</button>
+            <button class="filing-tab" v-if="hasPortfolioTab" :class="{ active: details[sym]?.tab === 'portfolio' }" @click.stop="setDetailTab(sym, 'portfolio')">Portfolio</button>
           </div>
 
           <!-- Historical Chart -->
@@ -1076,6 +1231,78 @@ export default {
               </div>
             </div>
           </template>
+
+          <!-- Portfolio: your position (quantity × average cost) and G/L -->
+          <div class="portfolio" v-else-if="details[sym]?.tab === 'portfolio'">
+            <form class="portfolio-form" v-if="positionForms[sym]" @submit.prevent="savePosition(sym)" novalidate>
+              <p class="text-muted text-sm" v-if="!positionFor(sym)" style="margin:0 0 10px">
+                Enter your {{ sym }} holding to track its value and gain/loss.
+              </p>
+              <div class="portfolio-fields">
+                <label>
+                  <span>Quantity (shares)</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 100"
+                         v-model="positionForms[sym].quantity" />
+                </label>
+                <label>
+                  <span>Average cost / share ($)</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 152.40"
+                         v-model="positionForms[sym].avgCost" />
+                </label>
+              </div>
+              <div class="notice error portfolio-error" v-if="positionForms[sym].error">{{ positionForms[sym].error }}</div>
+              <div class="portfolio-actions">
+                <button type="submit" class="primary">Save position</button>
+                <button type="button" v-if="positionFor(sym)" @click="cancelPositionEdit(sym)">Cancel</button>
+              </div>
+            </form>
+
+            <template v-else-if="positionSummary(sym)">
+              <div class="portfolio-grid">
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Quantity</span>
+                  <span class="portfolio-value">{{ formatShares(positionSummary(sym).quantity) }}</span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Avg cost</span>
+                  <span class="portfolio-value">{{ formatUSD(positionSummary(sym).avgCost) }}</span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Total cost</span>
+                  <span class="portfolio-value">{{ formatUSD(positionSummary(sym).totalCost) }}</span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Market value</span>
+                  <span class="portfolio-value">{{ positionSummary(sym).value != null ? formatUSD(positionSummary(sym).value) : '—' }}</span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Total G/L</span>
+                  <span class="portfolio-value" :class="changeClass(positionSummary(sym).gain)">
+                    {{ positionSummary(sym).gain != null ? signedUSD(positionSummary(sym).gain) : '—' }}
+                  </span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Total G/L %</span>
+                  <span class="portfolio-value" :class="changeClass(positionSummary(sym).gainPct)">
+                    {{ positionSummary(sym).gainPct != null ? formatPct(positionSummary(sym).gainPct) : '—' }}
+                  </span>
+                </div>
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Today's G/L</span>
+                  <span class="portfolio-value" :class="changeClass(positionSummary(sym).dayGain)">
+                    {{ positionSummary(sym).dayGain != null ? signedUSD(positionSummary(sym).dayGain) + ' (' + formatPct(positionSummary(sym).dayPct) + ')' : '—' }}
+                  </span>
+                </div>
+              </div>
+              <p class="text-muted text-sm portfolio-note">
+                Value at {{ positionSummary(sym).price != null ? formatUSD(positionSummary(sym).price) : 'the latest price' }} (delayed quote).
+              </p>
+              <div class="portfolio-actions">
+                <button type="button" @click="startPositionEdit(sym)">Edit position</button>
+                <button type="button" class="danger" @click="removePosition(sym)">Remove</button>
+              </div>
+            </template>
+          </div>
 
           <!-- Documents -->
           <template v-else>
