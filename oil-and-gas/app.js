@@ -458,9 +458,11 @@ const App = {
       persistConfig({ ...config.value, ui: { ...config.value.ui, theme } }, 'Theme');
     }
 
-    // Stock watchlist cards dragged into a new order on Markets → Stocks
-    function onReorderTickers(tickers) {
-      persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist order');
+    // Default stock watchlist changed on Markets → Stocks (reordered, or a
+    // stock added via search / removed in Edit mode). Additional watchlists
+    // are saved to the DB by the Stocks component itself.
+    function onSetTickers(tickers) {
+      persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist');
     }
 
     // Provide config to all child components
@@ -470,7 +472,7 @@ const App = {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onReorderTickers,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers,
     };
   },
   template: `
@@ -517,7 +519,8 @@ const App = {
           <div v-if="saveNotice" class="notice" style="margin-bottom:16px">{{ saveNotice }}</div>
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
-          <Markets       v-if="activeTab === 'markets'"   :config="config" @reorder-tickers="onReorderTickers" />
+          <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
+            @set-tickers="onSetTickers" @go-account="activeTab = 'account'" />
           <News          v-if="activeTab === 'news'"      :config="config" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"

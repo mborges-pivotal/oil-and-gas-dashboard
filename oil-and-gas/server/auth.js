@@ -311,6 +311,12 @@ async function handleApi(req, res, reqUrl) {
     sendJson(res, 404, { error: 'Not found' });
     return;
   }
+  await dispatch(req, res, reqUrl, handler);
+}
+
+// Runs a route handler, turning HttpErrors into JSON error responses.
+// Shared with other /api modules (server/watchlists.js).
+async function dispatch(req, res, reqUrl, handler) {
   try {
     await handler(req, res);
   } catch (err) {
@@ -323,4 +329,4 @@ async function handleApi(req, res, reqUrl) {
   }
 }
 
-module.exports = { handleApi };
+module.exports = { handleApi, dispatch, requireUser, readJsonBody, sendJson, HttpError };

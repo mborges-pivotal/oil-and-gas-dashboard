@@ -5,7 +5,8 @@
  * auth-related is ever stored in localStorage.
  */
 
-async function request(method, path, body) {
+// Shared with the other same-origin /api clients (services/watchlists.js).
+export async function request(method, path, body) {
   const res = await fetch(path, {
     method,
     headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},

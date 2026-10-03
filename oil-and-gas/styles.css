@@ -94,6 +94,12 @@ input, select, textarea {
   outline: none;
   transition: border-color var(--transition);
 }
+/* iPhone Safari zooms the page in when a field under 16px gets focus (and
+   stays zoomed). 16px on touch screens prevents it without disabling
+   pinch-zoom for everyone. */
+@media (pointer: coarse) {
+  input, select, textarea { font-size: 16px; }
+}
 input:focus, select:focus, textarea:focus { border-color: var(--accent); }
 textarea { resize: vertical; }
 
@@ -526,6 +532,92 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .stock-row-num > span { display: block; }
 .stock-row-label { font-size: 10px; font-weight: 400; color: var(--text-muted); line-height: 1.2; }
 .stock-row-sparkline { display: flex; justify-content: flex-end; width: 80px; flex: none; }
+
+/* Watchlist picker, list actions, search (Markets → Stocks) */
+.watchlist-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  margin-bottom: 10px;
+}
+.watchlist-picker { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.watchlist-picker select { max-width: 240px; }
+.watchlist-name { font-weight: 600; }
+.watchlist-actions { display: flex; align-items: center; gap: 6px; }
+.watchlist-actions > button:not(.wl-icon-button) { padding: 5px 10px; font-size: 12px; }
+.watchlist-form { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.watchlist-form input { flex: 1 1 200px; min-width: 0; }
+.watchlist-form-error { flex-basis: 100%; margin: 0; }
+.watchlist-search { position: relative; display: flex; gap: 6px; margin-bottom: 10px; }
+.watchlist-search input { flex: 1; min-width: 0; }
+.watchlist-search-close { flex: none; padding: 0 12px; }
+/* The ✕ next to the box closes search; the browser's own clear-text ✕
+   inside it would read as a second, different close button. */
+.watchlist-search input::-webkit-search-cancel-button { display: none; }
+.wl-menu { position: relative; }
+.wl-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 32px;
+  padding: 0;
+  color: var(--text-muted);
+}
+.wl-icon-button:hover:not(:disabled), .wl-icon-button[aria-expanded="true"] { color: var(--text); background: var(--surface-2); }
+.wl-icon-button.active { color: var(--accent); border-color: var(--accent); }
+.wl-menu-panel { min-width: 230px; }
+.user-menu-item:disabled { color: var(--text-muted); cursor: default; background: transparent; opacity: 1; }
+.user-menu-item.danger-item { color: var(--negative); }
+.watchlist-search-results {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 15;
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+.watchlist-search-status { padding: 8px 10px; color: var(--text-muted); font-size: 13px; }
+.watchlist-search-result {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "sym name add" "sym meta add";
+  column-gap: 10px;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.watchlist-search-result.active { background: var(--surface-2); }
+.watchlist-search-result.added { cursor: default; }
+.watchlist-search-symbol { grid-area: sym; font-weight: 700; min-width: 56px; }
+.watchlist-search-name { grid-area: name; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watchlist-search-meta { grid-area: meta; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.watchlist-search-add { grid-area: add; font-size: 12px; font-weight: 600; color: var(--accent); white-space: nowrap; }
+.watchlist-search-result.added .watchlist-search-add { color: var(--text-muted); font-weight: 400; }
+.watchlist-remove {
+  flex: none;
+  margin-left: 12px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--negative);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.watchlist-remove:hover { background: var(--negative); border-color: var(--negative); color: #fff; }
+.watchlist-item.just-added { border-color: var(--accent); transition: border-color 0.6s; }
 
 /* Watchlist reordering — drag handle + the card being dragged */
 .drag-handle {

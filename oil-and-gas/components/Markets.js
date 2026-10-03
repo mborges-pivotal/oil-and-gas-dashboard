@@ -19,8 +19,8 @@ const SECTIONS = [
 export default {
   name: 'Markets',
   components: { EconomicIndicators, OilGasMarkets, Stocks },
-  props: ['config'],
-  emits: ['reorder-tickers'],
+  props: ['config', 'user'],
+  emits: ['set-tickers', 'go-account'],
   setup() {
     const activeSection = ref('econ');
     // Last refresh time reported by each child, shown in the header row.
@@ -123,9 +123,10 @@ export default {
            @animationend.self="slideFrom = ''">
         <EconomicIndicators v-if="activeSection === 'econ'" :config="config"
           @updated="updated.econ = $event" />
-        <Stocks v-else-if="activeSection === 'stocks'" :config="config"
+        <Stocks v-else-if="activeSection === 'stocks'" :config="config" :user="user"
           @updated="updated.stocks = $event"
-          @reorder-tickers="$emit('reorder-tickers', $event)" />
+          @set-tickers="$emit('set-tickers', $event)"
+          @go-account="$emit('go-account')" />
         <OilGasMarkets v-else :config="config" :section="activeSection"
           @updated="updated.oilgas = $event" />
       </div>

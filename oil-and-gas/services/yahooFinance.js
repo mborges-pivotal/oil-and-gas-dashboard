@@ -239,3 +239,22 @@ export async function fetchTickerNews(symbol, count = 20) {
     }))
     .sort((a, b) => (b.pubDate || '').localeCompare(a.pubDate || ''));
 }
+
+/**
+ * Search symbols by ticker or company name (Yahoo's search endpoint), for
+ * adding stocks to a watchlist. Returns [{ symbol, name, exchange, type }].
+ */
+export async function searchSymbols(query, count = 8) {
+  const q = query.trim();
+  if (!q) return [];
+  const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=${count}&newsCount=0&enableFuzzyQuery=false`;
+  const data = await fetchWithFallback(url);
+  return (data?.quotes ?? [])
+    .filter(r => r.symbol && r.isYahooFinance !== false)
+    .map(r => ({
+      symbol: r.symbol.toUpperCase(),
+      name: r.shortname || r.longname || r.symbol,
+      exchange: r.exchDisp || r.exchange || '',
+      type: r.typeDisp || r.quoteType || '',
+    }));
+}

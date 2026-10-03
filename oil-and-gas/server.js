@@ -50,6 +50,7 @@ loadDotEnv(path.join(ROOT, '.env'));
 // Required after loadDotEnv so DATABASE_PATH can come from .env too.
 const { handleApi } = require('./server/auth');
 const { handleFrameCheck } = require('./server/frameCheck');
+const { handleWatchlistsApi } = require('./server/watchlists');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_HOSTS = new Set([
@@ -206,6 +207,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/frame-check' && req.method === 'GET') {
     handleFrameCheck(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname === '/api/watchlists' || reqUrl.pathname.startsWith('/api/watchlists/')) {
+    handleWatchlistsApi(req, res, reqUrl);
     return;
   }
 

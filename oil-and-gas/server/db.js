@@ -1,6 +1,7 @@
 /**
- * SQLite persistence for user accounts, sessions, and per-user profiles
- * (display name + dashboard settings).
+ * SQLite persistence for user accounts, sessions, per-user profiles
+ * (display name + dashboard settings), and signed-in users' additional
+ * stock watchlists.
  *
  * Uses Node's built-in node:sqlite (Node >= 22.13) so the project stays
  * dependency-free — no npm install. The database is a single file:
@@ -45,6 +46,20 @@ db.exec(`
     expires_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS sessions_user_id ON sessions(user_id);
+
+  -- Additional named watchlists (the default one lives in profile settings,
+  -- like everything else configurable). tickers is a JSON array of symbols.
+  CREATE TABLE IF NOT EXISTS watchlists (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    tickers    TEXT NOT NULL DEFAULT '[]',
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, name COLLATE NOCASE)
+  );
+  CREATE INDEX IF NOT EXISTS watchlists_user_id ON watchlists(user_id);
 `);
 
 const stmts = {
@@ -67,6 +82,19 @@ const stmts = {
   deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash = ?'),
   deleteOtherSessions: db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?'),
   deleteExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
+
+  // Every watchlist statement is scoped by user_id, so one user can never
+  // read or change another's list even with a guessed id.
+  watchlists: db.prepare('SELECT * FROM watchlists WHERE user_id = ? ORDER BY position, id'),
+  watchlist: db.prepare('SELECT * FROM watchlists WHERE id = ? AND user_id = ?'),
+  countWatchlists: db.prepare('SELECT COUNT(*) AS n FROM watchlists WHERE user_id = ?'),
+  insertWatchlist: db.prepare(`
+    INSERT INTO watchlists (user_id, name, tickers, position)
+    VALUES (?, ?, ?, (SELECT COALESCE(MAX(position), -1) + 1 FROM watchlists WHERE user_id = ?))
+  `),
+  renameWatchlist: db.prepare(`UPDATE watchlists SET name = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
+  setWatchlistTickers: db.prepare(`UPDATE watchlists SET tickers = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
+  deleteWatchlist: db.prepare('DELETE FROM watchlists WHERE id = ? AND user_id = ?'),
 };
 
 function createUser(email, passwordHash, displayName) {
@@ -100,6 +128,16 @@ function getProfile(userId) {
   };
 }
 
+function toWatchlist(row) {
+  return row && {
+    id: row.id,
+    name: row.name,
+    tickers: JSON.parse(row.tickers),
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
 module.exports = {
   DB_PATH,
   createUser,
@@ -115,4 +153,13 @@ module.exports = {
   deleteSession: (tokenHash) => stmts.deleteSession.run(tokenHash),
   deleteOtherSessions: (userId, keepTokenHash) => stmts.deleteOtherSessions.run(userId, keepTokenHash),
   deleteExpiredSessions: () => stmts.deleteExpiredSessions.run(Date.now()),
+
+  listWatchlists: (userId) => stmts.watchlists.all(userId).map(toWatchlist),
+  getWatchlist: (userId, id) => toWatchlist(stmts.watchlist.get(id, userId)),
+  countWatchlists: (userId) => stmts.countWatchlists.get(userId).n,
+  createWatchlist: (userId, name, tickers) =>
+    Number(stmts.insertWatchlist.run(userId, name, JSON.stringify(tickers), userId).lastInsertRowid),
+  renameWatchlist: (userId, id, name) => stmts.renameWatchlist.run(name, id, userId).changes > 0,
+  setWatchlistTickers: (userId, id, tickers) => stmts.setWatchlistTickers.run(JSON.stringify(tickers), id, userId).changes > 0,
+  deleteWatchlist: (userId, id) => stmts.deleteWatchlist.run(id, userId).changes > 0,
 };

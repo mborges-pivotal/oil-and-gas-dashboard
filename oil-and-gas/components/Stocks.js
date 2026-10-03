@@ -1,5 +1,6 @@
 const { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
-import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews } from '../services/yahooFinance.js';
+import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols } from '../services/yahooFinance.js';
+import { fetchWatchlists, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/watchlists.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
 import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
@@ -74,10 +75,274 @@ const CHART_FETCH_RANGE = '5y';
 export default {
   name: 'Stocks',
   components: { HistoryChart },
-  props: ['config'],
-  emits: ['reorder-tickers', 'updated'],
+  props: ['config', 'user'],
+  // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
+  emits: ['set-tickers', 'updated', 'go-account'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
+
+    // ── Watchlists ──────────────────────────────────────────────────────────
+    // 'default' is config.stocks.tickers — part of the dashboard settings, so
+    // it works signed out (and is still editable in ⚙ Settings). Signed-in
+    // users can add named lists, stored only in the DB (services/watchlists.js).
+    const MAX_LIST_TICKERS = 50; // matches server/watchlists.js
+    const LIST_STORAGE_KEY = 'oilgas_watchlist';
+    const customLists = ref([]);
+    const listsLoading = ref(false);
+    const listsError = ref(null);
+    const activeListId = ref(readSavedListId());
+    const activeList = computed(() =>
+      customLists.value.find(l => String(l.id) === activeListId.value) ?? null
+    );
+    // While a remembered custom list is still loading, show nothing rather
+    // than flashing the default list's cards.
+    const activeTickers = computed(() => {
+      if (activeList.value) return activeList.value.tickers;
+      if (activeListId.value !== 'default' && listsLoading.value) return [];
+      return configTickers.value;
+    });
+
+    function readSavedListId() {
+      try { return localStorage.getItem(LIST_STORAGE_KEY) || 'default'; } catch { return 'default'; }
+    }
+    watch(activeListId, id => {
+      try { localStorage.setItem(LIST_STORAGE_KEY, id); } catch { /* per-browser convenience only */ }
+    });
+
+    async function loadLists() {
+      listsError.value = null;
+      if (!props.user) {
+        customLists.value = [];
+        activeListId.value = 'default';
+        return;
+      }
+      listsLoading.value = true;
+      try {
+        customLists.value = await fetchWatchlists();
+      } catch (e) {
+        customLists.value = [];
+        listsError.value = `Couldn't load your watchlists: ${e.message}`;
+      } finally {
+        listsLoading.value = false;
+      }
+      if (!activeList.value) activeListId.value = 'default';
+    }
+    watch(() => props.user?.id ?? null, loadLists, { immediate: true });
+
+    function selectList(id) {
+      activeListId.value = String(id);
+      editMode.value = false;
+      listForm.value = null;
+    }
+
+    // Saves a new ticker array for whichever list is showing.
+    async function saveTickers(order) {
+      const list = activeList.value;
+      if (!list) {
+        // Parent updates config synchronously, so the list never snaps back.
+        emit('set-tickers', order);
+        return;
+      }
+      const previous = list.tickers;
+      list.tickers = order; // optimistic — reverted below if the save fails
+      try {
+        list.tickers = (await updateWatchlist(list.id, { tickers: order })).tickers;
+      } catch (e) {
+        list.tickers = previous;
+        listsError.value = `Couldn't save "${list.name}": ${e.message}`;
+      }
+    }
+
+    // Create / rename form, and delete.
+    const listForm = ref(null); // { mode: 'create' | 'rename', name, busy, error }
+    const listNameInput = ref(null);
+    function openListForm(mode) {
+      listForm.value = { mode, name: mode === 'rename' ? activeList.value.name : '', busy: false, error: null };
+      nextTick(() => listNameInput.value?.focus());
+    }
+    async function submitListForm() {
+      const f = listForm.value;
+      if (!f || f.busy) return;
+      f.busy = true;
+      f.error = null;
+      try {
+        if (f.mode === 'create') {
+          const created = await createWatchlist(f.name);
+          customLists.value.push(created);
+          selectList(created.id);
+        } else {
+          const updated = await updateWatchlist(activeList.value.id, { name: f.name });
+          activeList.value.name = updated.name;
+          listForm.value = null;
+        }
+      } catch (e) {
+        f.error = e.message;
+        f.busy = false;
+      }
+    }
+    async function deleteActiveList() {
+      const list = activeList.value;
+      if (!list || !confirm(`Delete the "${list.name}" watchlist? This can't be undone.`)) return;
+      try {
+        await deleteWatchlist(list.id);
+        customLists.value = customLists.value.filter(l => l.id !== list.id);
+        selectList('default');
+      } catch (e) {
+        listsError.value = `Couldn't delete "${list.name}": ${e.message}`;
+      }
+    }
+
+    // ── ☰ watchlist menu: search, edit, new / rename / delete list ──
+    const wlMenuOpen = ref(false);
+    const wlMenuRoot = ref(null);
+    const wlMenuButton = ref(null);
+    const wlMenu = ref(null);
+    const searchVisible = ref(false);
+    const searchInput = ref(null);
+
+    function wlMenuItems() {
+      return [...(wlMenu.value?.querySelectorAll('[role="menuitem"]:not(:disabled)') ?? [])];
+    }
+    function closeWlMenu({ refocus = false } = {}) {
+      wlMenuOpen.value = false;
+      if (refocus) wlMenuButton.value?.focus();
+    }
+    function onDocPointerDown(e) {
+      if (!wlMenuRoot.value?.contains(e.target)) closeWlMenu();
+    }
+    watch(wlMenuOpen, open => {
+      if (open) {
+        document.addEventListener('pointerdown', onDocPointerDown);
+        nextTick(() => wlMenuItems()[0]?.focus());
+      } else {
+        document.removeEventListener('pointerdown', onDocPointerDown);
+      }
+    });
+    onUnmounted(() => document.removeEventListener('pointerdown', onDocPointerDown));
+
+    function onWlMenuButtonKeydown(e) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        wlMenuOpen.value = true;
+      }
+    }
+    function onWlMenuKeydown(e) {
+      const list = wlMenuItems();
+      const i = list.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); closeWlMenu({ refocus: true }); }
+      else if (e.key === 'Tab') closeWlMenu();
+      else if (e.key === 'ArrowDown') { e.preventDefault(); list[(i + 1) % list.length]?.focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); list[(i - 1 + list.length) % list.length]?.focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); list[0]?.focus(); }
+      else if (e.key === 'End') { e.preventDefault(); list[list.length - 1]?.focus(); }
+    }
+
+    function menuAction(action) {
+      closeWlMenu();
+      if (action === 'edit') editMode.value = !editMode.value;
+      else if (action === 'new') openListForm('create');
+      else if (action === 'rename') openListForm('rename');
+      else if (action === 'delete') deleteActiveList();
+      else if (action === 'signin') emit('go-account');
+    }
+
+    const searchShown = computed(() => searchVisible.value || (!tickers.value.length && !listsLoading.value));
+    function openSearch() {
+      searchVisible.value = true;
+      nextTick(() => searchInput.value?.focus());
+    }
+    function closeSearch() {
+      searchQuery.value = '';
+      searchVisible.value = false;
+    }
+
+    // Edit mode: a remove button on each card.
+    const editMode = ref(false);
+    function removeTicker(sym) {
+      saveTickers(activeTickers.value.filter(t => t !== sym));
+    }
+
+    // ── Stock search (adds to the watchlist that's showing) ──
+    const searchQuery = ref('');
+    const searchResults = ref([]);
+    const searchLoading = ref(false);
+    const searchError = ref(null);
+    const searchOpen = ref(false);
+    const searchIndex = ref(-1);
+    const justAdded = ref(null);
+    let searchTimer = null;
+    let searchSeq = 0;
+
+    watch(searchQuery, q => {
+      clearTimeout(searchTimer);
+      searchError.value = null;
+      if (!q.trim()) {
+        searchSeq++; // drop any in-flight response
+        searchResults.value = [];
+        searchLoading.value = false;
+        return;
+      }
+      searchLoading.value = true;
+      searchOpen.value = true;
+      searchTimer = setTimeout(async () => {
+        const seq = ++searchSeq;
+        try {
+          const results = await searchSymbols(q);
+          if (seq !== searchSeq) return;
+          searchResults.value = results;
+          searchIndex.value = results.length ? 0 : -1;
+        } catch (e) {
+          if (seq !== searchSeq) return;
+          searchResults.value = [];
+          searchError.value = e.message;
+        } finally {
+          if (seq === searchSeq) searchLoading.value = false;
+        }
+      }, 250);
+    });
+
+    function inActiveList(sym) {
+      return activeTickers.value.includes(sym);
+    }
+    const listFull = computed(() => !!activeList.value && activeTickers.value.length >= MAX_LIST_TICKERS);
+
+    async function addTicker(sym) {
+      if (inActiveList(sym) || listFull.value) return;
+      searchQuery.value = '';
+      searchOpen.value = false;
+      await saveTickers([...activeTickers.value, sym]);
+      searchInput.value?.focus();
+      // Point at the new card at the bottom of the list.
+      justAdded.value = sym;
+      setTimeout(() => { if (justAdded.value === sym) justAdded.value = null; }, 2000);
+      await nextTick();
+      watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"]`)
+        ?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+
+    function onSearchKeydown(e) {
+      const n = searchResults.value.length;
+      if (e.key === 'ArrowDown' && n) {
+        e.preventDefault();
+        searchOpen.value = true;
+        searchIndex.value = (searchIndex.value + 1) % n;
+      } else if (e.key === 'ArrowUp' && n) {
+        e.preventDefault();
+        searchIndex.value = (searchIndex.value - 1 + n) % n;
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        const r = searchResults.value[searchIndex.value];
+        if (r) addTicker(r.symbol);
+      } else if (e.key === 'Escape') {
+        if (searchOpen.value && n) searchOpen.value = false;
+        else if (searchQuery.value) searchQuery.value = '';
+        else closeSearch();
+      }
+    }
+    function onSearchBlur() {
+      // Result buttons use mousedown.prevent, so blur here means focus truly left.
+      searchOpen.value = false;
+    }
 
     // ── Watchlist reordering ────────────────────────────────────────────────
     // Drag a card by its ⠿ handle (mouse or touch, via Pointer Events —
@@ -88,7 +353,7 @@ export default {
     // midpoint; on release the new order is emitted once, and the parent
     // saves it into config.stocks.tickers like any other setting.
     const dragOrder = ref(null);   // working order while a drag is active
-    const tickers = computed(() => dragOrder.value ?? configTickers.value);
+    const tickers = computed(() => dragOrder.value ?? activeTickers.value);
     const draggingTicker = ref(null);
     const watchlistEl = ref(null);
     let lastPointerY = 0;
@@ -159,7 +424,7 @@ export default {
     let suppressHeaderClick = false;
 
     function onHandlePointerDown(e, sym) {
-      if (e.button !== 0 || draggingTicker.value || configTickers.value.length < 2) return;
+      if (e.button !== 0 || draggingTicker.value || activeTickers.value.length < 2) return;
       e.preventDefault(); // no text selection / focus-scroll while dragging
       startDrag(e.pointerId, e.clientY, sym);
     }
@@ -167,7 +432,7 @@ export default {
     function startDrag(pointerId, y, sym) {
       activePointerId = pointerId;
       lastPointerY = y;
-      dragOrder.value = [...configTickers.value];
+      dragOrder.value = [...activeTickers.value];
       draggingTicker.value = sym;
       window.addEventListener('pointermove', onDragMove);
       window.addEventListener('pointerup', endDrag);
@@ -194,7 +459,7 @@ export default {
     let press = null; // { pointerId, sym, x, y }
 
     function onCardPointerDown(e, sym) {
-      if (e.pointerType !== 'touch' || draggingTicker.value || press || configTickers.value.length < 2) return;
+      if (e.pointerType !== 'touch' || draggingTicker.value || press || activeTickers.value.length < 2) return;
       if (e.target.closest('.drag-handle')) return; // the handle drags immediately
       press = { pointerId: e.pointerId, sym, x: e.clientX, y: e.clientY };
       window.addEventListener('pointermove', onPressMove);
@@ -257,12 +522,12 @@ export default {
       // than the pointerup, so hold the flag briefly rather than one tick.
       setTimeout(() => { suppressHeaderClick = false; }, 350);
       const order = dragOrder.value;
-      const changed = order.some((t, i) => t !== configTickers.value[i]);
+      const changed = order.some((t, i) => t !== activeTickers.value[i]);
       draggingTicker.value = null;
-      // Parent updates config synchronously on emit, so there's no frame
-      // where the list snaps back to the old order before it's saved.
+      // saveTickers updates the list synchronously (config via the parent,
+      // or optimistically for a DB list), so it never snaps back.
       if (changed) {
-        emit('reorder-tickers', [...order]);
+        saveTickers([...order]);
         buzz(10);
       }
       dragOrder.value = null;
@@ -272,12 +537,12 @@ export default {
       const delta = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
       if (!delta) return;
       e.preventDefault();
-      const order = [...configTickers.value];
+      const order = [...activeTickers.value];
       const from = order.indexOf(sym);
       const to = from + delta;
       if (to < 0 || to >= order.length) return;
       [order[from], order[to]] = [order[to], order[from]];
-      emit('reorder-tickers', order);
+      saveTickers(order);
       // Moving a DOM node can drop its focus — put it back on the handle.
       await nextTick();
       watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"] .drag-handle`)?.focus();
@@ -295,8 +560,8 @@ export default {
     watch(lastUpdated, v => emit('updated', v));
     let refreshTimer = null;
 
-    async function fetchStockQuotes() {
-      await Promise.all(tickers.value.map(async (sym) => {
+    async function fetchStockQuotes(symbols = tickers.value) {
+      await Promise.all(symbols.map(async (sym) => {
         if (!stockQuotes[sym]) stockQuotes[sym] = { price: null, change: null, pctChange: null, volume: null, shortName: '', loading: true, error: null };
         else stockQuotes[sym].loading = true;
         try {
@@ -345,6 +610,12 @@ export default {
     async function refreshAll() {
       await Promise.all([fetchStockQuotes(), fetchIndexes()]);
     }
+
+    // Switching lists or adding a ticker: fetch whatever has no quote yet.
+    watch(activeTickers, syms => {
+      const missing = syms.filter(s => !stockQuotes[s]);
+      if (missing.length) fetchStockQuotes(missing);
+    });
 
     onMounted(() => {
       refreshAll();
@@ -487,7 +758,7 @@ export default {
     }
 
     function toggleDetail(ticker) {
-      if (suppressHeaderClick) return;
+      if (suppressHeaderClick || editMode.value) return;
       ensureDetail(ticker);
       details[ticker].open = !details[ticker].open;
       if (details[ticker].open) loadActiveTab(ticker);
@@ -524,6 +795,13 @@ export default {
 
     return {
       tickers, stockQuotes, sparklines, lastUpdated,
+      customLists, listsLoading, listsError, activeListId, activeList, selectList,
+      listForm, listNameInput, openListForm, submitListForm, deleteActiveList,
+      editMode, removeTicker, MAX_LIST_TICKERS, listFull,
+      searchQuery, searchResults, searchLoading, searchError, searchOpen, searchIndex,
+      justAdded, inActiveList, addTicker, onSearchKeydown, onSearchBlur,
+      wlMenuOpen, wlMenuRoot, wlMenuButton, wlMenu, onWlMenuButtonKeydown, onWlMenuKeydown, menuAction,
+      searchShown, searchInput, openSearch, closeSearch,
       watchlistEl, draggingTicker,
       onHandlePointerDown, onHandleKeydown, onCardPointerDown, onCardContextMenu,
       indexSymbols, indexes, INDEX_LABELS,
@@ -557,17 +835,110 @@ export default {
         </div>
       </div>
 
-      <div class="card-title" style="margin-bottom:10px">Stock Watchlist</div>
+      <!-- Watchlist picker + list actions -->
+      <div class="watchlist-toolbar">
+        <div class="watchlist-picker">
+          <span class="card-title" style="margin-bottom:0">Watchlist</span>
+          <select v-if="user && customLists.length" :value="activeListId"
+                  aria-label="Choose watchlist" @change="selectList($event.target.value)">
+            <option value="default">My Watchlist</option>
+            <option v-for="l in customLists" :key="l.id" :value="String(l.id)">{{ l.name }}</option>
+          </select>
+          <span v-else class="watchlist-name">My Watchlist</span>
+        </div>
+        <div class="watchlist-actions">
+          <button type="button" v-if="editMode" class="primary" @click="editMode = false">Done</button>
+          <button type="button" class="wl-icon-button" :class="{ active: searchShown }"
+                  :disabled="listFull && !searchShown"
+                  :aria-label="listFull ? 'This watchlist is full (' + MAX_LIST_TICKERS + ' stocks)' : 'Search stocks to add'"
+                  :title="listFull ? 'This watchlist is full (' + MAX_LIST_TICKERS + ' stocks)' : 'Search stocks to add'"
+                  :aria-expanded="searchShown" aria-controls="watchlist-search"
+                  @click="searchShown && tickers.length ? closeSearch() : openSearch()">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/>
+              <path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </button>
+          <div class="wl-menu" ref="wlMenuRoot">
+            <button ref="wlMenuButton" type="button" class="wl-icon-button"
+                    aria-haspopup="menu" :aria-expanded="wlMenuOpen" aria-label="Watchlist options"
+                    title="Watchlist options" @click="wlMenuOpen = !wlMenuOpen" @keydown="onWlMenuButtonKeydown">
+              <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                <path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              </svg>
+            </button>
+            <div class="user-menu-panel wl-menu-panel" v-if="wlMenuOpen" ref="wlMenu" role="menu"
+                 aria-label="Watchlist options" @keydown="onWlMenuKeydown">
+              <button type="button" role="menuitem" class="user-menu-item" v-if="tickers.length" @click="menuAction('edit')">
+                ✎ {{ editMode ? 'Stop editing' : 'Edit / remove stocks' }}
+              </button>
+              <div class="user-menu-sep" v-if="tickers.length"></div>
+              <template v-if="user">
+                <button type="button" role="menuitem" class="user-menu-item" @click="menuAction('new')">＋ New list</button>
+                <button type="button" role="menuitem" class="user-menu-item" v-if="activeList" @click="menuAction('rename')">Rename list</button>
+                <button type="button" role="menuitem" class="user-menu-item danger-item" v-if="activeList" @click="menuAction('delete')">Delete list</button>
+              </template>
+              <button type="button" role="menuitem" class="user-menu-item" v-else @click="menuAction('signin')">
+                Sign in to create more lists
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <div class="notice" v-if="tickers.length === 0">
-        No tickers configured. Add tickers in the ⚙ Settings tab.
+      <form class="watchlist-form" v-if="listForm" @submit.prevent="submitListForm">
+        <input ref="listNameInput" v-model="listForm.name" maxlength="40" required
+               :placeholder="listForm.mode === 'create' ? 'New watchlist name' : 'Watchlist name'"
+               :aria-label="listForm.mode === 'create' ? 'New watchlist name' : 'Watchlist name'"
+               @keydown.esc="listForm = null" />
+        <button type="submit" class="primary" :disabled="listForm.busy || !listForm.name.trim()">
+          {{ listForm.mode === 'create' ? 'Create' : 'Save' }}
+        </button>
+        <button type="button" @click="listForm = null">Cancel</button>
+        <div class="notice error watchlist-form-error" v-if="listForm.error">{{ listForm.error }}</div>
+      </form>
+
+      <!-- Search stocks to add to the list that's showing (opened with the
+           search icon; always shown for an empty list) -->
+      <div class="watchlist-search" id="watchlist-search" v-if="searchShown">
+        <input ref="searchInput" type="search" v-model="searchQuery" autocomplete="off" spellcheck="false"
+               :placeholder="listFull ? 'This watchlist is full (' + MAX_LIST_TICKERS + ' stocks)' : 'Search ticker or company to add…'"
+               :disabled="listFull"
+               aria-label="Search stocks to add" role="combobox" aria-autocomplete="list"
+               :aria-expanded="searchOpen && !!searchQuery.trim()" aria-controls="watchlist-search-results"
+               :aria-activedescendant="searchIndex >= 0 && searchOpen ? 'wl-result-' + searchIndex : null"
+               @focus="searchOpen = true" @blur="onSearchBlur" @keydown="onSearchKeydown" />
+        <ul class="watchlist-search-results" id="watchlist-search-results" role="listbox"
+            v-if="searchOpen && searchQuery.trim()">
+          <li class="watchlist-search-status" v-if="searchLoading && !searchResults.length">Searching…</li>
+          <li class="watchlist-search-status" v-else-if="searchError">Search failed: {{ searchError }}</li>
+          <li class="watchlist-search-status" v-else-if="!searchLoading && !searchResults.length">No matches.</li>
+          <li v-for="(r, i) in searchResults" :key="r.symbol" :id="'wl-result-' + i" role="option"
+              :aria-selected="i === searchIndex" :aria-disabled="inActiveList(r.symbol)"
+              class="watchlist-search-result" :class="{ active: i === searchIndex, added: inActiveList(r.symbol) }"
+              @mousedown.prevent @mouseenter="searchIndex = i" @click="addTicker(r.symbol)">
+            <span class="watchlist-search-symbol">{{ r.symbol }}</span>
+            <span class="watchlist-search-name">{{ r.name }}</span>
+            <span class="watchlist-search-meta">{{ r.exchange }}<template v-if="r.exchange && r.type"> · </template>{{ r.type }}</span>
+            <span class="watchlist-search-add">{{ inActiveList(r.symbol) ? '✓ In list' : '+ Add' }}</span>
+          </li>
+        </ul>
+        <button type="button" class="watchlist-search-close" v-if="tickers.length"
+                aria-label="Close search" title="Close search" @click="closeSearch">✕</button>
+      </div>
+
+      <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
+
+      <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
+      <div class="notice" v-else-if="tickers.length === 0">
+        This watchlist is empty — search above to add stocks.
       </div>
 
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
       <!-- drag a card by its handle to reorder (saved to settings). -->
       <div ref="watchlistEl" class="watchlist" :class="{ 'is-dragging': draggingTicker }">
       <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
-           :class="{ dragging: draggingTicker === sym }">
+           :class="{ dragging: draggingTicker === sym, 'just-added': justAdded === sym }">
         <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)"
              @pointerdown="onCardPointerDown($event, sym)" @contextmenu="onCardContextMenu">
           <button
@@ -612,7 +983,10 @@ export default {
               <span class="stock-row-sparkline" v-else></span>
             </div>
           </div>
-          <span class="chevron">▶</span>
+          <button v-if="editMode" type="button" class="watchlist-remove"
+                  :aria-label="'Remove ' + sym + ' from this watchlist'" :title="'Remove ' + sym"
+                  @click.stop="removeTicker(sym)">✕</button>
+          <span v-else class="chevron">▶</span>
         </div>
 
         <!-- Historical Chart + Documents (SEC filings) — same content that -->
@@ -784,7 +1158,7 @@ export default {
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">
         Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.
-        Ticker news from Yahoo Finance. SEC filings from SEC EDGAR (data.sec.gov), no API key required. Each tab loads the first time you open it. Drag a card by its ⠿ handle to reorder; manage tickers in ⚙ Settings.
+        Ticker news from Yahoo Finance. SEC filings from SEC EDGAR (data.sec.gov), no API key required. Each tab loads the first time you open it. Use the search icon to add stocks and the ☰ menu to edit (remove stocks) and manage lists; drag a card by its ⠿ handle to reorder.
       </div>
     </div>
   `,
