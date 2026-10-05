@@ -1,6 +1,6 @@
 const { ref, reactive, computed } = Vue;
 import NoteForm from './NoteForm.js';
-import { notesStore, loadNotes, addManualNote, editNote, removeNote, removeLabel } from '../utils/notesStore.js';
+import { notesStore, loadNotes, addManualNote, editNote, removeNote } from '../utils/notesStore.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { formatDate, formatRelativeTime } from '../utils/formatters.js';
 import { labelChipStyle } from '../utils/labelColors.js';
@@ -105,23 +105,11 @@ export default {
       }
     }
 
-    async function deleteLabelConfirm(label) {
-      const n = labelCounts.value.get(label.id) ?? 0;
-      if (!confirm(`Delete the label "${label.name}"?` + (n ? ` It will be removed from ${n} note${n === 1 ? '' : 's'}.` : ''))) return;
-      pageError.value = null;
-      try {
-        await removeLabel(label.id);
-        labelFilter.value = labelFilter.value.filter(x => x !== label.id);
-      } catch (e) {
-        pageError.value = `Couldn't delete the label: ${e.message}`;
-      }
-    }
-
     return {
       notesStore, loadNotes, symbolFilter, labelFilter, query, editing, pageError,
       knownSymbols, creating, saveNew, linkHost,
       symbols, labelCounts, filtered, filtering, toggleLabel, clearFilters,
-      saveEdit, deleteNoteConfirm, deleteLabelConfirm,
+      saveEdit, deleteNoteConfirm,
       safeArticleUrl, onArticleClick, formatDate, formatRelativeTime, labelChipStyle,
     };
   },
@@ -134,6 +122,7 @@ export default {
           <span class="text-muted text-sm" v-if="notesStore.loaded && notesStore.notes.length">
             {{ filtering ? filtered.length + ' of ' : '' }}{{ notesStore.notes.length }} note{{ notesStore.notes.length === 1 ? '' : 's' }}
           </span>
+          <button type="button" class="link-button" v-if="notesStore.loaded" @click="$emit('manage-labels')">Manage labels</button>
           <button type="button" class="primary" v-if="notesStore.loaded && !creating" @click="creating = { busy: false, error: null }">＋ New note</button>
         </div>
       </div>
@@ -172,15 +161,10 @@ export default {
           <button type="button" class="link-button" v-if="filtering" @click="clearFilters">Clear filters</button>
         </div>
         <div class="note-chips notes-label-filter" v-if="notesStore.labels.length" role="group" aria-label="Filter by label">
-          <button type="button" class="link-button notes-manage-labels" @click="$emit('manage-labels')">Manage labels</button>
-          <span class="note-chip-group" v-for="l in notesStore.labels" :key="l.id">
-            <button type="button" class="note-chip" :class="{ selected: labelFilter.includes(l.id) }"
-                    :aria-pressed="labelFilter.includes(l.id)" :title="l.description || null" @click="toggleLabel(l.id)">
-              <span class="label-dot" :style="{ background: l.color }" aria-hidden="true"></span>{{ l.name }} <span class="note-chip-count">{{ labelCounts.get(l.id) }}</span>
-            </button>
-            <button type="button" class="note-chip-remove" :aria-label="'Delete label ' + l.name"
-                    :title="'Delete label ' + l.name" @click="deleteLabelConfirm(l)">✕</button>
-          </span>
+          <button v-for="l in notesStore.labels" :key="l.id" type="button" class="note-chip" :class="{ selected: labelFilter.includes(l.id) }"
+                  :aria-pressed="labelFilter.includes(l.id)" :title="l.description || null" @click="toggleLabel(l.id)">
+            <span class="label-dot" :style="{ background: l.color }" aria-hidden="true"></span>{{ l.name }} <span class="note-chip-count">{{ labelCounts.get(l.id) }}</span>
+          </button>
         </div>
 
         <div class="notice" v-if="!filtered.length">No notes match these filters.</div>

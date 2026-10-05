@@ -1284,7 +1284,6 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .labels-rename { display: flex; gap: 8px; flex: 1; }
 .labels-rename input { flex: 1; min-width: 0; }
 .labels-row-error { flex-basis: 100%; margin: 4px 0 0; }
-.notes-manage-labels { padding: 0 4px 0 0; font-size: 12px; }
 .account-card { padding: 20px; }
 .account-form { display: flex; flex-direction: column; gap: 14px; }
 .account-form input { width: 100%; }
@@ -1561,19 +1560,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .notes-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
 .notes-filters input[type="search"] { flex: 1 1 200px; min-width: 0; }
 .notes-label-filter { margin-bottom: 14px; }
-.note-chip-group { display: inline-flex; align-items: center; }
-.note-chip-group .note-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.note-chip-remove {
-  padding: 3px 7px;
-  font-size: 10px;
-  line-height: 16px;
-  border: 1px solid var(--border);
-  border-left: none;
-  border-radius: 0 999px 999px 0;
-  background: var(--surface-2);
-  color: var(--text-muted);
-}
-.note-chip-remove:hover { color: var(--negative); }
 .note-card { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
 .note-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .note-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
@@ -1690,7 +1676,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .inbox-item.unread .inbox-item-title { font-weight: 700; }
 .inbox-item-text { font-size: 13px; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .inbox-item-time { flex: none; }
-.notes-head-right button { padding: 5px 12px; }
+.notes-head-right button:not(.link-button) { padding: 5px 12px; }
 .note-new { margin-bottom: 14px; }
 .note-new .note-form { border: none; padding: 0; margin: 0; background: transparent; }
 .note-kind {
