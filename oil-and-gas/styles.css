@@ -1627,6 +1627,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-item-note { font-size: 12px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
 .alert-item-actions { flex: none; display: flex; gap: 12px; }
 .alert-item-actions .link-button { padding: 0; }
+/* Profile → Alerts */
+.alerts-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; }
+.alerts-search { flex: 0 1 220px; min-width: 0; }
+.alerts-group { margin-top: 16px; }
+.alerts-group-title { display: flex; align-items: center; gap: 8px; margin: 0 0 2px; font-size: 14px; font-weight: 700; }
+.alerts-manager .alert-item.editing { display: block; }
+.alerts-manager .alert-composer, .alerts-manager .alert-form { margin-top: 12px; }
+@media (max-width: 480px) { .alerts-search { flex-basis: 100%; } }
 .alert-empty { margin: 0; }
 @media (max-width: 480px) {
   .alert-item { flex-wrap: wrap; }

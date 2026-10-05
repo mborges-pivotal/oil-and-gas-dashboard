@@ -16,7 +16,7 @@ import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
-import { describeAlert, alertPresets } from '../utils/alerts.js';
+import { describeAlert, alertPresets, alertStatus } from '../utils/alerts.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
 const INDEX_LABELS = {
@@ -893,11 +893,6 @@ export default {
     async function deleteAlertConfirm(alert) {
       if (!confirm(`Delete this ${alert.symbol} alert?\n\n${describeAlert(alert)}`)) return;
       try { await removeAlert(alert.id); } catch (e) { alert._error = e.message; }
-    }
-    function alertStatus(a) {
-      if (a.active) return a.lastTriggeredAt ? `Active · last triggered ${formatRelativeTime(a.lastTriggeredAt)}` : 'Active';
-      if (a.repeat === 'once' && a.lastTriggeredAt) return `Triggered ${formatRelativeTime(a.lastTriggeredAt)}`;
-      return 'Paused';
     }
 
     // Portfolio page: is the Holdings section expanded? (remembered per browser)

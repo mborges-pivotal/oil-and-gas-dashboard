@@ -2,11 +2,13 @@ const { ref, reactive, computed, watch } = Vue;
 import { login, register, logout, updateProfile, changePassword } from '../services/auth.js';
 import { formatDate } from '../utils/formatters.js';
 import LabelsManager from './LabelsManager.js';
+import AlertsManager from './AlertsManager.js';
 
 // Signed-in sections, shown as a side navigation (a tab row on phones).
 const SECTIONS = [
   { id: 'profile', label: 'Profile', icon: '👤' },
   { id: 'labels',  label: 'Labels',  icon: '🏷' },
+  { id: 'alerts',  label: 'Alerts',  icon: '🔔' },
 ];
 
 const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
@@ -14,15 +16,17 @@ const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
 /**
  * Account tab: sign-in / registration when signed out. Signed in, a side
  * navigation of profile sections: Profile (display name, password,
- * sign-out) and Labels (the labels used by Inbox → Notes). Dashboard
+ * sign-out), Labels (the labels used by Inbox → Notes) and Alerts (every
+ * stock alert: edit, pause, delete, create). Dashboard
  * settings themselves are edited in the Settings tab — they're just stored
  * on this profile once signed in.
  */
 export default {
   name: 'Account',
-  components: { LabelsManager },
+  components: { LabelsManager, AlertsManager },
   // section: which signed-in section to show (v-model:section from app.js).
-  props: { user: Object, section: { type: String, default: 'profile' } },
+  // config: dashboard settings (Alerts uses your watchlist and holdings).
+  props: { user: Object, config: Object, section: { type: String, default: 'profile' } },
   emits: ['signed-in', 'signed-out', 'updated', 'update:section'],
   setup(props, { emit }) {
     // ── Signed out: sign in / create account ────────────────────────────
@@ -187,6 +191,7 @@ export default {
 
         <div class="profile-content">
         <LabelsManager v-if="section === 'labels'" />
+        <AlertsManager v-else-if="section === 'alerts'" :config="config" />
 
         <template v-else>
         <div class="flex-between mb-16">

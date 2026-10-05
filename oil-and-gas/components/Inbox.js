@@ -19,7 +19,7 @@ export default {
   name: 'Inbox',
   components: { Notes, AlertComposer },
   props: { config: Object, section: { type: String, default: 'notes' } },
-  emits: ['update:section', 'manage-labels'],
+  emits: ['update:section', 'manage-labels', 'manage-alerts'],
   setup() {
     const counts = computed(() => ({ notes: 0, alerts: unreadAlerts(), messages: unreadMessages() }));
     const items = computed(() => ({ alerts: inboxStore.alerts, messages: inboxStore.messages }));
@@ -49,6 +49,7 @@ export default {
       <template v-else>
         <div class="inbox-list-head" v-if="counts[section] || section === 'alerts'">
           <button type="button" class="link-button" v-if="counts[section]" @click="markAllRead(section)">Mark all as read</button>
+          <button type="button" class="link-button" v-if="section === 'alerts'" @click="$emit('manage-alerts')">Manage alerts</button>
           <button type="button" class="primary inbox-new-alert" v-if="section === 'alerts' && !composing"
                   @click="composing = true; created = null">＋ New alert</button>
         </div>
@@ -62,7 +63,7 @@ export default {
           <template v-if="created.skipped.length">
             Skipped {{ created.skipped.map(s => s.symbol + ' (' + s.reason + ')').join(', ') }}.
           </template>
-          Edit, pause or delete them from each stock's 🔔 tab.
+          Edit, pause or delete them in <a href="#" @click.prevent="$emit('manage-alerts')">Profile → Alerts</a> or each stock's 🔔 tab.
           <button type="button" class="link-button" aria-label="Dismiss" @click="created = null">✕</button>
         </div>
         <div class="notice" v-if="!items[section].length">

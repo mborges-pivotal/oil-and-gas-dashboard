@@ -1,8 +1,9 @@
 /**
- * Alert wording and presets shared by the stock card's Alerts tab.
+ * Alert wording and presets shared by the stock card's Alerts tab and
+ * Profile → Alerts.
  * Conditions mirror server/alerts.js (which does the evaluating).
  */
-import { formatPrice } from './formatters.js';
+import { formatPrice, formatRelativeTime } from './formatters.js';
 
 const pct = v => `${Math.round(v * 100) / 100}%`;
 
@@ -55,4 +56,11 @@ export function alertPresets({ hasPosition }) {
     { label: '52-wk high',    kind: 'high52', params: { within: 0 } },
     { label: 'Volume 2×',     kind: 'volume', params: { multiple: 2 }, repeat: 'daily' },
   ];
+}
+
+/** Status line: active (and when it last fired), triggered (one-time), or paused. */
+export function alertStatus(a) {
+  if (a.active) return a.lastTriggeredAt ? `Active · last triggered ${formatRelativeTime(a.lastTriggeredAt)}` : 'Active';
+  if (a.repeat === 'once' && a.lastTriggeredAt) return `Triggered ${formatRelativeTime(a.lastTriggeredAt)}`;
+  return 'Paused';
 }

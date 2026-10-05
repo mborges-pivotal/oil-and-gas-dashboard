@@ -362,10 +362,15 @@ const App = {
       if (id === 'inbox' && activeTab.value !== 'inbox') inboxSection.value = defaultInboxSection();
       activeTab.value = id;
     }
-    // Account page section (Profile / Labels); "Manage labels" in Notes opens Labels.
+    // Account page section (Profile / Labels / Alerts); "Manage labels" in
+    // Notes opens Labels, "Manage alerts" in Inbox → Alerts opens Alerts.
     const accountSection = ref('profile');
     function openLabels() {
       accountSection.value = 'labels';
+      activeTab.value = 'account';
+    }
+    function openAlertsManager() {
+      accountSection.value = 'alerts';
       activeTab.value = 'account';
     }
 
@@ -557,7 +562,7 @@ const App = {
 
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
-      inboxSection, selectTab, openNotes, accountSection, openLabels,
+      inboxSection, selectTab, openNotes, accountSection, openLabels, openAlertsManager,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
       themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition,
@@ -617,7 +622,7 @@ const App = {
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
             @set-position="onSetPosition" @go-notes="openNotes" />
-          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" />
+          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"
@@ -626,7 +631,7 @@ const App = {
             @go-account="activeTab = 'account'"
           />
 
-          <Account v-if="activeTab === 'account'" :user="user" v-model:section="accountSection"
+          <Account v-if="activeTab === 'account'" :user="user" :config="config" v-model:section="accountSection"
             @signed-in="onSignedIn"
             @signed-out="onSignedOut"
             @updated="onUserUpdated"
