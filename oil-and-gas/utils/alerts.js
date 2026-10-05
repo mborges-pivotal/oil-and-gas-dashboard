@@ -2,7 +2,7 @@
  * Alert wording and presets shared by the stock card's Alerts tab.
  * Conditions mirror server/alerts.js (which does the evaluating).
  */
-import { formatUSD } from './formatters.js';
+import { formatPrice } from './formatters.js';
 
 const pct = v => `${Math.round(v * 100) / 100}%`;
 
@@ -20,8 +20,8 @@ export function describeAlert(a) {
   const p = a.params;
   switch (a.kind) {
     case 'price':
-      return `Price ${p.direction} ${formatUSD(p.target)}`
-        + (p.basis === 'percent' ? ` (${p.percent >= 0 ? '+' : ''}${pct(p.percent)} from ${formatUSD(p.basePrice)})` : '');
+      return `Price ${p.direction} ${formatPrice(p.target)}`
+        + (p.basis === 'percent' ? ` (${p.percent >= 0 ? '+' : ''}${pct(p.percent)} from ${formatPrice(p.basePrice)})` : '');
     case 'daily':
       return `${p.direction === 'either' ? 'Moves ±' : p.direction === 'up' ? 'Up ' : 'Down '}${pct(p.percent)} or more in a day`;
     case 'position':

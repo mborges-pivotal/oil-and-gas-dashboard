@@ -1,5 +1,6 @@
-const { computed } = Vue;
+const { ref, computed } = Vue;
 import Notes from './Notes.js';
+import AlertComposer from './AlertComposer.js';
 import { inboxStore, unreadAlerts, unreadMessages, markRead, markAllRead } from '../utils/inboxStore.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 
@@ -16,13 +17,20 @@ const SECTIONS = [
  */
 export default {
   name: 'Inbox',
-  components: { Notes },
+  components: { Notes, AlertComposer },
   props: { config: Object, section: { type: String, default: 'notes' } },
   emits: ['update:section'],
   setup() {
     const counts = computed(() => ({ notes: 0, alerts: unreadAlerts(), messages: unreadMessages() }));
     const items = computed(() => ({ alerts: inboxStore.alerts, messages: inboxStore.messages }));
-    return { SECTIONS, counts, items, markRead, markAllRead, formatRelativeTime };
+    // ＋ New alert (Alerts sub-tab): the composer, then a short result line.
+    const composing = ref(false);
+    const created = ref(null); // { count, symbols, skipped }
+    function onCreated({ alerts, skipped }) {
+      composing.value = false;
+      created.value = { count: alerts.length, symbols: alerts.map(a => a.symbol), skipped };
+    }
+    return { SECTIONS, counts, items, markRead, markAllRead, formatRelativeTime, composing, created, onCreated };
   },
   template: `
     <div>
@@ -39,13 +47,29 @@ export default {
       <Notes v-if="section === 'notes'" :config="config" embedded />
 
       <template v-else>
-        <div class="inbox-list-head" v-if="counts[section]">
-          <button type="button" class="link-button" @click="markAllRead(section)">Mark all as read</button>
+        <div class="inbox-list-head" v-if="counts[section] || section === 'alerts'">
+          <button type="button" class="link-button" v-if="counts[section]" @click="markAllRead(section)">Mark all as read</button>
+          <button type="button" class="primary inbox-new-alert" v-if="section === 'alerts' && !composing"
+                  @click="composing = true; created = null">＋ New alert</button>
+        </div>
+        <AlertComposer v-if="section === 'alerts' && composing" :config="config"
+                       @done="onCreated" @cancel="composing = false" />
+        <div class="notice inbox-created" v-if="section === 'alerts' && created && !composing">
+          <template v-if="created.count">
+            ✓ Created {{ created.count }} alert{{ created.count === 1 ? '' : 's' }} ({{ created.symbols.join(', ') }}).
+          </template>
+          <template v-else>No alerts were created.</template>
+          <template v-if="created.skipped.length">
+            Skipped {{ created.skipped.map(s => s.symbol + ' (' + s.reason + ')').join(', ') }}.
+          </template>
+          Edit, pause or delete them from each stock's 🔔 tab.
+          <button type="button" class="link-button" aria-label="Dismiss" @click="created = null">✕</button>
         </div>
         <div class="notice" v-if="!items[section].length">
           <template v-if="section === 'alerts'">
-            No alerts yet. Create one from a stock's <strong>🔔</strong> tab (Markets → Stocks → open a stock) —
-            when it triggers, it shows up here and the Inbox tab shows how many are unread.
+            Nothing has triggered yet. Use <strong>＋ New alert</strong> to set one up for any group of stocks
+            (or from a stock's <strong>🔔</strong> tab) — when it triggers, it shows up here and the Inbox tab shows
+            how many are unread.
           </template>
           <template v-else>
             No messages yet. Once groups are available, messages from your groups will show up here,

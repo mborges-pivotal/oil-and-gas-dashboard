@@ -3,7 +3,7 @@ import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, 
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_SHORT, autoCategory, buildSlices, assignSlots, shortSector } from '../utils/allocation.js';
 import { fetchWatchlists, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/watchlists.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
-import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
+import { formatUSD, formatPrice, formatCompactNumber, formatNumber, formatPct, formatPercentLevel, formatVolume, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 
@@ -115,7 +115,6 @@ export default {
     );
     const isPortfolioList = computed(() => props.portfolioOnly);
     // Default has no Portfolio tab; your own lists and the Portfolio list do.
-    const hasPortfolioTab = computed(() => !!activeList.value || isPortfolioList.value);
 
     // While a remembered custom list is still loading, show nothing rather
     // than flashing the default list's cards.
@@ -728,18 +727,18 @@ export default {
       const marketCap = price != null && s.sharesOutstanding ? price * s.sharesOutstanding : null;
       const divYield = price && s.dividendsTTM != null ? (s.dividendsTTM / price) * 100 : null;
       return [
-        { label: 'Open', value: formatUSD(q.open) },
-        { label: 'High', value: formatUSD(q.dayHigh) },
-        { label: 'Low', value: formatUSD(q.dayLow) },
+        { label: 'Open', value: formatPrice(q.open) },
+        { label: 'High', value: formatPrice(q.dayHigh) },
+        { label: 'Low', value: formatPrice(q.dayLow) },
         { label: 'Vol', value: formatVolume(q.volume) },
         { label: 'Avg Vol (3M)', fromStats: true, value: formatVolume(s.avgVolume) },
-        { label: 'Mkt Cap', fromStats: true, value: formatLargeUSD(marketCap) },
+        { label: 'Mkt Cap', fromStats: true, value: formatCompactNumber(marketCap) },
         { label: 'P/E (TTM)', fromStats: true, value: formatNumber(pe) },
-        { label: 'EPS (TTM)', fromStats: true, value: formatUSD(s.eps) },
+        { label: 'EPS (TTM)', fromStats: true, value: formatPrice(s.eps) },
         { label: 'Div Yield (TTM)', fromStats: true, value: formatPercentLevel(divYield) },
         { label: 'Beta (5Y)', fromStats: true, value: formatNumber(s.beta) },
-        { label: '52W High', value: formatUSD(q.fiftyTwoWeekHigh) },
-        { label: '52W Low', value: formatUSD(q.fiftyTwoWeekLow) },
+        { label: '52W High', value: formatPrice(q.fiftyTwoWeekHigh) },
+        { label: '52W Low', value: formatPrice(q.fiftyTwoWeekLow) },
       ];
     }
 
@@ -789,7 +788,7 @@ export default {
         loadStats(ticker);
       } else if (tab === 'news') loadNews(ticker);
       else if (tab === 'documents') loadDocs(ticker);
-      else if (tab === 'portfolio' && !positionFor(ticker)) startPositionEdit(ticker);
+      else if (tab === 'portfolio' && props.user && !positionFor(ticker)) startPositionEdit(ticker);
     }
 
     // ── Save stock news to Notes (signed in) ──
@@ -862,18 +861,6 @@ export default {
     // same holding shows in every watchlist that contains the ticker.
     const positionForms = reactive({}); // ticker → { quantity, avgCost, category, error } while editing
 
-    // Only the additional (DB) watchlists get a Portfolio tab, not Default.
-    // Switching to Default moves any open Portfolio tab back to the chart
-    // (a pre-render watcher, so the hidden tab never flashes).
-    watch(hasPortfolioTab, has => {
-      if (has) return;
-      for (const [ticker, d] of Object.entries(details)) {
-        if (d.tab === 'portfolio') {
-          d.tab = 'chart';
-          if (d.open) loadActiveTab(ticker);
-        }
-      }
-    });
 
     function positionFor(ticker) {
       const p = props.config.portfolio?.[ticker];
@@ -1038,8 +1025,8 @@ export default {
       const max = Math.max(hi, price, avg ?? hi);
       const at = v => ((v - min) / (max - min)) * 100;
       const pctOfRange = ((price - lo) / (hi - lo)) * 100;
-      const tip = `52-week range ${formatUSD(lo)} – ${formatUSD(hi)} · price ${formatUSD(price)} (${Math.round(pctOfRange)}% of range)`
-        + (avg != null ? ` · avg cost ${formatUSD(avg)}` : '');
+      const tip = `52-week range ${formatPrice(lo)} – ${formatPrice(hi)} · price ${formatPrice(price)} (${Math.round(pctOfRange)}% of range)`
+        + (avg != null ? ` · avg cost ${formatPrice(avg)}` : '');
       return {
         lo, hi, price, avg, tip,
         gain: avg != null ? price >= avg : null,
@@ -1047,13 +1034,10 @@ export default {
       };
     }
 
-    // Range-bar labels: exact under $10K, compact above ($57.7K) so a
+    // Range-bar labels: exact under 10K, compact above (57.7K) so a
     // bitcoin-sized price doesn't crowd the bar. Tooltips keep exact values.
-    const compactPriceFmt = new Intl.NumberFormat('en-US', {
-      style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1,
-    });
     function rangeLabel(v) {
-      return Math.abs(v) >= 10000 ? compactPriceFmt.format(v) : formatUSD(v);
+      return Math.abs(v) >= 10000 ? formatCompactNumber(v, 1) : formatPrice(v);
     }
 
     // Whole or fractional shares, without trailing zeros (100, 12.5, 0.0035).
@@ -1133,14 +1117,14 @@ export default {
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
-      isPortfolioList, hasPortfolioTab, portfolioTotals,
+      isPortfolioList, portfolioTotals,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
       alertsStore, alertsFor, activeAlertCount, alertForms, openAlertForm, closeAlertForm, submitAlert,
       toggleAlert, deleteAlertConfirm, alertStatus, describeAlert, alertPresets, cashBalance, cashForm, editCash, saveCash,
       allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
-      formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
+      formatUSD, formatPrice, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
       safeArticleUrl, onArticleClick,
     };
   },
@@ -1400,11 +1384,11 @@ export default {
               <template v-else>
                 <span class="stock-row-num">
                   <span class="stock-row-label">Last</span>
-                  <span>{{ formatUSD(stockQuotes[sym]?.price) }}</span>
+                  <span>{{ formatPrice(stockQuotes[sym]?.price) }}</span>
                 </span>
                 <span class="stock-row-num">
                   <span class="stock-row-label">Chg</span>
-                  <span :class="changeClass(stockQuotes[sym]?.change)">{{ formatUSD(stockQuotes[sym]?.change) }}</span>
+                  <span :class="changeClass(stockQuotes[sym]?.change)">{{ formatPrice(stockQuotes[sym]?.change, { signed: true }) }}</span>
                 </span>
                 <span class="stock-row-num">
                   <span class="stock-row-label">Chg %</span>
@@ -1416,7 +1400,7 @@ export default {
                 </span>
               </template>
               <span class="stock-row-sparkline" v-if="sparklines[sym]" v-html="sparklines[sym]"
-                    :title="stockQuotes[sym]?.previousClose != null ? 'Today · dashed line: previous close ' + formatUSD(stockQuotes[sym].previousClose) : null"></span>
+                    :title="stockQuotes[sym]?.previousClose != null ? 'Today · dashed line: previous close ' + formatPrice(stockQuotes[sym].previousClose) : null"></span>
               <span class="stock-row-sparkline" v-else></span>
             </div>
           </div>
@@ -1433,7 +1417,8 @@ export default {
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Charts</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'news' }" @click.stop="setDetailTab(sym, 'news')">News</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')"><span class="label-full">Documents</span><span class="label-short" aria-hidden="true">Docs</span></button>
-            <button class="filing-tab" v-if="hasPortfolioTab" :class="{ active: details[sym]?.tab === 'portfolio' }" @click.stop="setDetailTab(sym, 'portfolio')">Portfolio</button>
+            <!-- Portfolio on every list; entering a position needs an account (signed out: a sign-in message) -->
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'portfolio' }" @click.stop="setDetailTab(sym, 'portfolio')">Portfolio</button>
             <button class="filing-tab alerts-tab" :class="{ active: details[sym]?.tab === 'alerts' }" @click.stop="setDetailTab(sym, 'alerts')"
                     :aria-label="'Alerts' + (activeAlertCount(sym) ? ', ' + activeAlertCount(sym) + ' active' : '')" title="Alerts">
               <svg class="icon-bell" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
@@ -1465,7 +1450,7 @@ export default {
                 {{ intraday[sym].error }}
               </div>
               <div style="padding:12px 16px" v-else-if="intraday[sym].series.length">
-                <HistoryChart :data="intraday[sym].series" intraday :baseline="intraday[sym].previousClose" />
+                <HistoryChart :data="intraday[sym].series" intraday :baseline="intraday[sym].previousClose" :format-value="formatPrice" />
               </div>
               <div class="text-muted text-sm" style="padding:16px" v-else>
                 No intraday prices yet today.
@@ -1478,7 +1463,7 @@ export default {
               {{ details[sym].chart.error }}
             </div>
             <div style="padding:12px 16px" v-else-if="filteredChartData(sym).length">
-              <HistoryChart :data="filteredChartData(sym)" />
+              <HistoryChart :data="filteredChartData(sym)" :format-value="formatPrice" />
             </div>
             <div class="text-muted text-sm" style="padding:16px" v-else>
               No price history available for this range.
@@ -1537,7 +1522,12 @@ export default {
 
           <!-- Portfolio: your position (quantity × average cost) and G/L -->
           <div class="portfolio" v-else-if="details[sym]?.tab === 'portfolio'">
-            <form class="portfolio-form" v-if="positionForms[sym]" @submit.prevent="savePosition(sym)" novalidate>
+            <div class="notice" v-if="!user">
+              Track your {{ sym }} position — enter quantity and average cost to see its market value, total and
+              today's gain/loss, and add it to your Portfolio page with allocation charts.
+              <a href="#" @click.prevent="$emit('go-account')">Sign in</a> to track positions.
+            </div>
+            <form class="portfolio-form" v-else-if="positionForms[sym]" @submit.prevent="savePosition(sym)" novalidate>
               <p class="text-muted text-sm" v-if="!positionFor(sym)" style="margin:0 0 10px">
                 Enter your {{ sym }} holding to track its value and gain/loss.
               </p>
@@ -1548,7 +1538,7 @@ export default {
                          v-model="positionForms[sym].quantity" />
                 </label>
                 <label>
-                  <span>Average cost / share ($)</span>
+                  <span>Average cost / share</span>
                   <input type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 152.40"
                          v-model="positionForms[sym].avgCost" />
                 </label>
@@ -1567,7 +1557,7 @@ export default {
               </div>
             </form>
 
-            <template v-else-if="positionSummary(sym)">
+            <template v-else-if="user && positionSummary(sym)">
               <div class="portfolio-grid">
                 <div class="portfolio-stat">
                   <span class="portfolio-label">Category</span>
@@ -1581,7 +1571,7 @@ export default {
                 </div>
                 <div class="portfolio-stat">
                   <span class="portfolio-label">Avg cost</span>
-                  <span class="portfolio-value">{{ formatUSD(positionSummary(sym).avgCost) }}</span>
+                  <span class="portfolio-value">{{ formatPrice(positionSummary(sym).avgCost) }}</span>
                 </div>
                 <div class="portfolio-stat">
                   <span class="portfolio-label">Total cost</span>
@@ -1611,7 +1601,7 @@ export default {
                 </div>
               </div>
               <p class="text-muted text-sm portfolio-note">
-                Value at {{ positionSummary(sym).price != null ? formatUSD(positionSummary(sym).price) : 'the latest price' }} (delayed quote).
+                Value at a price of {{ positionSummary(sym).price != null ? formatPrice(positionSummary(sym).price) : 'the latest price' }} (delayed quote).
               </p>
               <div class="portfolio-actions">
                 <button type="button" @click="startPositionEdit(sym)">Edit position</button>

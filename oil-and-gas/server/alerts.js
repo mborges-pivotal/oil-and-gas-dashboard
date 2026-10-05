@@ -8,6 +8,9 @@
  *
  *   GET    /api/alerts                 → { alerts }
  *   POST   /api/alerts                 { symbol, kind, params, repeat?, note? } → 201 { alert, events }
+ *   POST   /api/alerts/bulk            { symbols, kind, params, repeat?, note? }
+ *                                     → 201 { alerts, skipped: [{ symbol, reason }], events }
+ *     (one alert per symbol — e.g. "down 3% today" for a whole watchlist)
  *   PUT    /api/alerts/:id             { kind?, params?, repeat?, note?, active? } → { alert, events }
  *     (a new, edited or re-armed alert is evaluated right away; `events` holds it if it fired)
  *   DELETE /api/alerts/:id             → 204
@@ -17,6 +20,7 @@
  *
  * Kinds and params:
  *   price     { direction: above|below, target, basis: fixed|percent, percent?, basePrice? }
+ *             (a percent alert saved without basePrice uses the stock's current price)
  *   daily     { direction: up|down|either, percent }          vs. previous close
  *   position  { direction: gain|loss, percent }               vs. the Portfolio avg cost
  *   high52    { within }   price at/within X% of the 52-week high (0 = at it)
@@ -29,6 +33,7 @@ const db = require('./db');
 const { dispatch, requireUser, readJsonBody, sendJson, HttpError } = require('./auth');
 
 const MAX_ALERTS = 200;
+const MAX_BULK = 50;
 const MAX_NOTE_LENGTH = 500;
 const TICKER_RE = /^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$/; // matches server/watchlists.js
 const KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume'];
@@ -59,8 +64,11 @@ function validateParams(kind, p) {
       const out = { direction: oneOf(p.direction, 'direction', ['above', 'below']), basis };
       if (basis === 'percent') {
         out.percent = num(p.percent, 'Percent', { min: -99, max: 1000 });
-        out.basePrice = num(p.basePrice, 'Base price', { gt: 0 });
-        out.target = Math.round(out.basePrice * (1 + out.percent / 100) * 10000) / 10000;
+        // No base price: filled in per stock from its current quote (withBasePrice).
+        if (p.basePrice != null) {
+          out.basePrice = num(p.basePrice, 'Base price', { gt: 0 });
+          out.target = percentTarget(out.basePrice, out.percent);
+        }
       } else {
         out.target = num(p.target, 'Target price', { gt: 0 });
       }
@@ -80,6 +88,18 @@ function validateParams(kind, p) {
   }
 }
 
+function percentTarget(base, percent) {
+  return Math.round(base * (1 + percent / 100) * 10000) / 10000;
+}
+
+// A percent price alert without a base price takes the stock's current one.
+async function withBasePrice(kind, params, symbol) {
+  if (kind !== 'price' || params.basis !== 'percent' || params.basePrice != null) return params;
+  const q = await getQuote(symbol);
+  if (!(q.price > 0)) throw new HttpError(400, `No current price for ${symbol}`);
+  return { ...params, basePrice: q.price, target: percentTarget(q.price, params.percent) };
+}
+
 function validateNote(note) {
   if (note == null) return '';
   if (typeof note !== 'string') throw new HttpError(400, 'Note must be text');
@@ -95,7 +115,8 @@ function parseId(raw) {
 }
 
 // ── Text ──────────────────────────────────────────────────────────────────
-const usd = v => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(v);
+// Stock prices are shown without a currency symbol, like the rest of the UI.
+const usd = v => new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v);
 const pct = v => `${Math.round(v * 100) / 100}%`;
 
 /** One-line description of an alert's condition (event bodies; the UI has its own). */
@@ -268,9 +289,55 @@ async function create(req, res) {
     note: validateNote(body.note),
   };
   if (db.countAlerts(userId) >= MAX_ALERTS) throw new HttpError(400, `You can have at most ${MAX_ALERTS} alerts`);
+  try {
+    alert.params = await withBasePrice(kind, alert.params, symbol);
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw new HttpError(502, `Couldn't get ${symbol}'s current price — try again, or use a fixed price`);
+  }
   const id = db.createAlert(userId, alert);
   const events = await runCheck(userId, [id]); // already met? fire now, not on the next refresh
   sendJson(res, 201, { alert: db.getAlert(userId, id), events });
+}
+
+// The same alert for several stocks. Stocks that can't take it — no current
+// price for a % target, or no Portfolio position for a gain/loss alert —
+// are skipped and reported rather than failing the whole request.
+async function createBulk(req, res) {
+  const userId = requireUser(req);
+  const body = await readJsonBody(req);
+  if (!Array.isArray(body.symbols) || !body.symbols.length) throw new HttpError(400, 'Pick at least one stock');
+  const symbols = [...new Set(body.symbols.map(s => (typeof s === 'string' ? s.trim().toUpperCase() : '')))];
+  const bad = symbols.find(s => !TICKER_RE.test(s));
+  if (bad !== undefined) throw new HttpError(400, `Invalid ticker symbol: ${String(bad).slice(0, 24)}`);
+  if (symbols.length > MAX_BULK) throw new HttpError(400, `Pick at most ${MAX_BULK} stocks at a time`);
+  const kind = oneOf(body.kind, 'kind', KINDS);
+  const params = validateParams(kind, body.params);
+  const repeat = oneOf(body.repeat ?? 'once', 'repeat', ['once', 'daily']);
+  const note = validateNote(body.note);
+  if (db.countAlerts(userId) + symbols.length > MAX_ALERTS) {
+    throw new HttpError(400, `That would pass the limit of ${MAX_ALERTS} alerts (you have ${db.countAlerts(userId)})`);
+  }
+
+  const portfolio = kind === 'position' ? (db.getProfile(userId)?.settings?.portfolio ?? {}) : {};
+  const skipped = [];
+  const ids = [];
+  for (const symbol of symbols) {
+    if (kind === 'position' && !(Number(portfolio[symbol]?.avgCost) > 0 && Number(portfolio[symbol]?.quantity) > 0)) {
+      skipped.push({ symbol, reason: 'no Portfolio position' });
+      continue;
+    }
+    let p;
+    try {
+      p = await withBasePrice(kind, params, symbol);
+    } catch {
+      skipped.push({ symbol, reason: 'no current price' });
+      continue;
+    }
+    ids.push(db.createAlert(userId, { symbol, kind, params: p, repeat, note }));
+  }
+  const events = ids.length ? await runCheck(userId, ids) : [];
+  sendJson(res, 201, { alerts: ids.map(id => db.getAlert(userId, id)), skipped, events });
 }
 
 async function update(req, res, id) {
@@ -333,6 +400,8 @@ async function handleAlertsApi(req, res, reqUrl) {
   if (path === '/api/alerts') {
     if (req.method === 'GET') handler = list;
     else if (req.method === 'POST') handler = create;
+  } else if (path === '/api/alerts/bulk') {
+    if (req.method === 'POST') handler = createBulk;
   } else if (path === '/api/alerts/check') {
     if (req.method === 'POST') handler = check;
   } else if (path === '/api/alerts/events') {

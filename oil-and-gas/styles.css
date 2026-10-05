@@ -1446,7 +1446,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-variant-numeric: tabular-nums;
 }
 /* Inbox: alerts / messages list */
-.inbox-list-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.inbox-list-head { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin-bottom: 8px; }
+.inbox-new-alert { padding: 5px 12px; }
+.inbox-created { position: relative; padding-right: 32px; }
+.inbox-created .link-button { position: absolute; top: 8px; right: 8px; padding: 0 4px; }
+.alert-composer { margin-bottom: 14px; }
+.alert-composer-section { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.alert-groups { margin-bottom: 2px; }
 .inbox-list { list-style: none; margin: 0; padding: 0; }
 .inbox-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; cursor: pointer; }
 .inbox-item.unread { border-left: 3px solid var(--accent); }

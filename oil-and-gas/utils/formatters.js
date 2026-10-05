@@ -12,6 +12,22 @@ export function formatUSD(value) {
 }
 
 /**
+ * A stock price or price change, without a currency symbol (164.01, 1,234.50).
+ * `signed` adds a + to positive values (+0.19) — for changes.
+ */
+export function formatPrice(value, { signed = false } = {}) {
+  if (value == null || isNaN(value)) return '—';
+  const formatted = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value);
+  return signed && value > 0 ? `+${formatted}` : formatted;
+}
+
+/** Large values without a currency symbol: 674.39B, 57.7K (market cap, crypto prices). */
+export function formatCompactNumber(value, maximumFractionDigits = 2) {
+  if (value == null || isNaN(value)) return '—';
+  return new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits }).format(value);
+}
+
+/**
  * Percent formatter with sign, 2 decimal places.
  */
 export function formatPct(value) {

@@ -66,6 +66,14 @@ export async function saveAlert(id, fields) {
   return alert;
 }
 
+/** Create one alert per symbol (Inbox → Alerts → New alert) → { alerts, skipped }. */
+export async function saveAlertsBulk(fields) {
+  const { alerts, skipped, events } = await api.createAlertsBulk(fields);
+  for (const a of alerts) replace(a);
+  addEvents(events);
+  return { alerts, skipped };
+}
+
 export async function setAlertActive(alert, active) {
   const res = await api.updateAlert(alert.id, { active });
   replace(res.alert);

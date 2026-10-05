@@ -14,6 +14,11 @@ export async function createAlert(alert) {
   return request('POST', '/api/alerts', alert);
 }
 
+/** The same alert for several stocks → { alerts, skipped: [{ symbol, reason }], events }. */
+export async function createAlertsBulk({ symbols, kind, params, repeat, note }) {
+  return request('POST', '/api/alerts/bulk', { symbols, kind, params, repeat, note });
+}
+
 /** Partial update — any of { kind + params, repeat, note, active } → { alert, events }. */
 export async function updateAlert(id, fields) {
   return request('PUT', `/api/alerts/${encodeURIComponent(id)}`, fields);

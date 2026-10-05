@@ -341,11 +341,12 @@ const App = {
 
     // Content tabs only — Settings and Sign In / Profile are pages reached
     // from the header's account menu (UserMenu).
-    // Portfolio only appears while you hold at least one position.
-    const hasPositions = computed(() =>
+    // Portfolio appears when signed in (positions need an account) and you
+    // hold at least one position or some cash.
+    const hasPositions = computed(() => !!user.value && (
       Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
       || Number(config.value?.portfolioCash) > 0
-    );
+    ));
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
@@ -391,7 +392,7 @@ const App = {
     }, { immediate: true });
     // A changed refresh interval (Settings) re-times the checks.
     watch(() => config.value?.ui?.refreshIntervalSeconds, () => { if (user.value) startAlertChecks(); });
-    // Last position removed (or signed out / reset) while on Portfolio.
+    // Last position removed, signed out, or reset while on Portfolio.
     watch(hasPositions, has => {
       if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
     });

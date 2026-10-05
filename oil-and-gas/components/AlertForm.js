@@ -1,13 +1,13 @@
-const { ref, computed, onMounted } = Vue;
+const { ref, computed, onMounted, watch } = Vue;
 import { ALERT_KINDS } from '../utils/alerts.js';
-import { formatUSD } from '../utils/formatters.js';
+import { formatPrice } from '../utils/formatters.js';
 
 /**
  * Create / edit one stock alert (stock card → 🔔 tab). `initial` is an
  * existing alert or a preset ({ kind, params, repeat?, note? }); `quote` is
  * the stock's current quote (price, 52-week range) and `avgCost` its
  * Portfolio average cost, if held — both used for prefills and the live
- * "= $172.21" helpers. Emits save({ kind, params, repeat, note }) and cancel.
+ * "= 172.21" helpers. Emits save({ kind, params, repeat, note }) and cancel.
  */
 export default {
   name: 'AlertForm',
@@ -16,11 +16,15 @@ export default {
     quote: Object,
     avgCost: { type: Number, default: null },
     initial: { type: Object, default: () => ({ kind: 'price', params: { direction: 'above', basis: 'percent', percent: 5 } }) },
+    // multi: the same alert for several stocks (Inbox → Alerts) — no single
+    // quote or position to work from; % price targets use each stock's own
+    // current price (the server fills it in), gain/loss applies to held ones.
+    multi: Boolean,
     submitLabel: { type: String, default: 'Save alert' },
     busy: Boolean,
     error: String,
   },
-  emits: ['save', 'cancel'],
+  emits: ['save', 'cancel', 'kind-change'],
   setup(props, { emit }) {
     const p0 = props.initial.params ?? {};
     const kind = ref(props.initial.kind ?? 'price');
@@ -31,7 +35,7 @@ export default {
 
     const price = computed(() => props.quote?.price ?? null);
 
-    // Price target: direction + either a $ value or a % from a base price.
+    // Price target: direction + either a fixed price or a % from a base price.
     const priceDir = ref(p0.direction === 'below' ? 'below' : 'above');
     const priceMode = ref(p0.basis === 'fixed' ? 'fixed' : 'percent');
     const priceValue = ref(p0.basis === 'fixed' ? String(p0.target ?? '') : String(Math.abs(p0.percent ?? 5)));
@@ -58,18 +62,25 @@ export default {
     const helper = computed(() => {
       switch (kind.value) {
         case 'price': {
+          if (priceMode.value === 'percent' && !basePrice.value) {
+            const v = n(priceValue.value);
+            if (!Number.isFinite(v)) return '';
+            return `${priceDir.value === 'above' ? '+' : '−'}${v}% from ${props.multi ? "each stock's" : 'the'} current price (set when you save)`;
+          }
+          if (priceMode.value === 'fixed' && props.multi) return 'The same target price for every selected stock — use % to scale it to each one.';
           if (priceTarget.value == null) return '';
-          if (priceMode.value === 'percent') return `= ${formatUSD(priceTarget.value)} (from ${formatUSD(basePrice.value)})`;
+          if (priceMode.value === 'percent') return `= ${formatPrice(priceTarget.value)} (from ${formatPrice(basePrice.value)})`;
           if (!price.value) return '';
           const d = ((priceTarget.value - price.value) / price.value) * 100;
-          return `${d >= 0 ? '+' : ''}${d.toFixed(1)}% from the current ${formatUSD(price.value)}`;
+          return `${d >= 0 ? '+' : ''}${d.toFixed(1)}% from the current ${formatPrice(price.value)}`;
         }
         case 'position': {
+          if (props.multi) return "Applies to the selected stocks you hold, vs. each one's average cost — the rest are skipped.";
           if (!props.avgCost) return '';
           const v = n(percent.value);
           if (!Number.isFinite(v)) return '';
           const at = props.avgCost * (1 + (posDir.value === 'gain' ? v : -v) / 100);
-          return `Triggers at ${formatUSD(at)} (your average cost is ${formatUSD(props.avgCost)})`;
+          return `Triggers at ${formatPrice(at)} (your average cost is ${formatPrice(props.avgCost)})`;
         }
         case 'high52':
         case 'low52': {
@@ -77,8 +88,8 @@ export default {
           if (!ref52) return '';
           const w = n(within.value) || 0;
           const at = kind.value === 'high52' ? ref52 * (1 - w / 100) : ref52 * (1 + w / 100);
-          return `52-week ${kind.value === 'high52' ? 'high' : 'low'} is ${formatUSD(ref52)}`
-            + (w ? ` — triggers ${kind.value === 'high52' ? 'at or above' : 'at or below'} ${formatUSD(at)}` : '');
+          return `52-week ${kind.value === 'high52' ? 'high' : 'low'} is ${formatPrice(ref52)}`
+            + (w ? ` — triggers ${kind.value === 'high52' ? 'at or above' : 'at or below'} ${formatPrice(at)}` : '');
         }
         default:
           return '';
@@ -96,9 +107,11 @@ export default {
           const v = n(priceValue.value);
           if (!(v > 0)) return fail(priceMode.value === 'fixed' ? 'Enter a target price above 0.' : 'Enter a percentage above 0.');
           if (priceMode.value === 'fixed') return { direction: priceDir.value, basis: 'fixed', target: v };
-          if (!basePrice.value) return fail("The current price hasn't loaded yet — try again in a moment, or use a $ value.");
           if (priceDir.value === 'below' && v >= 100) return fail('A drop must be less than 100%.');
-          return { direction: priceDir.value, basis: 'percent', percent: priceDir.value === 'above' ? v : -v, basePrice: basePrice.value };
+          const out = { direction: priceDir.value, basis: 'percent', percent: priceDir.value === 'above' ? v : -v };
+          // Without a known price (Inbox, or quote still loading) the server uses the current one.
+          if (basePrice.value) out.basePrice = basePrice.value;
+          return out;
         }
         case 'daily': {
           const v = n(percent.value);
@@ -106,7 +119,7 @@ export default {
           return { direction: dailyDir.value, percent: v };
         }
         case 'position': {
-          if (!props.avgCost) return fail(`Add your ${props.symbol} position (quantity and average cost) first.`);
+          if (!props.avgCost && !props.multi) return fail(`Add your ${props.symbol} position (quantity and average cost) first.`);
           const v = n(percent.value);
           if (!(v > 0)) return fail('Enter a percentage above 0.');
           return { direction: posDir.value, percent: v };
@@ -132,12 +145,22 @@ export default {
       if (params) emit('save', { kind: kind.value, params, repeat: repeat.value, note: note.value.trim() });
     }
 
-    onMounted(() => firstInput.value?.focus());
+    // Switching type swaps in that type's usual threshold, unless you've
+    // typed your own (daily moves start at 3%, position gain/loss at 20%).
+    const DEFAULT_PERCENT = { daily: '3', position: '20' };
+    watch(kind, (k, prev) => {
+      emit('kind-change', k);
+      if (k in DEFAULT_PERCENT && (!(prev in DEFAULT_PERCENT) ? percent.value === DEFAULT_PERCENT.daily || percent.value === DEFAULT_PERCENT.position : percent.value === DEFAULT_PERCENT[prev])) {
+        percent.value = DEFAULT_PERCENT[k];
+      }
+    }, { immediate: true });
+    // Under the Inbox stock picker, focus stays with the picker.
+    onMounted(() => { if (!props.multi) firstInput.value?.focus(); });
 
     return {
       ALERT_KINDS, kind, repeat, note, localError, firstInput, price,
       priceDir, priceMode, priceValue, dailyDir, posDir, percent, within, multiple,
-      helper, submit, formatUSD,
+      helper, submit, formatPrice,
     };
   },
   template: `
@@ -145,8 +168,8 @@ export default {
       <label class="alert-field">
         <span class="alert-field-label">Alert when</span>
         <select v-model="kind">
-          <option v-for="k in ALERT_KINDS" :key="k.id" :value="k.id" :disabled="k.id === 'position' && !avgCost">
-            {{ k.label }}{{ k.id === 'position' && !avgCost ? ' (needs a position)' : '' }}
+          <option v-for="k in ALERT_KINDS" :key="k.id" :value="k.id" :disabled="k.id === 'position' && !avgCost && !multi">
+            {{ k.label }}{{ k.id === 'position' && !avgCost && !multi ? ' (needs a position)' : '' }}
           </option>
         </select>
       </label>
@@ -158,14 +181,13 @@ export default {
           <button type="button" class="range-btn" :class="{ active: priceDir === 'below' }" @click="priceDir = 'below'">Below</button>
         </div>
         <div class="alert-amount">
-          <span class="alert-unit" v-if="priceMode === 'fixed'">$</span>
           <input ref="firstInput" type="number" inputmode="decimal" min="0" step="any" v-model="priceValue"
-                 :aria-label="priceMode === 'fixed' ? 'Target price in dollars' : 'Percent from current price'" />
+                 :aria-label="priceMode === 'fixed' ? 'Target price' : 'Percent from current price'" />
           <span class="alert-unit" v-if="priceMode === 'percent'">%</span>
         </div>
         <div class="range-btn-group alert-seg" role="group" aria-label="Value type">
           <button type="button" class="range-btn" :class="{ active: priceMode === 'fixed' }" title="A fixed price"
-                  @click="priceMode = 'fixed'; priceValue = price ? String(Math.round(price * (priceDir === 'above' ? 1.05 : 0.95) * 100) / 100) : ''">$</button>
+                  @click="priceMode = 'fixed'; priceValue = price ? String(Math.round(price * (priceDir === 'above' ? 1.05 : 0.95) * 100) / 100) : ''">Price</button>
           <button type="button" class="range-btn" :class="{ active: priceMode === 'percent' }" title="Percent from the current price"
                   @click="priceMode = 'percent'; priceValue = '5'">%</button>
         </div>
