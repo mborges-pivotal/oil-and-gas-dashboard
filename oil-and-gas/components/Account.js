@@ -1,19 +1,29 @@
 const { ref, reactive, computed, watch } = Vue;
 import { login, register, logout, updateProfile, changePassword } from '../services/auth.js';
 import { formatDate } from '../utils/formatters.js';
+import LabelsManager from './LabelsManager.js';
+
+// Signed-in sections, shown as a side navigation (a tab row on phones).
+const SECTIONS = [
+  { id: 'profile', label: 'Profile', icon: '👤' },
+  { id: 'labels',  label: 'Labels',  icon: '🏷' },
+];
 
 const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
 
 /**
- * Account tab: sign-in / registration when signed out; profile (display
- * name, password, sign-out) when signed in. Dashboard settings themselves
- * are edited in the Settings tab — they're just stored on this profile
- * once signed in.
+ * Account tab: sign-in / registration when signed out. Signed in, a side
+ * navigation of profile sections: Profile (display name, password,
+ * sign-out) and Labels (the labels used by Inbox → Notes). Dashboard
+ * settings themselves are edited in the Settings tab — they're just stored
+ * on this profile once signed in.
  */
 export default {
   name: 'Account',
-  props: ['user'],
-  emits: ['signed-in', 'signed-out', 'updated'],
+  components: { LabelsManager },
+  // section: which signed-in section to show (v-model:section from app.js).
+  props: { user: Object, section: { type: String, default: 'profile' } },
+  emits: ['signed-in', 'signed-out', 'updated', 'update:section'],
   setup(props, { emit }) {
     // ── Signed out: sign in / create account ────────────────────────────
     const mode = ref('login'); // 'login' | 'register'
@@ -110,7 +120,9 @@ export default {
       }
     }
 
+    const sections = SECTIONS;
     return {
+      sections,
       mode, form, authError, authBusy, switchMode, submitAuth,
       displayName, displayNameChanged, profileStatus, profileBusy, saveDisplayName,
       pw, pwStatus, pwBusy, submitPasswordChange,
@@ -118,7 +130,7 @@ export default {
     };
   },
   template: `
-    <div class="account-page">
+    <div class="account-page" :class="{ 'signed-in': user }">
       <!-- Signed out -->
       <div v-if="!user" class="card account-card">
         <div class="subtab-bar">
@@ -159,10 +171,26 @@ export default {
         </form>
       </div>
 
-      <!-- Signed in -->
-      <template v-else>
+      <!-- Signed in: side navigation of profile sections -->
+      <div v-else class="profile-layout">
+        <nav class="profile-nav" aria-label="Profile sections">
+          <div class="profile-nav-user">
+            <div class="profile-nav-name">{{ user.displayName || 'Your profile' }}</div>
+            <div class="text-muted text-sm profile-nav-email">{{ user.email }}</div>
+          </div>
+          <button v-for="s in sections" :key="s.id" type="button" class="profile-nav-item"
+                  :class="{ active: section === s.id }" :aria-current="section === s.id ? 'page' : null"
+                  @click="$emit('update:section', s.id)">
+            <span class="profile-nav-icon" aria-hidden="true">{{ s.icon }}</span>{{ s.label }}
+          </button>
+        </nav>
+
+        <div class="profile-content">
+        <LabelsManager v-if="section === 'labels'" />
+
+        <template v-else>
         <div class="flex-between mb-16">
-          <div class="section-header" style="margin-bottom:0">Your Profile</div>
+          <div class="section-header" style="margin-bottom:0">Profile</div>
           <button class="danger" @click="signOut">Sign Out</button>
         </div>
 
@@ -211,7 +239,9 @@ export default {
             <button type="submit" class="primary" :disabled="pwBusy">{{ pwBusy ? 'Saving…' : 'Change Password' }}</button>
           </form>
         </div>
-      </template>
+        </template>
+        </div>
+      </div>
     </div>
   `,
 };

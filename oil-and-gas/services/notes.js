@@ -28,6 +28,16 @@ export async function deleteNote(id) {
   await request('DELETE', `/api/notes/${encodeURIComponent(id)}`);
 }
 
+/** fields: { name, description?, color? } → { label, labels } */
+export async function createLabel(fields) {
+  return request('POST', '/api/notes/labels', fields);
+}
+
+/** Partial update — any of { name, description, color } → { labels } */
+export async function updateLabel(id, fields) {
+  return request('PUT', `/api/notes/labels/${encodeURIComponent(id)}`, fields);
+}
+
 export async function deleteLabel(id) {
   await request('DELETE', `/api/notes/labels/${encodeURIComponent(id)}`);
 }

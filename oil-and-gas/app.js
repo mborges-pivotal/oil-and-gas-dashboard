@@ -362,6 +362,13 @@ const App = {
       if (id === 'inbox' && activeTab.value !== 'inbox') inboxSection.value = defaultInboxSection();
       activeTab.value = id;
     }
+    // Account page section (Profile / Labels); "Manage labels" in Notes opens Labels.
+    const accountSection = ref('profile');
+    function openLabels() {
+      accountSection.value = 'labels';
+      activeTab.value = 'account';
+    }
+
     function openNotes() {
       inboxSection.value = 'notes';
       activeTab.value = 'inbox';
@@ -545,7 +552,7 @@ const App = {
 
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
-      inboxSection, selectTab, openNotes,
+      inboxSection, selectTab, openNotes, accountSection, openLabels,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
       themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onSetCash,
@@ -585,7 +592,7 @@ const App = {
           :theme-options="themeOptions"
           :theme-preference="themePreference"
           :theme-disabled="!configLoaded"
-          @navigate="activeTab = $event"
+          @navigate="accountSection = 'profile'; activeTab = $event"
           @set-theme="setTheme"
           @sign-out="onMenuSignOut"
         />
@@ -605,7 +612,7 @@ const App = {
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
             @set-position="onSetPosition" @set-cash="onSetCash" @go-notes="openNotes" />
-          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" />
+          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"
@@ -614,7 +621,7 @@ const App = {
             @go-account="activeTab = 'account'"
           />
 
-          <Account v-if="activeTab === 'account'" :user="user"
+          <Account v-if="activeTab === 'account'" :user="user" v-model:section="accountSection"
             @signed-in="onSignedIn"
             @signed-out="onSignedOut"
             @updated="onUserUpdated"

@@ -87,11 +87,14 @@ db.exec(`
   );
 
   -- A user's labels, reusable across notes (kept even when unused, so the
-  -- picker still offers them; deleted explicitly from the Notes tab).
+  -- picker still offers them; managed in Profile → Labels). color is a
+  -- #rrggbb chip color; description an optional one-liner.
   CREATE TABLE IF NOT EXISTS note_labels (
-    id      INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name    TEXT NOT NULL,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    color       TEXT NOT NULL DEFAULT '',
     UNIQUE (user_id, name COLLATE NOCASE)
   );
   -- Stock alerts. kind: price | daily | position | high52 | low52 | volume;
@@ -178,6 +181,24 @@ function migrateNotesTable() {
 }
 migrateNotesTable();
 
+// Label colors handed out in turn to new labels (and to labels created
+// before colors existed). Mirrors utils/labelColors.js PRESET_COLORS.
+const LABEL_PALETTE = [
+  '#d73a4a', '#f9a03f', '#fbca04', '#0e8a16', '#008672', '#1d76db',
+  '#5319e7', '#d876e3', '#f143ab', '#e99695', '#0075ca', '#6e7781',
+];
+
+// One-time migration: labels gained description + color columns.
+function migrateLabelColumns() {
+  const cols = db.prepare('PRAGMA table_info(note_labels)').all().map(c => c.name);
+  if (!cols.includes('description')) db.exec("ALTER TABLE note_labels ADD COLUMN description TEXT NOT NULL DEFAULT ''");
+  if (!cols.includes('color')) db.exec("ALTER TABLE note_labels ADD COLUMN color TEXT NOT NULL DEFAULT ''");
+  const uncolored = db.prepare("SELECT id FROM note_labels WHERE color = ''").all();
+  const set = db.prepare('UPDATE note_labels SET color = ? WHERE id = ?');
+  for (const { id } of uncolored) set.run(LABEL_PALETTE[id % LABEL_PALETTE.length], id);
+}
+migrateLabelColumns();
+
 const stmts = {
   // Alerts — scoped by user_id like everything else.
   alerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? ORDER BY symbol, created_at, id'),
@@ -258,13 +279,15 @@ const stmts = {
   updateNoteBody: db.prepare(`UPDATE notes SET body = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
   touchNote: db.prepare(`UPDATE notes SET updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
   deleteNote: db.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?'),
-  labels: db.prepare('SELECT id, name FROM note_labels WHERE user_id = ? ORDER BY name COLLATE NOCASE'),
-  labelByName: db.prepare('SELECT id, name FROM note_labels WHERE user_id = ? AND name = ? COLLATE NOCASE'),
+  labels: db.prepare('SELECT id, name, description, color FROM note_labels WHERE user_id = ? ORDER BY name COLLATE NOCASE'),
+  labelById: db.prepare('SELECT id, name, description, color FROM note_labels WHERE id = ? AND user_id = ?'),
+  labelByName: db.prepare('SELECT id, name, description, color FROM note_labels WHERE user_id = ? AND name = ? COLLATE NOCASE'),
   countLabels: db.prepare('SELECT COUNT(*) AS n FROM note_labels WHERE user_id = ?'),
-  insertLabel: db.prepare('INSERT INTO note_labels (user_id, name) VALUES (?, ?)'),
+  insertLabel: db.prepare('INSERT INTO note_labels (user_id, name, description, color) VALUES (?, ?, ?, ?)'),
   deleteLabel: db.prepare('DELETE FROM note_labels WHERE id = ? AND user_id = ?'),
+  updateLabel: db.prepare('UPDATE note_labels SET name = ?, description = ?, color = ? WHERE id = ? AND user_id = ?'),
   noteLabels: db.prepare(`
-    SELECT l.id, l.name, nl.note_id FROM note_label_links nl
+    SELECT l.id, l.name, l.color, nl.note_id FROM note_label_links nl
     JOIN note_labels l ON l.id = nl.label_id
     WHERE l.user_id = ? ORDER BY l.name COLLATE NOCASE
   `),
@@ -348,16 +371,21 @@ function labelsByNote(userId) {
   const map = new Map();
   for (const r of stmts.noteLabels.all(userId)) {
     if (!map.has(r.note_id)) map.set(r.note_id, []);
-    map.get(r.note_id).push({ id: r.id, name: r.name });
+    map.get(r.note_id).push({ id: r.id, name: r.name, color: r.color });
   }
   return map;
 }
 
 // Label names → ids, creating missing ones (case-insensitive match).
+// The next palette color for a user's new label (cycles through the palette).
+function nextLabelColor(userId) {
+  return LABEL_PALETTE[stmts.countLabels.get(userId).n % LABEL_PALETTE.length];
+}
+
 function ensureLabels(userId, names) {
   return names.map(name => {
     const existing = stmts.labelByName.get(userId, name);
-    return existing ? existing.id : Number(stmts.insertLabel.run(userId, name).lastInsertRowid);
+    return existing ? existing.id : Number(stmts.insertLabel.run(userId, name, '', nextLabelColor(userId)).lastInsertRowid);
   });
 }
 
@@ -463,6 +491,12 @@ module.exports = {
   }),
   deleteNote: (userId, id) => stmts.deleteNote.run(id, userId).changes > 0,
   deleteLabel: (userId, id) => stmts.deleteLabel.run(id, userId).changes > 0,
+  createLabel: (userId, { name, description = '', color }) =>
+    Number(stmts.insertLabel.run(userId, name, description, color || nextLabelColor(userId)).lastInsertRowid),
+  getLabel: (userId, id) => stmts.labelById.get(id, userId) ?? null,
+  updateLabel: (userId, id, { name, description, color }) =>
+    stmts.updateLabel.run(name, description, color, id, userId).changes > 0,
+  findLabel: (userId, name) => stmts.labelByName.get(userId, name) ?? null,
 
   listAlerts: (userId) => stmts.alerts.all(userId).map(toAlert),
   listActiveAlerts: (userId) => stmts.activeAlerts.all(userId).map(toAlert),

@@ -19,7 +19,7 @@ export default {
   name: 'Inbox',
   components: { Notes, AlertComposer },
   props: { config: Object, section: { type: String, default: 'notes' } },
-  emits: ['update:section'],
+  emits: ['update:section', 'manage-labels'],
   setup() {
     const counts = computed(() => ({ notes: 0, alerts: unreadAlerts(), messages: unreadMessages() }));
     const items = computed(() => ({ alerts: inboxStore.alerts, messages: inboxStore.messages }));
@@ -44,7 +44,7 @@ export default {
         </button>
       </div>
 
-      <Notes v-if="section === 'notes'" :config="config" embedded />
+      <Notes v-if="section === 'notes'" :config="config" embedded @manage-labels="$emit('manage-labels')" />
 
       <template v-else>
         <div class="inbox-list-head" v-if="counts[section] || section === 'alerts'">

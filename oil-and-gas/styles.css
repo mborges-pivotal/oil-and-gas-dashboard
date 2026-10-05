@@ -1065,6 +1065,97 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
    Account (sign in / register / profile)
    ============================================================ */
 .account-page { max-width: 480px; margin: 0 auto; }
+.account-page.signed-in { max-width: 860px; }
+/* Signed-in profile: side navigation + section content */
+.profile-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
+.profile-nav { position: sticky; top: 68px; display: flex; flex-direction: column; gap: 2px; }
+.profile-nav-user { padding: 4px 10px 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); min-width: 0; }
+.profile-nav-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-nav-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: left;
+}
+.profile-nav-item:hover { background: var(--surface-2); color: var(--text); }
+.profile-nav-item.active { background: var(--surface-2); color: var(--accent); font-weight: 600; }
+.profile-nav-icon { width: 18px; text-align: center; }
+.profile-content { min-width: 0; }
+/* Phones: the side nav becomes a tab row above the section. */
+@media (max-width: 700px) {
+  .profile-layout { grid-template-columns: 1fr; gap: 14px; }
+  .profile-nav { position: static; flex-direction: row; gap: 4px; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .profile-nav-user { display: none; }
+  .profile-nav-item { width: auto; flex: none; border-radius: 0; border-bottom: 2px solid transparent; padding: 10px 12px; }
+  .profile-nav-item.active { background: transparent; border-bottom-color: var(--accent); }
+}
+/* Profile → Labels */
+/* Label color dot (filters, note form) */
+.label-dot { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 50%; vertical-align: 0; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12); }
+.note-chip.selected .label-dot { box-shadow: 0 0 0 1.5px #fff; }
+
+/* Modal dialog (label editor) */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 10vh 16px 16px;
+  overflow-y: auto;
+}
+.modal {
+  width: min(460px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.modal-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.modal-close { border: none; background: transparent; color: var(--text-muted); padding: 4px 6px; font-size: 14px; }
+.modal-close:hover { color: var(--text); background: var(--surface-2); }
+.modal-body { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.modal-field { display: flex; flex-direction: column; gap: 6px; margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+.modal-field input, .modal-field textarea { width: 100%; font-weight: 400; }
+.modal-field textarea { resize: vertical; min-height: 72px; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 0 16px 16px; }
+.modal-kbd { margin-left: 8px; padding: 0 5px; border-radius: 4px; background: rgba(255, 255, 255, 0.2); font-family: var(--font); font-size: 11px; }
+.label-preview { display: flex; justify-content: center; align-items: center; min-height: 56px; border-radius: 8px; background: var(--surface-2); }
+.label-chip-lg { padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; max-width: 90%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.label-color-row { display: flex; align-items: center; gap: 8px; }
+.label-color-cycle { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 32px; padding: 0; border: none; border-radius: 6px; }
+.label-color-cycle:hover { filter: brightness(1.08); }
+.label-color-input { width: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.label-color-input.valid { border-color: var(--positive); }
+.label-color-input.invalid { border-color: var(--negative); }
+
+.labels-head { gap: 12px; }
+.labels-head button { padding: 5px 12px; }
+.labels-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.labels-description { font-size: 13px; overflow-wrap: anywhere; }
+.labels-add { display: flex; gap: 8px; }
+.labels-add input { flex: 1; min-width: 0; }
+.labels-list { list-style: none; margin: 14px 0 0; padding: 0; }
+.labels-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 9px 0; border-top: 1px solid var(--border); }
+.labels-name { font-size: 12px; }
+.labels-usage { flex: 1; }
+.labels-actions { display: flex; gap: 14px; }
+.labels-actions .link-button { padding: 0; }
+.labels-rename { display: flex; gap: 8px; flex: 1; }
+.labels-rename input { flex: 1; min-width: 0; }
+.labels-row-error { flex-basis: 100%; margin: 4px 0 0; }
+.notes-manage-labels { padding: 0 4px 0 0; font-size: 12px; }
 .account-card { padding: 20px; }
 .account-form { display: flex; flex-direction: column; gap: 14px; }
 .account-form input { width: 100%; }

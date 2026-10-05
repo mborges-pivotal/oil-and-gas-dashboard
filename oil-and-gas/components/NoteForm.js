@@ -52,6 +52,8 @@ export default {
       return names;
     });
     const atLimit = computed(() => selected.value.length >= MAX_LABELS);
+    // Existing labels' colors (new, unsaved ones get theirs when saved).
+    const colorOf = name => props.labels.find(l => same(l.name, name))?.color ?? null;
 
     function toggle(name) {
       if (isSelected(name)) selected.value = selected.value.filter(s => !same(s, name));
@@ -137,7 +139,7 @@ export default {
     return {
       id, selected, note, newLabel, symbols, newSymbol, link, localError, noteInput, chips, atLimit,
       MAX_LABELS, MAX_LABEL_LENGTH, MAX_SYMBOLS, symbolSuggestions,
-      isSelected, toggle, addNewLabel, onLabelKeydown, addSymbol, removeSymbol, onSymbolKeydown, submit,
+      isSelected, toggle, addNewLabel, onLabelKeydown, addSymbol, removeSymbol, onSymbolKeydown, submit, colorOf,
     };
   },
   template: `
@@ -148,7 +150,7 @@ export default {
           <button v-for="name in chips" :key="name" type="button" class="note-chip"
                   :class="{ selected: isSelected(name) }" :aria-pressed="isSelected(name)"
                   :disabled="!isSelected(name) && atLimit" @click="toggle(name)">
-            <span aria-hidden="true">{{ isSelected(name) ? '✓ ' : '' }}</span>{{ name }}
+            <span aria-hidden="true">{{ isSelected(name) ? '✓ ' : '' }}</span><span class="label-dot" v-if="colorOf(name)" :style="{ background: colorOf(name) }" aria-hidden="true"></span>{{ name }}
           </button>
           <input class="note-new-label" v-model="newLabel" :maxlength="MAX_LABEL_LENGTH"
                  :placeholder="atLimit ? 'Max ' + MAX_LABELS + ' labels' : (chips.length ? '+ New label' : 'Add a label, press Enter')"

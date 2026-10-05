@@ -67,6 +67,23 @@ export async function removeNote(id) {
   notesStore.notes = notesStore.notes.filter(n => n.id !== id);
 }
 
+/** fields: { name, description?, color? } */
+export async function addLabel(fields) {
+  const res = await api.createLabel(fields);
+  notesStore.labels = res.labels;
+  return res.label;
+}
+
+/** Update a label's name / description / color — carried to every note that has it. */
+export async function updateLabel(id, fields) {
+  const res = await api.updateLabel(id, fields);
+  notesStore.labels = res.labels;
+  const updated = res.labels.find(l => l.id === id);
+  for (const n of notesStore.notes) {
+    for (const l of n.labels) if (l.id === id) Object.assign(l, { name: updated.name, color: updated.color });
+  }
+}
+
 export async function removeLabel(id) {
   await api.deleteLabel(id);
   notesStore.labels = notesStore.labels.filter(l => l.id !== id);

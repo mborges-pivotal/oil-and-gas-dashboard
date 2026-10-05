@@ -3,6 +3,7 @@ import NoteForm from './NoteForm.js';
 import { notesStore, loadNotes, addManualNote, editNote, removeNote, removeLabel } from '../utils/notesStore.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { formatDate, formatRelativeTime } from '../utils/formatters.js';
+import { labelChipStyle } from '../utils/labelColors.js';
 
 /**
  * Notes tab (signed in): news articles saved from a stock's News tab (each
@@ -15,6 +16,7 @@ export default {
   components: { NoteForm },
   // embedded: shown as the Inbox's Notes sub-tab — the page title comes from Inbox.
   props: { config: Object, embedded: Boolean },
+  emits: ['manage-labels'],
   setup(props) {
     const symbolFilter = ref('');      // '' = all stocks
     const labelFilter = ref([]);       // label ids; a note matches if it has any
@@ -120,7 +122,7 @@ export default {
       knownSymbols, creating, saveNew, linkHost,
       symbols, labelCounts, filtered, filtering, toggleLabel, clearFilters,
       saveEdit, deleteNoteConfirm, deleteLabelConfirm,
-      safeArticleUrl, onArticleClick, formatDate, formatRelativeTime,
+      safeArticleUrl, onArticleClick, formatDate, formatRelativeTime, labelChipStyle,
     };
   },
   template: `
@@ -170,10 +172,11 @@ export default {
           <button type="button" class="link-button" v-if="filtering" @click="clearFilters">Clear filters</button>
         </div>
         <div class="note-chips notes-label-filter" v-if="notesStore.labels.length" role="group" aria-label="Filter by label">
+          <button type="button" class="link-button notes-manage-labels" @click="$emit('manage-labels')">Manage labels</button>
           <span class="note-chip-group" v-for="l in notesStore.labels" :key="l.id">
             <button type="button" class="note-chip" :class="{ selected: labelFilter.includes(l.id) }"
-                    :aria-pressed="labelFilter.includes(l.id)" @click="toggleLabel(l.id)">
-              {{ l.name }} <span class="note-chip-count">{{ labelCounts.get(l.id) }}</span>
+                    :aria-pressed="labelFilter.includes(l.id)" :title="l.description || null" @click="toggleLabel(l.id)">
+              <span class="label-dot" :style="{ background: l.color }" aria-hidden="true"></span>{{ l.name }} <span class="note-chip-count">{{ labelCounts.get(l.id) }}</span>
             </button>
             <button type="button" class="note-chip-remove" :aria-label="'Delete label ' + l.name"
                     :title="'Delete label ' + l.name" @click="deleteLabelConfirm(l)">✕</button>
@@ -211,7 +214,7 @@ export default {
                 🔗 {{ linkHost(n.link) }}
               </a>
               <div class="note-labels" v-if="n.labels.length">
-                <span class="note-label" v-for="l in n.labels" :key="l.id">{{ l.name }}</span>
+                <span class="note-label" v-for="l in n.labels" :key="l.id" :style="labelChipStyle(l)">{{ l.name }}</span>
               </div>
               <div class="note-actions">
                 <button type="button" class="link-button" @click="editing[n.id] = { busy: false, error: null }">Edit</button>

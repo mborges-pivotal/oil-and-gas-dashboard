@@ -11,6 +11,9 @@
  *   PUT    /api/notes/:id             { note?, labels? } — plus { symbols?, link? } for manual notes
  *                                     → { note, labels }
  *   DELETE /api/notes/:id             → 204
+ *   POST   /api/notes/labels          { name, description?, color? } → 201 { label, labels }
+ *   PUT    /api/notes/labels/:id      { name?, description?, color? } → { labels }   (applies to every note)
+ *   (color is #rrggbb; a new label without one gets the next palette color)
  *   DELETE /api/notes/labels/:id      → 204   (removes the label from every note)
  *
  * `labels` in a request is an array of label *names*; missing ones are
@@ -25,6 +28,8 @@ const MAX_LABELS = 100;
 const MAX_LABELS_PER_NOTE = 10;
 const MAX_LABEL_LENGTH = 30;
 const MAX_NOTE_LENGTH = 5000;
+const MAX_LABEL_DESCRIPTION = 200;
+const HEX_COLOR_RE = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
 const MAX_SYMBOLS_PER_NOTE = 10;
 const TICKER_RE = /^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$/; // matches server/watchlists.js
 
@@ -156,6 +161,52 @@ function remove(req, res, id) {
   sendJson(res, 204);
 }
 
+function labelName(value) {
+  return text(value, 'Label', MAX_LABEL_LENGTH, { required: true }).replace(/\s+/g, ' ');
+}
+
+// '#abc' / 'ABCDEF' / '#a1b2c3' → '#aabbcc' form, lowercase.
+function labelColor(value) {
+  if (value == null || value === '') return '';
+  if (typeof value !== 'string' || !HEX_COLOR_RE.test(value.trim())) {
+    throw new HttpError(400, 'Color must be a hex code like #f143ab');
+  }
+  let hex = value.trim().replace('#', '').toLowerCase();
+  if (hex.length === 3) hex = [...hex].map(c => c + c).join('');
+  return `#${hex}`;
+}
+
+async function createLabel(req, res) {
+  const userId = requireUser(req);
+  const body = await readJsonBody(req);
+  const name = labelName(body.name);
+  const description = text(body.description, 'Description', MAX_LABEL_DESCRIPTION);
+  const color = labelColor(body.color);
+  const existing = db.findLabel(userId, name);
+  if (existing) throw new HttpError(409, `You already have a label named "${existing.name}"`);
+  if (db.countLabels(userId) >= MAX_LABELS) throw new HttpError(400, `You can have at most ${MAX_LABELS} labels`);
+  const id = db.createLabel(userId, { name, description, color });
+  sendJson(res, 201, { label: db.getLabel(userId, id), labels: db.listLabels(userId) });
+}
+
+async function updateLabel(req, res, id) {
+  const userId = requireUser(req);
+  const body = await readJsonBody(req);
+  const current = db.getLabel(userId, id);
+  if (!current) throw new HttpError(404, 'Label not found');
+  const next = {
+    name: 'name' in body ? labelName(body.name) : current.name,
+    description: 'description' in body ? text(body.description, 'Description', MAX_LABEL_DESCRIPTION) : current.description,
+    color: 'color' in body ? (labelColor(body.color) || current.color) : current.color,
+  };
+  const clash = db.findLabel(userId, next.name);
+  // Renaming onto another label's name would silently merge them — refuse.
+  // (Changing only the capitalization of the same label is fine.)
+  if (clash && clash.id !== id) throw new HttpError(409, `You already have a label named "${clash.name}"`);
+  db.updateLabel(userId, id, next);
+  sendJson(res, 200, { labels: db.listLabels(userId) });
+}
+
 function removeLabel(req, res, id) {
   if (!db.deleteLabel(requireUser(req), id)) throw new HttpError(404, 'Label not found');
   sendJson(res, 204);
@@ -168,8 +219,11 @@ async function handleNotesApi(req, res, reqUrl) {
   if (path === '/api/notes') {
     if (req.method === 'GET') handler = list;
     else if (req.method === 'POST') handler = create;
+  } else if (path === '/api/notes/labels') {
+    if (req.method === 'POST') handler = createLabel;
   } else if ((m = path.match(/^\/api\/notes\/labels\/([^/]+)$/))) {
     if (req.method === 'DELETE') handler = (rq, rs) => removeLabel(rq, rs, parseId(m[1]));
+    else if (req.method === 'PUT') handler = (rq, rs) => updateLabel(rq, rs, parseId(m[1]));
   } else if ((m = path.match(/^\/api\/notes\/([^/]+)$/))) {
     if (req.method === 'PUT') handler = (rq, rs) => update(rq, rs, parseId(m[1]));
     else if (req.method === 'DELETE') handler = (rq, rs) => remove(rq, rs, parseId(m[1]));
