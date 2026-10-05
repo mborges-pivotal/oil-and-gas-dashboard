@@ -14,6 +14,7 @@ import HistoryChart from './HistoryChart.js';
 import AllocationChart from './AllocationChart.js';
 import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
+import TopMovers from './TopMovers.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets } from '../utils/alerts.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
@@ -81,15 +82,14 @@ const CHART_FETCH_RANGE = '5y';
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
   // set-position: { symbol, position: { quantity, avgCost, category? } | null } for config.portfolio
-  // set-cash: cash balance (number) for config.portfolioCash
   // go-notes: open the Notes tab (from a news item already saved there)
-  emits: ['set-tickers', 'set-position', 'set-cash', 'updated', 'go-account', 'go-notes'],
+  emits: ['set-tickers', 'set-position', 'updated', 'go-account', 'go-notes'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -154,8 +154,8 @@ export default {
       }
       if (!activeList.value) activeListId.value = 'default';
     }
-    // The Portfolio page doesn't use the watchlists.
-    if (!props.portfolioOnly) watch(() => props.user?.id ?? null, loadLists, { immediate: true });
+    // Loaded on the Portfolio page too: Top movers can rank any watchlist.
+    watch(() => props.user?.id ?? null, loadLists, { immediate: true });
 
     function selectList(id) {
       activeListId.value = String(id);
@@ -639,8 +639,52 @@ export default {
       }));
     }
 
+    // ── Top movers card ──
+    // Markets → Stocks: any combination of your watchlists (Default + yours),
+    // remembered per browser. Portfolio page: just your holdings.
+    const MOVERS_KEY = 'oilgas_movers_lists';
+    const moverSources = computed(() => (props.portfolioOnly
+      ? [{ id: 'portfolio', label: 'Your holdings', symbols: portfolioTickers.value }]
+      : [
+          { id: 'default', label: 'Default', symbols: configTickers.value },
+          ...customLists.value.map(l => ({ id: 'wl-' + l.id, label: l.name, symbols: l.tickers })),
+        ]
+    ).filter(src => src.symbols.length));
+    const moverSelected = ref((() => {
+      try {
+        const saved = JSON.parse(localStorage.getItem(MOVERS_KEY));
+        if (Array.isArray(saved) && saved.length) return saved;
+      } catch { /* none saved */ }
+      return ['default'];
+    })());
+    watch(moverSelected, ids => {
+      if (props.portfolioOnly) return;
+      try { localStorage.setItem(MOVERS_KEY, JSON.stringify(ids)); } catch { /* per-browser only */ }
+    });
+    const moverSymbols = computed(() => {
+      const srcs = moverSources.value;
+      const picked = props.portfolioOnly ? srcs : srcs.filter(src => moverSelected.value.includes(src.id));
+      return [...new Set((picked.length ? picked : srcs.slice(0, 1)).flatMap(src => src.symbols))];
+    });
+    // Picking another list: fetch quotes for its stocks we don't have yet.
+    watch(moverSymbols, syms => {
+      const missing = syms.filter(sym => !stockQuotes[sym]);
+      if (missing.length) fetchStockQuotes(missing);
+    });
+    // A mover in the list below: open its card and bring it into view.
+    function openMover(sym) {
+      if (!tickers.value.includes(sym)) return;
+      if (props.portfolioOnly) holdingsOpen.value = true;
+      ensureDetail(sym);
+      if (!details[sym].open) toggleDetail(sym);
+      nextTick(() => watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"]`)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    }
+
     async function refreshAll() {
-      await Promise.all([fetchStockQuotes(), props.portfolioOnly ? null : fetchIndexes()]);
+      // The list shown plus whatever Top movers ranks (they can differ).
+      const symbols = [...new Set([...tickers.value, ...moverSymbols.value])];
+      await Promise.all([fetchStockQuotes(symbols), props.portfolioOnly ? null : fetchIndexes()]);
     }
 
     // Switching lists or adding a ticker: fetch whatever has no quote yet.
@@ -855,6 +899,13 @@ export default {
       return 'Paused';
     }
 
+    // Portfolio page: is the Holdings section expanded? (remembered per browser)
+    const HOLDINGS_KEY = 'oilgas_holdings_open';
+    const holdingsOpen = ref((() => {
+      try { return localStorage.getItem(HOLDINGS_KEY) !== '0'; } catch { return true; }
+    })());
+    watch(holdingsOpen, open => { try { localStorage.setItem(HOLDINGS_KEY, open ? '1' : '0'); } catch { /* per-browser only */ } });
+
     // ── Portfolio: your position in a ticker (quantity × average cost) ──
     // Saved in config.portfolio — with the rest of the settings, so in the
     // profile when signed in, else this browser — keyed by symbol, so the
@@ -914,26 +965,6 @@ export default {
       return positionFor(ticker)?.category || autoCategoryFor(ticker);
     }
 
-    // ── Cash balance (Portfolio page) — config.portfolioCash ──
-    const cashBalance = computed(() => {
-      const n = Number(props.config.portfolioCash);
-      return Number.isFinite(n) && n > 0 ? n : 0;
-    });
-    const cashForm = ref(null); // { amount, error } while editing
-    function editCash() {
-      cashForm.value = { amount: cashBalance.value ? String(cashBalance.value) : '', error: null };
-    }
-    function saveCash() {
-      const raw = String(cashForm.value.amount).trim();
-      const amount = raw === '' ? 0 : Number(raw);
-      if (!Number.isFinite(amount) || amount < 0) {
-        cashForm.value.error = 'Enter an amount of 0 or more.';
-        return;
-      }
-      emit('set-cash', amount);
-      cashForm.value = null;
-    }
-
     // ── Sectors (equities only), for the Portfolio page's sector chart ──
     const sectors = reactive({}); // ticker → sector string | null (none) — absent while loading
     function loadSector(ticker) {
@@ -948,8 +979,7 @@ export default {
     // position has a price, so they're never a misleading partial sum.
     const portfolioTotals = computed(() => {
       const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
-      const cash = cashBalance.value;
-      if (!rows.length && !cash) return null;
+      if (!rows.length) return null;
       const totalCost = rows.reduce((sum, r) => sum + r.totalCost, 0);
       const priced = rows.every(r => r.value != null);
       const value = priced ? rows.reduce((sum, r) => sum + r.value, 0) : null;
@@ -960,10 +990,7 @@ export default {
       const dayGain = changed.length ? changed.reduce((sum, r) => sum + r.dayGain, 0) : null;
       // Today's % is relative to yesterday's value (today's value − today's G/L).
       const dayPct = dayGain != null && value != null && value - dayGain > 0 ? (dayGain / (value - dayGain)) * 100 : null;
-      return {
-        count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct,
-        cash, totalWithCash: value != null ? value + cash : null,
-      };
+      return { count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct };
     });
 
     // ── Allocation charts (Portfolio page), shown side by side ──
@@ -974,21 +1001,16 @@ export default {
       const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
       return rows.some(r => r.value == null || !r.category) ? null : rows;
     }
-    function cashItems() {
-      return cashBalance.value ? [{ key: 'cash', label: 'Cash', value: cashBalance.value, symbol: 'Cash' }] : [];
-    }
     const allocationByType = computed(() => {
       const rows = allocationRows();
       if (!rows) return null;
       return assignSlots(buildSlices([
         ...rows.map(r => ({ key: r.category, label: r.categoryLabel, short: CATEGORY_SHORT[r.category], value: r.value, symbol: r.symbol })),
-        ...cashItems(),
       ], categoryOrder));
     });
     const allocationBySector = computed(() => {
       const rows = allocationRows();
       if (!rows) return null;
-      const cash = cashItems();
 
       // By sector: stocks by their sector; everything else by its category
       // (fund sector breakdowns aren't available without Yahoo auth).
@@ -1001,7 +1023,7 @@ export default {
           : { key: 'sector:?', label: 'Unclassified stocks', short: 'Unclassified', value: r.value, symbol: r.symbol };
       });
       const sectorKeys = [...new Set(items.filter(i => i.key.startsWith('sector:') && i.key !== 'sector:?').map(i => i.key))].sort();
-      return assignSlots(buildSlices([...items, ...cash], [...sectorKeys, 'sector:?', ...categoryOrder]));
+      return assignSlots(buildSlices(items, [...sectorKeys, 'sector:?', ...categoryOrder]));
     });
     const hasNonStockHoldings = computed(() =>
       portfolioTickers.value.some(t => categoryFor(t) && categoryFor(t) !== 'stocks')
@@ -1119,9 +1141,10 @@ export default {
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
       isPortfolioList, portfolioTotals,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
+      moverSources, moverSelected, openMover, holdingsOpen,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
       alertsStore, alertsFor, activeAlertCount, alertForms, openAlertForm, closeAlertForm, submitAlert,
-      toggleAlert, deleteAlertConfirm, alertStatus, describeAlert, alertPresets, cashBalance, cashForm, editCash, saveCash,
+      toggleAlert, deleteAlertConfirm, alertStatus, describeAlert, alertPresets,
       allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatPrice, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
@@ -1157,6 +1180,10 @@ export default {
         </div>
       </div>
       </template>
+
+      <!-- Top movers (Markets → Stocks: under the indexes) -->
+      <TopMovers v-if="!portfolioOnly" :sources="moverSources" v-model:selected-ids="moverSelected"
+                 :quotes="stockQuotes" @select="openMover" />
 
       <!-- Watchlist picker + list actions -->
       <div class="watchlist-toolbar" v-if="!portfolioOnly">
@@ -1252,49 +1279,6 @@ export default {
 
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
-      <!-- Portfolio list: totals across every position -->
-      <div class="portfolio-totals" v-if="isPortfolioList && portfolioTotals">
-        <div class="portfolio-stat">
-          <span class="portfolio-label">Total cost</span>
-          <span class="portfolio-value">{{ formatUSD(portfolioTotals.totalCost) }}</span>
-        </div>
-        <div class="portfolio-stat">
-          <span class="portfolio-label">Market value</span>
-          <span class="portfolio-value">{{ portfolioTotals.value != null ? formatUSD(portfolioTotals.value) : '—' }}</span>
-        </div>
-        <div class="portfolio-stat">
-          <span class="portfolio-label">Total G/L</span>
-          <span class="portfolio-value" :class="changeClass(portfolioTotals.gain)">
-            {{ portfolioTotals.gain != null ? signedUSD(portfolioTotals.gain) + ' (' + formatPct(portfolioTotals.gainPct) + ')' : '—' }}
-          </span>
-        </div>
-        <div class="portfolio-stat">
-          <span class="portfolio-label">Today's G/L</span>
-          <span class="portfolio-value" :class="changeClass(portfolioTotals.dayGain)">
-            {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
-          </span>
-        </div>
-        <div class="portfolio-stat">
-          <span class="portfolio-label">
-            Cash
-            <button type="button" class="link-button" v-if="!cashForm" @click="editCash">Edit</button>
-          </span>
-          <span class="portfolio-value">{{ formatUSD(portfolioTotals.cash) }}</span>
-        </div>
-        <div class="portfolio-stat">
-          <span class="portfolio-label">Total incl. cash</span>
-          <span class="portfolio-value">{{ portfolioTotals.totalWithCash != null ? formatUSD(portfolioTotals.totalWithCash) : '—' }}</span>
-        </div>
-      </div>
-
-      <form class="watchlist-form cash-form" v-if="isPortfolioList && cashForm" @submit.prevent="saveCash" novalidate>
-        <input type="number" inputmode="decimal" min="0" step="any" placeholder="Cash balance ($)"
-               aria-label="Cash balance in dollars" v-model="cashForm.amount" @keydown.esc="cashForm = null" />
-        <button type="submit" class="primary">Save cash</button>
-        <button type="button" @click="cashForm = null">Cancel</button>
-        <div class="notice error watchlist-form-error" v-if="cashForm.error">{{ cashForm.error }}</div>
-      </form>
-
       <!-- Allocation: by asset type and by sector, side by side -->
       <div class="card allocation-card" v-if="isPortfolioList && portfolioTotals">
         <div class="card-title allocation-head">Allocation</div>
@@ -1311,14 +1295,18 @@ export default {
           </section>
         </div>
         <p class="text-muted text-sm allocation-note">
-          By current market value{{ cashBalance ? ', including cash' : '' }}.
+          By current market value.
           Asset types come from Yahoo Finance — change one on a stock's Portfolio tab (e.g. a bond fund → Bonds).
-          <template v-if="hasNonStockHoldings || cashBalance">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
+          <template v-if="hasNonStockHoldings">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
         </p>
       </div>
 
+      <!-- Top movers (Portfolio page: under the allocation charts) -->
+      <TopMovers v-if="portfolioOnly" :sources="moverSources" v-model:selected-ids="moverSelected"
+                 :quotes="stockQuotes" @select="openMover" />
+
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
-      <div class="notice" v-else-if="isPortfolioList && !tickers.length && !cashBalance">
+      <div class="notice" v-else-if="isPortfolioList && !tickers.length">
         No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to enter quantity and average cost.
       </div>
       <div class="notice" v-else-if="tickers.length === 0">
@@ -1327,7 +1315,42 @@ export default {
 
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
       <!-- drag a card by its handle to reorder (saved to settings). -->
-      <div ref="watchlistEl" class="watchlist" :class="{ 'is-dragging': draggingTicker }">
+      <!-- Portfolio page: holdings as one collapsible card — header row, then a
+           row per stock (on Markets → Stocks this wrapper adds nothing) -->
+      <div :class="{ 'holdings-card': portfolioOnly && tickers.length, collapsed: portfolioOnly && !holdingsOpen }">
+      <button type="button" class="holdings-toggle" v-if="portfolioOnly && tickers.length"
+              :aria-expanded="holdingsOpen" aria-controls="portfolio-holdings" @click="holdingsOpen = !holdingsOpen">
+        <span class="holdings-heading">
+          <span class="holdings-chevron" aria-hidden="true">▶</span>
+          <span class="holdings-title">Holdings</span>
+          <span class="holdings-count">{{ tickers.length }}</span>
+        </span>
+        <!-- Totals across every position — shown even when collapsed -->
+        <span class="holdings-stats" v-if="portfolioTotals">
+          <span class="holdings-stat">
+            <span class="holdings-stat-label">Market value</span>
+            <span class="holdings-stat-value">{{ portfolioTotals.value != null ? formatUSD(portfolioTotals.value) : '—' }}</span>
+          </span>
+          <span class="holdings-stat">
+            <span class="holdings-stat-label">Total cost</span>
+            <span class="holdings-stat-value">{{ formatUSD(portfolioTotals.totalCost) }}</span>
+          </span>
+          <span class="holdings-stat">
+            <span class="holdings-stat-label">Total G/L</span>
+            <span class="holdings-stat-value" :class="changeClass(portfolioTotals.gain)">
+              {{ portfolioTotals.gain != null ? signedUSD(portfolioTotals.gain) + ' (' + formatPct(portfolioTotals.gainPct) + ')' : '—' }}
+            </span>
+          </span>
+          <span class="holdings-stat">
+            <span class="holdings-stat-label">Today's G/L</span>
+            <span class="holdings-stat-value" :class="changeClass(portfolioTotals.dayGain)">
+              {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
+            </span>
+          </span>
+        </span>
+      </button>
+      <div ref="watchlistEl" id="portfolio-holdings" class="watchlist" :class="{ 'is-dragging': draggingTicker }"
+           v-show="!portfolioOnly || holdingsOpen">
       <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
            :class="{ dragging: draggingTicker === sym, 'just-added': justAdded === sym }">
         <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)"
@@ -1732,6 +1755,7 @@ export default {
         </div>
       </div>
 
+      </div>
       </div>
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">

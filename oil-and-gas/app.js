@@ -342,11 +342,9 @@ const App = {
     // Content tabs only — Settings and Sign In / Profile are pages reached
     // from the header's account menu (UserMenu).
     // Portfolio appears when signed in (positions need an account) and you
-    // hold at least one position or some cash.
-    const hasPositions = computed(() => !!user.value && (
-      Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
-      || Number(config.value?.portfolioCash) > 0
-    ));
+    // hold at least one position.
+    const hasPositions = computed(() => !!user.value
+      && Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0));
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
@@ -449,7 +447,6 @@ const App = {
         ui: { ...updated.ui, theme: config.value.ui?.theme },
         // Portfolio positions are edited on the Stocks tab, not in this panel.
         portfolio: config.value.portfolio,
-        portfolioCash: config.value.portfolioCash,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
       };
@@ -542,10 +539,6 @@ const App = {
       persistConfig({ ...config.value, portfolio }, 'Portfolio position');
     }
 
-    // Cash balance edited on the Portfolio page.
-    function onSetCash(amount) {
-      persistConfig({ ...config.value, portfolioCash: amount }, 'Cash balance');
-    }
 
     // Provide config to all child components
     provide('config', config);
@@ -555,7 +548,7 @@ const App = {
       inboxSection, selectTab, openNotes, accountSection, openLabels,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onSetCash,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition,
     };
   },
   template: `
@@ -611,7 +604,7 @@ const App = {
             @go-notes="openNotes" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
-            @set-position="onSetPosition" @set-cash="onSetCash" @go-notes="openNotes" />
+            @set-position="onSetPosition" @go-notes="openNotes" />
           <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
