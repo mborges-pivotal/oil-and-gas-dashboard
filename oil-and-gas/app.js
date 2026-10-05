@@ -8,6 +8,8 @@ import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 import MarketsComponent from './components/Markets.js';
 import NewsComponent from './components/News.js';
 import StocksComponent from './components/Stocks.js';
+import NotesComponent from './components/Notes.js';
+import { loadNotes, clearNotes } from './utils/notesStore.js';
 import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
 import UserMenu from './components/UserMenu.js';
@@ -315,6 +317,7 @@ const App = {
   components: {
     Markets: MarketsComponent,
     Stocks: StocksComponent,
+    Notes: NotesComponent,
     News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
@@ -345,7 +348,16 @@ const App = {
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
       ...(hasPositions.value ? [{ id: 'portfolio', label: 'Portfolio' }] : []),
+      ...(user.value ? [{ id: 'notes', label: 'Notes' }] : []),
     ]);
+    // Notes are per account (DB): load on sign-in, drop on sign-out.
+    watch(() => user.value?.id ?? null, id => {
+      if (id) loadNotes();
+      else {
+        clearNotes();
+        if (activeTab.value === 'notes') activeTab.value = 'markets';
+      }
+    }, { immediate: true });
     // Last position removed (or signed out / reset) while on Portfolio.
     watch(hasPositions, has => {
       if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
@@ -507,7 +519,10 @@ const App = {
   template: `
     <div id="app">
       <header class="app-header">
-        <div class="logo">Oil &amp; Gas <span>Dashboard</span></div>
+        <div class="logo" aria-label="Oil &amp; Gas Dashboard">
+          <img class="logo-icon" src="./favicon.svg" alt="" width="24" height="24" />
+          <span class="logo-text" aria-hidden="true">Oil &amp; Gas <span class="logo-accent">Dashboard</span></span>
+        </div>
         <nav class="tab-bar">
           <button
             v-for="tab in tabs"
@@ -549,10 +564,12 @@ const App = {
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
-            @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'" />
+            @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'"
+            @go-notes="activeTab = 'notes'" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
-            @set-position="onSetPosition" @set-cash="onSetCash" />
+            @set-position="onSetPosition" @set-cash="onSetCash" @go-notes="activeTab = 'notes'" />
+          <Notes         v-if="activeTab === 'notes'"     :config="config" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"

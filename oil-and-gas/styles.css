@@ -164,7 +164,8 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   white-space: nowrap;
   flex-shrink: 0;
 }
-.app-header .logo span { color: var(--accent); }
+.app-header .logo-accent { color: var(--accent); }
+.app-header .logo-icon { display: none; border-radius: 6px; }
 
 .tab-bar {
   margin-left: auto;
@@ -1044,12 +1045,19 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   .range-btn { flex: 1 1 0; min-width: 0; padding: 5px 0; text-align: center; }
   .app-header .logo { font-size: 13px; }
   /* Room for Markets · News · Portfolio + the account menu on one row. */
-  .app-header .logo span { display: none; }
+  .app-header .logo-accent { display: none; }
+}
+/* Narrow phones: the drop icon stands in for the name, so up to four tabs
+   (Markets · News · Portfolio · Notes) fit beside the account menu. */
+@media (max-width: 420px) {
+  .app-header .logo-text { display: none; }
+  .app-header .logo-icon { display: block; }
+  .tab-btn { padding-left: 8px; padding-right: 8px; }
 }
 @media (max-width: 360px) {
   .range-btn-group { gap: 2px; }
   .range-btn { font-size: 11px; }
-  .tab-btn { padding-left: 7px; padding-right: 7px; }
+  .tab-btn { padding-left: 6px; padding-right: 6px; }
 }
 
 /* ============================================================
@@ -1291,5 +1299,112 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 6px;
   background: var(--surface);
 }
-.stock-news-text { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.stock-news-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.stock-news-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.stock-news-meta .link-button { padding: 0; font-size: 12px; }
+.note-saved { color: var(--positive); }
+.icon-bookmark { vertical-align: -2px; margin-right: 4px; }
+
+/* Note form (save from News / edit on Notes) */
+.note-form {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.note-form-heading { font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.note-form-labels { display: flex; flex-direction: column; gap: 6px; }
+.note-form textarea { display: block; width: 100%; margin-top: 4px; resize: vertical; min-height: 64px; font-weight: 400; }
+.note-form-error { margin: 0; }
+.note-form-actions { display: flex; gap: 8px; }
+.note-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.note-chip {
+  padding: 3px 10px;
+  font-size: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.note-chip:hover:not(:disabled) { color: var(--text); }
+.note-chip.selected { background: var(--accent); border-color: var(--accent); color: #fff; }
+.note-chip:disabled { opacity: 0.45; cursor: default; }
+.note-new-label { flex: 1 1 140px; min-width: 120px; padding: 3px 10px; border-radius: 999px; font-size: 12px; }
+.note-chip-count { opacity: 0.7; margin-left: 2px; font-variant-numeric: tabular-nums; }
+
+/* Notes page */
+.notes-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.notes-filters input[type="search"] { flex: 1 1 200px; min-width: 0; }
+.notes-label-filter { margin-bottom: 14px; }
+.note-chip-group { display: inline-flex; align-items: center; }
+.note-chip-group .note-chip { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.note-chip-remove {
+  padding: 3px 7px;
+  font-size: 10px;
+  line-height: 16px;
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 999px 999px 0;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.note-chip-remove:hover { color: var(--negative); }
+.note-card { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 10px; }
+.note-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.note-meta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.note-symbol {
+  font-weight: 700;
+  font-size: 12px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.note-saved-at { margin-left: auto; }
+.notes-head-right { display: flex; align-items: center; gap: 12px; }
+.notes-head-right button { padding: 5px 12px; }
+.note-new { margin-bottom: 14px; }
+.note-new .note-form { border: none; padding: 0; margin: 0; background: transparent; }
+.note-kind {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 4px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+.note-text-main { font-size: 14px; color: var(--text); }
+.note-link { font-size: 12px; overflow-wrap: anywhere; }
+.note-optional { font-weight: 400; }
+.note-link-input { display: block; width: 100%; margin-top: 4px; font-weight: 400; }
+.note-symbol-chip { display: inline-flex; align-items: center; gap: 4px; padding-right: 4px; font-weight: 700; }
+.note-symbol-remove {
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0 4px;
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.8;
+}
+.note-symbol-remove:hover { opacity: 1; background: transparent; }
+.note-new-symbol { text-transform: uppercase; }
+.note-new-symbol::placeholder { text-transform: none; }
+.note-labels { display: flex; flex-wrap: wrap; gap: 6px; }
+.note-label {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+.note-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.5; }
+.note-actions { display: flex; gap: 14px; }
+.note-actions .link-button { padding: 0; }
+.link-button.danger-link { color: var(--negative); }
 .stock-news-title { font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }

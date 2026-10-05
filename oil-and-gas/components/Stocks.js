@@ -12,6 +12,8 @@ import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 const STOCK_RANGE_OPTIONS = [{ id: '1D', label: '1D' }, ...RANGE_OPTIONS];
 import HistoryChart from './HistoryChart.js';
 import AllocationChart from './AllocationChart.js';
+import NoteForm from './NoteForm.js';
+import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
 const INDEX_LABELS = {
   '^GSPC': 'S&P 500',
@@ -76,14 +78,15 @@ const CHART_FETCH_RANGE = '5y';
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart },
+  components: { HistoryChart, AllocationChart, NoteForm },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
   // set-position: { symbol, position: { quantity, avgCost, category? } | null } for config.portfolio
   // set-cash: cash balance (number) for config.portfolioCash
-  emits: ['set-tickers', 'set-position', 'set-cash', 'updated', 'go-account'],
+  // go-notes: open the Notes tab (from a news item already saved there)
+  emits: ['set-tickers', 'set-position', 'set-cash', 'updated', 'go-account', 'go-notes'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -786,6 +789,32 @@ export default {
       else if (tab === 'portfolio' && !positionFor(ticker)) startPositionEdit(ticker);
     }
 
+    // ── Save stock news to Notes (signed in) ──
+    // One open form at a time per article: `${ticker}|${link}` → { busy, error }.
+    const noteForms = reactive({});
+    const noteKey = (ticker, article) => `${ticker}|${article.link}`;
+    function openNoteForm(ticker, article) {
+      noteForms[noteKey(ticker, article)] = { busy: false, error: null };
+    }
+    function closeNoteForm(ticker, article) {
+      delete noteForms[noteKey(ticker, article)];
+    }
+    async function saveNewNote(ticker, article, { labels, note }) {
+      const f = noteForms[noteKey(ticker, article)];
+      f.busy = true;
+      f.error = null;
+      try {
+        await addNote({
+          symbol: ticker, title: article.title, link: article.link,
+          source: article.source, pubDate: article.pubDate, image: article.image || '',
+        }, note, labels);
+        closeNoteForm(ticker, article);
+      } catch (e) {
+        f.error = e.message;
+        f.busy = false;
+      }
+    }
+
     // ── Portfolio: your position in a ticker (quantity × average cost) ──
     // Saved in config.portfolio — with the rest of the settings, so in the
     // profile when signed in, else this browser — keyed by symbol, so the
@@ -1064,7 +1093,8 @@ export default {
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
       isPortfolioList, hasPortfolioTab, portfolioTotals,
-      CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel, cashBalance, cashForm, editCash, saveCash,
+      CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
+      notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote, cashBalance, cashForm, editCash, saveCash,
       allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
@@ -1436,7 +1466,19 @@ export default {
                 <div class="stock-news-text">
                   <a class="stock-news-title" :href="safeArticleUrl(article.link)" target="_blank" rel="noopener"
                      @click.stop="onArticleClick($event, article, config)">{{ article.title }}</a>
-                  <div class="text-muted text-sm">{{ article.source }} · {{ formatRelativeTime(article.pubDate) }}</div>
+                  <div class="stock-news-meta">
+                    <span class="text-muted text-sm">{{ article.source }} · {{ formatRelativeTime(article.pubDate) }}</span>
+                    <template v-if="user">
+                      <button type="button" class="link-button note-saved" v-if="findNote(sym, article.link)"
+                              title="Open the Notes tab" @click.stop="$emit('go-notes')">✓ In Notes</button>
+                      <button type="button" class="link-button" v-else-if="!noteForms[noteKey(sym, article)]"
+                              :disabled="!notesStore.loaded" @click.stop="openNoteForm(sym, article)"><svg class="icon-bookmark" viewBox="0 0 24 24" width="13" height="13" aria-hidden="true"><path d="M6 3h12v18l-6-4-6 4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>Save to notes</button>
+                    </template>
+                  </div>
+                  <NoteForm v-if="user && noteForms[noteKey(sym, article)]" :labels="notesStore.labels"
+                            submit-label="Save to notes" :busy="noteForms[noteKey(sym, article)].busy"
+                            :error="noteForms[noteKey(sym, article)].error"
+                            @save="saveNewNote(sym, article, $event)" @cancel="closeNoteForm(sym, article)" />
                 </div>
               </div>
             </div>

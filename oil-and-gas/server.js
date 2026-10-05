@@ -51,6 +51,7 @@ loadDotEnv(path.join(ROOT, '.env'));
 const { handleApi } = require('./server/auth');
 const { handleFrameCheck } = require('./server/frameCheck');
 const { handleWatchlistsApi } = require('./server/watchlists');
+const { handleNotesApi } = require('./server/notes');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_HOSTS = new Set([
@@ -212,6 +213,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/watchlists' || reqUrl.pathname.startsWith('/api/watchlists/')) {
     handleWatchlistsApi(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname === '/api/notes' || reqUrl.pathname.startsWith('/api/notes/')) {
+    handleNotesApi(req, res, reqUrl);
     return;
   }
 
