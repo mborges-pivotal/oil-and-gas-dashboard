@@ -87,7 +87,8 @@ export default {
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
-  // set-position: { symbol, position: { quantity, avgCost, category? } | null } for config.portfolio
+  // set-position: { symbol, position: { quantity, avgCost, category?, transactions? } | null }
+  //   or { updates: { SYMBOL: position | null } } to save several together — for config.portfolio
   // go-notes: open the Notes tab (from a news item already saved there)
   emits: ['set-tickers', 'set-position', 'updated', 'go-account', 'go-notes'],
   setup(props, { emit }) {
@@ -832,7 +833,7 @@ export default {
         loadStats(ticker);
       } else if (tab === 'news') loadNews(ticker);
       else if (tab === 'documents') loadDocs(ticker);
-      else if (tab === 'portfolio' && props.user && !positionFor(ticker)) startPositionEdit(ticker);
+      else if (tab === 'portfolio' && props.user && !positionFor(ticker) && !positionForms[ticker]) startPurchase(ticker);
     }
 
     // ── Save stock news to Notes (signed in) ──
@@ -943,16 +944,318 @@ export default {
       }
       const position = { quantity, avgCost };
       if (f.category) position.category = f.category;
+      // Editing the totals keeps the purchase history.
+      const txs = positionFor(ticker)?.transactions;
+      if (txs?.length) position.transactions = txs;
       emit('set-position', { symbol: ticker, position });
       delete positionForms[ticker];
     }
 
+    // ── Purchase transactions (Portfolio tab) ──
+    // A purchase adds shares at a price on a date: the position's quantity
+    // grows and its average cost becomes the share-weighted average.
+    // Purchases are kept on the position (config.portfolio[sym].transactions)
+    // and listed in the tab; deleting one reverses its effect.
+    const purchaseForms = reactive({}); // ticker → { quantity, price, date, payFrom, error }
+    const todayISO = () => new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD, local
+
+    function startPurchase(ticker) {
+      const last = stockQuotes[ticker]?.price;
+      purchaseForms[ticker] = {
+        quantity: '',
+        price: last != null ? String(Math.round(last * 100) / 100) : '', // the last price
+        date: todayISO(),
+        payFrom: null, // null → the first cash holding (see payFromFor); '' → outside the portfolio
+        error: null,
+      };
+      delete saleForms[ticker];
+      // Cash holdings are found by asset type, which needs each holding's quote.
+      const missing = Object.keys(props.config.portfolio ?? {}).filter(sym => !stockQuotes[sym]);
+      if (missing.length) fetchStockQuotes(missing);
+    }
+
+    // ── Paying for a purchase from a cash holding ──
+    // Holdings whose asset type is Cash (money-market funds like SPAXX, or set
+    // to Cash by hand), other than the stock being bought, with what's
+    // available at the current price ($1 NAV when there's no quote yet).
+    function cashSources(ticker) {
+      return Object.entries(props.config.portfolio ?? {})
+        .filter(([sym, p]) => sym !== ticker && p?.quantity > 0 && categoryFor(sym) === 'cash')
+        .map(([sym, p]) => {
+          const price = stockQuotes[sym]?.price || 1;
+          return { symbol: sym, price, available: p.quantity * price };
+        });
+    }
+    function payFromFor(ticker) {
+      const f = purchaseForms[ticker];
+      if (!f) return '';
+      return f.payFrom ?? cashSources(ticker)[0]?.symbol ?? '';
+    }
+    function cancelPurchase(ticker) {
+      delete purchaseForms[ticker];
+    }
+
+    // What the position becomes with this purchase — shown before saving.
+    function purchasePreview(ticker) {
+      const f = purchaseForms[ticker];
+      const qty = Number(f?.quantity);
+      const price = Number(f?.price);
+      if (!(qty > 0) || !(price > 0)) return null;
+      const p = positionFor(ticker);
+      const quantity = (p?.quantity ?? 0) + qty;
+      const avgCost = p ? (p.quantity * p.avgCost + qty * price) / quantity : price;
+      const from = cashSources(ticker).find(c => c.symbol === payFromFor(ticker)) ?? null;
+      return {
+        quantity, avgCost, cost: qty * price, was: p ? { quantity: p.quantity, avgCost: p.avgCost } : null,
+        from: from && { symbol: from.symbol, available: from.available, after: from.available - qty * price },
+      };
+    }
+
+    function savePurchase(ticker) {
+      const f = purchaseForms[ticker];
+      const qty = Number(f.quantity);
+      const price = Number(f.price);
+      if (!(qty > 0) || !Number.isFinite(qty)) { f.error = 'Enter how many shares you bought.'; return; }
+      if (!(price > 0) || !Number.isFinite(price)) { f.error = 'Enter the price per share.'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the purchase date.'; return; }
+      if (f.date > todayISO()) { f.error = "The purchase date can't be in the future."; return; }
+      const p = positionFor(ticker);
+      const next = purchasePreview(ticker);
+      const tx = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), date: f.date, quantity: qty, price };
+      const updates = {};
+      // Deduct the cost from the chosen cash holding (its average cost stays).
+      const src = cashSources(ticker).find(c => c.symbol === payFromFor(ticker));
+      if (src) {
+        if (next.cost > src.available + 0.005) {
+          f.error = `Only ${formatUSD(src.available)} in ${src.symbol} — pay from another holding, or choose "Outside the portfolio".`;
+          return;
+        }
+        const cashPos = positionFor(src.symbol);
+        const shares = next.cost / src.price;
+        const left = cashPos.quantity - shares;
+        updates[src.symbol] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+        Object.assign(tx, { paidFrom: src.symbol, paidShares: shares });
+      }
+      const position = { quantity: next.quantity, avgCost: next.avgCost, transactions: [...(p?.transactions ?? []), tx] };
+      if (p?.category) position.category = p.category;
+      updates[ticker] = position;
+      emit('set-position', { updates });
+      delete purchaseForms[ticker];
+      delete positionForms[ticker];
+    }
+
+    // ── Selling (Portfolio page only) ──
+    // A sale lowers the share count at the same average cost and realizes
+    // (price − avg cost) × shares. Selling everything moves the position to
+    // config.closedPositions. Proceeds can go into a cash holding.
+    const saleForms = reactive({}); // ticker → { quantity, price, date, depositTo, error }
+    const closedPositions = computed(() => props.config.closedPositions ?? []);
+
+    function startSale(ticker) {
+      const last = stockQuotes[ticker]?.price;
+      saleForms[ticker] = {
+        quantity: '',
+        price: last != null ? String(Math.round(last * 100) / 100) : '',
+        date: todayISO(),
+        depositTo: null, // null → the first cash holding; '' → outside the portfolio
+        error: null,
+      };
+      delete purchaseForms[ticker];
+      delete positionForms[ticker];
+    }
+    function cancelSale(ticker) {
+      delete saleForms[ticker];
+    }
+    function depositToFor(ticker) {
+      const f = saleForms[ticker];
+      if (!f) return '';
+      return f.depositTo ?? cashSources(ticker)[0]?.symbol ?? '';
+    }
+
+    function salePreview(ticker) {
+      const f = saleForms[ticker];
+      const p = positionFor(ticker);
+      const qty = Number(f?.quantity);
+      const price = Number(f?.price);
+      if (!p || !(qty > 0) || !(price > 0)) return null;
+      const proceeds = qty * price;
+      const realized = (price - p.avgCost) * qty;
+      const dest = cashSources(ticker).find(c => c.symbol === depositToFor(ticker)) ?? null;
+      return {
+        proceeds, realized, realizedPct: p.avgCost > 0 ? ((price - p.avgCost) / p.avgCost) * 100 : null,
+        remaining: p.quantity - qty, tooMany: qty > p.quantity + 1e-9, closes: Math.abs(p.quantity - qty) <= 1e-9,
+        to: dest && { symbol: dest.symbol, before: dest.available, after: dest.available + proceeds },
+      };
+    }
+
+    // Everything sold over a position's life → its Closed positions record.
+    function closedRecord(ticker, p, transactions, closedDate) {
+      const sells = transactions.filter(t => t.type === 'sell');
+      const sharesSold = sells.reduce((sum, t) => sum + t.quantity, 0);
+      const costBasis = sells.reduce((sum, t) => sum + t.quantity * t.avgCost, 0);
+      const proceeds = sells.reduce((sum, t) => sum + t.quantity * t.price, 0);
+      const buyDates = transactions.filter(t => t.type !== 'sell').map(t => t.date).sort();
+      return {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        symbol: ticker,
+        name: stockQuotes[ticker]?.shortName ?? '',
+        ...(p.category ? { category: p.category } : {}),
+        sharesSold, costBasis, proceeds, realized: proceeds - costBasis,
+        openedDate: buyDates[0] ?? null,
+        closedDate,
+        transactions,
+      };
+    }
+
+    function saveSale(ticker) {
+      const f = saleForms[ticker];
+      const p = positionFor(ticker);
+      const qty = Number(f.quantity);
+      const price = Number(f.price);
+      if (!p) return;
+      if (!(qty > 0) || !Number.isFinite(qty)) { f.error = 'Enter how many shares you sold.'; return; }
+      if (qty > p.quantity + 1e-9) { f.error = `You hold ${formatShares(p.quantity)} shares — you can't sell more.`; return; }
+      if (!(price > 0) || !Number.isFinite(price)) { f.error = 'Enter the sale price per share.'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the sale date.'; return; }
+      if (f.date > todayISO()) { f.error = "The sale date can't be in the future."; return; }
+
+      const tx = {
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        type: 'sell', date: f.date, quantity: qty, price,
+        avgCost: p.avgCost, realized: (price - p.avgCost) * qty,
+      };
+      const updates = {};
+      const dest = cashSources(ticker).find(c => c.symbol === depositToFor(ticker));
+      if (dest) {
+        const cashPos = positionFor(dest.symbol);
+        const shares = (qty * price) / dest.price;
+        updates[dest.symbol] = { ...cashPos, quantity: cashPos.quantity + shares };
+        Object.assign(tx, { depositTo: dest.symbol, depositShares: shares });
+      }
+      const transactions = [...(p.transactions ?? []), tx];
+      const remaining = p.quantity - qty;
+      let closed;
+      if (remaining <= 1e-9) {
+        updates[ticker] = null;
+        closed = [closedRecord(ticker, p, transactions, f.date), ...closedPositions.value];
+        delete details[ticker]; // its card leaves Holdings
+      } else {
+        updates[ticker] = { ...p, quantity: remaining, transactions };
+      }
+      emit('set-position', closed ? { updates, closed } : { updates });
+      delete saleForms[ticker];
+    }
+
+    // Undo a sale on an open position: shares back, proceeds out of cash.
+    function reverseDeposit(updates, tx) {
+      if (!tx.depositTo || !(tx.depositShares > 0)) return;
+      const cashPos = positionFor(tx.depositTo);
+      if (!cashPos) return; // that cash holding is gone — nothing to take back
+      const left = cashPos.quantity - tx.depositShares;
+      updates[tx.depositTo] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+    }
+    function deleteSale(ticker, tx) {
+      const back = tx.depositTo ? `\n${formatUSD(tx.quantity * tx.price)} comes back out of ${tx.depositTo}.` : '';
+      if (!confirm(`Delete this sale?\n\n${formatShares(tx.quantity)} ${ticker} at ${formatPrice(tx.price)} on ${tx.date}\n\nThe shares go back into your position.${back}`)) return;
+      const p = positionFor(ticker);
+      if (!p) return;
+      const updates = {};
+      reverseDeposit(updates, tx);
+      const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
+      updates[ticker] = { ...p, quantity: p.quantity + tx.quantity, transactions: rest };
+      emit('set-position', { updates });
+    }
+
+    // Closed positions: undo the final sale (back to Holdings), or delete the record.
+    function reopenClosed(rec) {
+      if (positionFor(rec.symbol)) {
+        alert(`You hold ${rec.symbol} again — record further sales or purchases on its open position instead.`);
+        return;
+      }
+      const last = [...rec.transactions].reverse().find(t => t.type === 'sell');
+      if (!last) return;
+      if (!confirm(`Undo the ${rec.symbol} sale of ${formatShares(last.quantity)} shares on ${last.date}?\n\nIt goes back to your Holdings.` + (last.depositTo ? `\n${formatUSD(last.quantity * last.price)} comes back out of ${last.depositTo}.` : ''))) return;
+      const updates = {};
+      reverseDeposit(updates, last);
+      const position = {
+        quantity: last.quantity, avgCost: last.avgCost,
+        transactions: rec.transactions.filter(t => t.id !== last.id),
+      };
+      if (rec.category) position.category = rec.category;
+      updates[rec.symbol] = position;
+      emit('set-position', { updates, closed: closedPositions.value.filter(c => c.id !== rec.id) });
+    }
+    function deleteClosed(rec) {
+      if (!confirm(`Delete the closed ${rec.symbol} position from your history?\n\nThis doesn't change any cash holding.`)) return;
+      emit('set-position', { closed: closedPositions.value.filter(c => c.id !== rec.id) });
+    }
+
+    const closedTotals = computed(() => {
+      const list = closedPositions.value;
+      if (!list.length) return null;
+      const costBasis = list.reduce((sum, c) => sum + c.costBasis, 0);
+      const proceeds = list.reduce((sum, c) => sum + c.proceeds, 0);
+      const realized = proceeds - costBasis;
+      return { costBasis, proceeds, realized, realizedPct: costBasis > 0 ? (realized / costBasis) * 100 : null };
+    });
+
+    // Realized G/L from partial sales of a position you still hold.
+    function realizedFor(ticker) {
+      const sells = (positionFor(ticker)?.transactions ?? []).filter(t => t.type === 'sell');
+      return sells.length ? sells.reduce((sum, t) => sum + t.realized, 0) : null;
+    }
+
+    // Closed positions section open? (remembered per browser)
+    const CLOSED_KEY = 'oilgas_closed_open';
+    const closedOpen = ref((() => {
+      try { return localStorage.getItem(CLOSED_KEY) !== '0'; } catch { return true; }
+    })());
+    watch(closedOpen, open => { try { localStorage.setItem(CLOSED_KEY, open ? '1' : '0'); } catch { /* per-browser only */ } });
+
+    function transactionsFor(ticker) {
+      return [...(positionFor(ticker)?.transactions ?? [])]
+        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    }
+
+    function deleteTransaction(ticker, tx) {
+      if (tx.type === 'sell') return deleteSale(ticker, tx);
+      const refund = tx.paidFrom ? `\n${formatUSD(tx.quantity * tx.price)} goes back to ${tx.paidFrom}.` : '';
+      if (!confirm(`Delete this purchase?\n\n${formatShares(tx.quantity)} ${ticker} at ${formatPrice(tx.price)} on ${tx.date}\n\nYour position will be reduced accordingly.${refund}`)) return;
+      const p = positionFor(ticker);
+      if (!p) return;
+      // Money it took from a cash holding goes back there (re-created if that
+      // holding has since been removed).
+      const updates = {};
+      if (tx.paidFrom && tx.paidShares > 0) {
+        const cashPos = positionFor(tx.paidFrom);
+        updates[tx.paidFrom] = cashPos
+          ? { ...cashPos, quantity: cashPos.quantity + tx.paidShares }
+          : { quantity: tx.paidShares, avgCost: 1, category: 'cash' };
+      }
+      const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
+      const quantity = p.quantity - tx.quantity;
+      if (quantity <= 1e-9) {
+        // That purchase was the whole position — back to "add a purchase".
+        emit('set-position', { updates: { ...updates, [ticker]: null } });
+        startPurchase(ticker);
+        return;
+      }
+      // Reverse the weighted average; if the totals were edited by hand since,
+      // that can come out non-positive — then keep the current average.
+      const reversed = (p.quantity * p.avgCost - tx.quantity * tx.price) / quantity;
+      const position = { quantity, avgCost: reversed > 0 ? reversed : p.avgCost };
+      if (p.category) position.category = p.category;
+      if (rest.length) position.transactions = rest;
+      emit('set-position', { updates: { ...updates, [ticker]: position } });
+    }
+
     function removePosition(ticker) {
-      if (!confirm(`Remove your ${ticker} position?`)) return;
+      const n = positionFor(ticker)?.transactions?.length ?? 0;
+      if (!confirm(`Remove your ${ticker} position${n ? ` and its ${n} purchase${n === 1 ? '' : 's'}` : ''}?`)) return;
       emit('set-position', { symbol: ticker, position: null });
-      // Back to an empty form (the config prop hasn't re-rendered yet, so
-      // startPositionEdit would still see the old position).
-      positionForms[ticker] = { quantity: '', avgCost: '', category: '', error: null };
+      // Back to "add a purchase" for this stock.
+      delete positionForms[ticker];
+      startPurchase(ticker);
     }
 
     // Category: the one chosen on the position, else automatic from Yahoo's
@@ -1139,6 +1442,10 @@ export default {
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
+      purchaseForms, startPurchase, cancelPurchase, purchasePreview, savePurchase, transactionsFor, deleteTransaction,
+      cashSources, payFromFor,
+      saleForms, startSale, cancelSale, depositToFor, salePreview, saveSale, closedPositions, closedTotals,
+      reopenClosed, deleteClosed, realizedFor, closedOpen,
       isPortfolioList, portfolioTotals,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
@@ -1307,7 +1614,8 @@ export default {
 
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
       <div class="notice" v-else-if="isPortfolioList && !tickers.length">
-        No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to enter quantity and average cost.
+        <template v-if="closedPositions.length">No open positions — your sold positions are under Closed positions below.</template>
+        <template v-else>No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to add a purchase.</template>
       </div>
       <div class="notice" v-else-if="tickers.length === 0">
         This watchlist is empty — search above to add stocks.
@@ -1550,6 +1858,117 @@ export default {
               today's gain/loss, and add it to your Portfolio page with allocation charts.
               <a href="#" @click.prevent="$emit('go-account')">Sign in</a> to track positions.
             </div>
+            <!-- Sell (Portfolio page only): shares at a price on a date; proceeds optionally to a cash holding -->
+            <form class="portfolio-form sale-form" v-else-if="portfolioOnly && saleForms[sym] && positionFor(sym)"
+                  @submit.prevent="saveSale(sym)" novalidate
+                  @input="saleForms[sym].error = null" @change="saleForms[sym].error = null">
+              <p class="text-muted text-sm" style="margin:0 0 10px">
+                Sell {{ sym }} — you hold {{ formatShares(positionFor(sym).quantity) }} shares at an average of {{ formatPrice(positionFor(sym).avgCost) }}.
+              </p>
+              <div class="portfolio-fields">
+                <label>
+                  <span>Shares sold</span>
+                  <span class="sale-qty">
+                    <input type="number" inputmode="decimal" min="0" step="any" :max="positionFor(sym).quantity"
+                           v-model="saleForms[sym].quantity" />
+                    <button type="button" class="link-button" @click="saleForms[sym].quantity = String(positionFor(sym).quantity)">All</button>
+                  </span>
+                </label>
+                <label>
+                  <span>Price per share</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" v-model="saleForms[sym].price" />
+                </label>
+                <label>
+                  <span>Date</span>
+                  <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="saleForms[sym].date" />
+                </label>
+                <label>
+                  <span>Deposit to</span>
+                  <select :value="depositToFor(sym)" @change="saleForms[sym].depositTo = $event.target.value">
+                    <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                    <option value="">Outside the portfolio</option>
+                  </select>
+                </label>
+              </div>
+              <p class="purchase-preview" v-if="salePreview(sym)">
+                Proceeds {{ formatUSD(salePreview(sym).proceeds) }} ·
+                Realized G/L <span :class="changeClass(salePreview(sym).realized)">{{ signedUSD(salePreview(sym).realized) }}<template v-if="salePreview(sym).realizedPct != null"> ({{ formatPct(salePreview(sym).realizedPct) }})</template></span>
+                vs. your average cost ·
+                <span class="negative" v-if="salePreview(sym).tooMany">more than you hold</span>
+                <strong v-else-if="salePreview(sym).closes">closes the position (moves to Closed positions)</strong>
+                <template v-else>{{ formatShares(salePreview(sym).remaining) }} shares left</template>
+                <br />
+                <template v-if="salePreview(sym).to">
+                  Deposited to {{ salePreview(sym).to.symbol }}: {{ formatUSD(salePreview(sym).to.before) }} → {{ formatUSD(salePreview(sym).to.after) }}
+                </template>
+                <span class="text-muted" v-else>Not deposited to a cash holding.</span>
+              </p>
+              <div class="notice error portfolio-error" v-if="saleForms[sym].error">{{ saleForms[sym].error }}</div>
+              <div class="portfolio-actions">
+                <button type="submit" class="primary">Record sale</button>
+                <button type="button" @click="cancelSale(sym)">Cancel</button>
+              </div>
+            </form>
+
+            <!-- Add a purchase: shares at a price (prefilled: last price) on a date (prefilled: today) -->
+            <form class="portfolio-form purchase-form" v-else-if="purchaseForms[sym]" @submit.prevent="savePurchase(sym)" novalidate
+                  @input="purchaseForms[sym].error = null" @change="purchaseForms[sym].error = null">
+              <p class="text-muted text-sm" style="margin:0 0 10px">
+                {{ positionFor(sym) ? 'Add a ' + sym + ' purchase — your position and average cost update.' : 'Add your first ' + sym + ' purchase to start tracking it.' }}
+              </p>
+              <div class="portfolio-fields">
+                <label>
+                  <span>Shares bought</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 10"
+                         v-model="purchaseForms[sym].quantity" />
+                </label>
+                <label>
+                  <span>Price per share</span>
+                  <input type="number" inputmode="decimal" min="0" step="any" v-model="purchaseForms[sym].price" />
+                </label>
+                <label>
+                  <span>Date</span>
+                  <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="purchaseForms[sym].date" />
+                </label>
+                <label>
+                  <span>Pay from</span>
+                  <select :value="payFromFor(sym)" @change="purchaseForms[sym].payFrom = $event.target.value">
+                    <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">
+                      {{ c.symbol }} — {{ formatUSD(c.available) }} available
+                    </option>
+                    <option value="">Outside the portfolio</option>
+                  </select>
+                </label>
+              </div>
+              <p class="text-muted text-sm purchase-cash-hint" v-if="!cashSources(sym).length">
+                No cash holdings to pay from — hold a money-market fund (e.g. SPAXX) or set a holding's category to Cash.
+              </p>
+              <p class="purchase-preview" v-if="purchasePreview(sym)">
+                Cost {{ formatUSD(purchasePreview(sym).cost) }} ·
+                {{ purchasePreview(sym).was ? 'New position' : 'Position' }}: {{ formatShares(purchasePreview(sym).quantity) }} shares
+                at an average of {{ formatPrice(purchasePreview(sym).avgCost) }}
+                <span class="text-muted" v-if="purchasePreview(sym).was">
+                  (was {{ formatShares(purchasePreview(sym).was.quantity) }} at {{ formatPrice(purchasePreview(sym).was.avgCost) }})
+                </span>
+                <br />
+                <template v-if="purchasePreview(sym).from">
+                  Paid from {{ purchasePreview(sym).from.symbol }}:
+                  {{ formatUSD(purchasePreview(sym).from.available) }} →
+                  <span :class="{ negative: purchasePreview(sym).from.after < 0 }">{{ formatUSD(purchasePreview(sym).from.after) }}</span>
+                  <span class="negative" v-if="purchasePreview(sym).from.after < 0"> (not enough)</span>
+                </template>
+                <span class="text-muted" v-else>Not deducted from a cash holding.</span>
+              </p>
+              <div class="notice error portfolio-error" v-if="purchaseForms[sym].error">{{ purchaseForms[sym].error }}</div>
+              <div class="portfolio-actions">
+                <button type="submit" class="primary">Add purchase</button>
+                <button type="button" v-if="positionFor(sym)" @click="cancelPurchase(sym)">Cancel</button>
+                <button type="button" class="link-button" v-else @click="cancelPurchase(sym); startPositionEdit(sym)">
+                  Enter a total position instead
+                </button>
+              </div>
+            </form>
+
             <form class="portfolio-form" v-else-if="positionForms[sym]" @submit.prevent="savePosition(sym)" novalidate>
               <p class="text-muted text-sm" v-if="!positionFor(sym)" style="margin:0 0 10px">
                 Enter your {{ sym }} holding to track its value and gain/loss.
@@ -1577,6 +1996,9 @@ export default {
               <div class="portfolio-actions">
                 <button type="submit" class="primary">Save position</button>
                 <button type="button" v-if="positionFor(sym)" @click="cancelPositionEdit(sym)">Cancel</button>
+                <button type="button" class="link-button" v-else @click="cancelPositionEdit(sym); startPurchase(sym)">
+                  Add a purchase instead
+                </button>
               </div>
             </form>
 
@@ -1622,15 +2044,49 @@ export default {
                     {{ positionSummary(sym).dayGain != null ? signedUSD(positionSummary(sym).dayGain) + ' (' + formatPct(positionSummary(sym).dayPct) + ')' : '—' }}
                   </span>
                 </div>
+                <div class="portfolio-stat" v-if="realizedFor(sym) != null">
+                  <span class="portfolio-label">Realized G/L</span>
+                  <span class="portfolio-value" :class="changeClass(realizedFor(sym))">{{ signedUSD(realizedFor(sym)) }}</span>
+                </div>
               </div>
               <p class="text-muted text-sm portfolio-note">
                 Value at a price of {{ positionSummary(sym).price != null ? formatPrice(positionSummary(sym).price) : 'the latest price' }} (delayed quote).
               </p>
               <div class="portfolio-actions">
+                <button type="button" class="primary" @click="startPurchase(sym)">＋ Add purchase</button>
+                <button type="button" v-if="portfolioOnly" @click="startSale(sym)">Sell</button>
                 <button type="button" @click="startPositionEdit(sym)">Edit position</button>
                 <button type="button" class="danger" @click="removePosition(sym)">Remove</button>
               </div>
             </template>
+
+            <!-- Transactions: purchases (+) and sales (−), newest first -->
+            <div class="transactions" v-if="user && transactionsFor(sym).length && !positionForms[sym]">
+              <div class="transactions-title">Transactions</div>
+              <table class="data-table transactions-table">
+                <thead>
+                  <tr><th>Date</th><th class="num">Shares</th><th class="num">Price</th><th class="num tx-amount">Amount</th><th class="num">Realized</th><th><span class="sr-only">Delete</span></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="tx in transactionsFor(sym)" :key="tx.id">
+                    <td>
+                      {{ formatDate(tx.date + 'T12:00:00') }}
+                      <div class="tx-from">
+                        {{ tx.type === 'sell' ? 'Sell' : 'Buy' }}<template v-if="tx.paidFrom"> · from {{ tx.paidFrom }}</template><template v-if="tx.depositTo"> · to {{ tx.depositTo }}</template>
+                      </div>
+                    </td>
+                    <td class="num" :class="tx.type === 'sell' ? 'negative' : ''">{{ (tx.type === 'sell' ? '−' : '+') + formatShares(tx.quantity) }}</td>
+                    <td class="num">{{ formatPrice(tx.price) }}</td>
+                    <td class="num tx-amount">{{ formatUSD(tx.quantity * tx.price) }}</td>
+                    <td class="num" :class="tx.type === 'sell' ? changeClass(tx.realized) : ''">{{ tx.type === 'sell' ? signedUSD(tx.realized) : '' }}</td>
+                    <td class="num">
+                      <button type="button" class="link-button danger-link" :aria-label="'Delete ' + (tx.type === 'sell' ? 'sale' : 'purchase') + ' of ' + tx.quantity + ' on ' + tx.date"
+                              :title="'Delete this ' + (tx.type === 'sell' ? 'sale' : 'purchase')" @click="deleteTransaction(sym, tx)">✕</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <!-- Alerts: this stock's alerts + quick presets (checked by the server on each quote refresh) -->
@@ -1756,6 +2212,59 @@ export default {
       </div>
 
       </div>
+      </div>
+
+      <!-- Portfolio page: Closed positions — collapsible, totals at average cost -->
+      <div class="holdings-card closed-card" v-if="portfolioOnly && closedPositions.length">
+        <button type="button" class="holdings-toggle" :aria-expanded="closedOpen" aria-controls="closed-positions"
+                @click="closedOpen = !closedOpen">
+          <span class="holdings-heading">
+            <span class="holdings-chevron" aria-hidden="true">▶</span>
+            <span class="holdings-title">Closed positions</span>
+            <span class="holdings-count">{{ closedPositions.length }}</span>
+          </span>
+          <span class="holdings-stats">
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">Cost basis</span>
+              <span class="holdings-stat-value">{{ formatUSD(closedTotals.costBasis) }}</span>
+            </span>
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">Proceeds</span>
+              <span class="holdings-stat-value">{{ formatUSD(closedTotals.proceeds) }}</span>
+            </span>
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">Realized G/L</span>
+              <span class="holdings-stat-value" :class="changeClass(closedTotals.realized)">
+                {{ signedUSD(closedTotals.realized) }}<template v-if="closedTotals.realizedPct != null"> ({{ formatPct(closedTotals.realizedPct) }})</template>
+              </span>
+            </span>
+          </span>
+        </button>
+        <ul class="closed-list" id="closed-positions" v-show="closedOpen">
+          <li class="closed-row" v-for="c in closedPositions" :key="c.id">
+            <div class="closed-id">
+              <span class="stock-row-ticker">{{ c.symbol }}</span>
+              <span class="text-muted text-sm closed-name">{{ c.name }}</span>
+              <div class="text-muted text-sm">
+                {{ c.openedDate ? formatDate(c.openedDate + 'T12:00:00') + ' – ' : 'Closed ' }}{{ formatDate(c.closedDate + 'T12:00:00') }}
+              </div>
+            </div>
+            <div class="closed-nums">
+              <span class="stock-row-num"><span class="stock-row-label">Shares</span><span>{{ formatShares(c.sharesSold) }}</span></span>
+              <span class="stock-row-num"><span class="stock-row-label">Avg cost</span><span>{{ formatPrice(c.costBasis / c.sharesSold) }}</span></span>
+              <span class="stock-row-num"><span class="stock-row-label">Avg sale</span><span>{{ formatPrice(c.proceeds / c.sharesSold) }}</span></span>
+              <span class="stock-row-num"><span class="stock-row-label">Cost basis</span><span>{{ formatUSD(c.costBasis) }}</span></span>
+              <span class="stock-row-num"><span class="stock-row-label">Proceeds</span><span>{{ formatUSD(c.proceeds) }}</span></span>
+              <span class="stock-row-num"><span class="stock-row-label">Realized G/L</span>
+                <span :class="changeClass(c.realized)">{{ signedUSD(c.realized) }}<template v-if="c.costBasis > 0"> ({{ formatPct((c.realized / c.costBasis) * 100) }})</template></span>
+              </span>
+            </div>
+            <div class="closed-actions">
+              <button type="button" class="link-button" @click="reopenClosed(c)" title="Undo the final sale and return it to Holdings">Undo close</button>
+              <button type="button" class="link-button danger-link" @click="deleteClosed(c)">Delete</button>
+            </div>
+          </li>
+        </ul>
       </div>
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">

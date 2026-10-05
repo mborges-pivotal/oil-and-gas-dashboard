@@ -826,6 +826,51 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .portfolio-label { color: var(--text-muted); white-space: nowrap; }
 .portfolio-value { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .portfolio-note { margin: 10px 0 0; }
+.purchase-preview { margin: 10px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.purchase-cash-hint { margin: 6px 0 0; }
+.tx-from { font-size: 11px; color: var(--text-muted); }
+.sale-qty { display: flex; align-items: center; gap: 8px; }
+.sale-qty input { flex: 1; min-width: 0; }
+.sale-qty .link-button { padding: 0; }
+/* Closed positions (Portfolio page) — shares the Holdings card look */
+.closed-card { margin-top: 12px; }
+.closed-list { list-style: none; margin: 0; padding: 0; }
+.closed-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px 24px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.closed-id { min-width: 0; }
+.closed-name { margin-left: 6px; }
+.closed-nums { display: grid; grid-template-columns: repeat(6, auto); gap: 4px 20px; }
+.closed-actions { display: flex; gap: 12px; }
+.closed-actions .link-button { padding: 0; }
+@media (max-width: 900px) {
+  .closed-row { grid-template-columns: 1fr auto; }
+  .closed-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(3, auto); justify-content: start; }
+}
+@media (max-width: 480px) {
+  .closed-nums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .closed-nums .stock-row-num { text-align: left; }
+}
+.transactions { margin-top: 16px; }
+.transactions-title { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+.transactions-table td, .transactions-table th { padding-left: 8px; padding-right: 8px; }
+.transactions-table th:last-child, .transactions-table td:last-child { width: 1%; }
+.transactions-table .link-button { padding: 0 4px; }
+/* Keep every column on phones (data tables otherwise hide columns 4+ there). */
+.transactions .data-table.transactions-table th, .transactions .data-table.transactions-table td { display: table-cell; }
+.portfolio-actions .link-button { align-self: center; }
+/* Phones: drop Amount (shares × price) so the sale columns and ✕ fit */
+@media (max-width: 480px) {
+  .transactions .data-table.transactions-table .tx-amount { display: none; }
+  .transactions-table td, .transactions-table th { padding-left: 4px; padding-right: 4px; }
+  .transactions-table td:first-child { white-space: nowrap; }
+  .transactions-table .tx-from { white-space: normal; }
+}
 
 /* Watchlist picker, list actions, search (Markets → Stocks) */
 .watchlist-toolbar {

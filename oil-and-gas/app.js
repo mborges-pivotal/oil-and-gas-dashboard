@@ -342,9 +342,11 @@ const App = {
     // Content tabs only — Settings and Sign In / Profile are pages reached
     // from the header's account menu (UserMenu).
     // Portfolio appears when signed in (positions need an account) and you
-    // hold at least one position.
-    const hasPositions = computed(() => !!user.value
-      && Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0));
+    // hold at least one position — or have closed ones to look back at.
+    const hasPositions = computed(() => !!user.value && (
+      Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
+      || (config.value?.closedPositions?.length ?? 0) > 0
+    ));
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
@@ -447,6 +449,7 @@ const App = {
         ui: { ...updated.ui, theme: config.value.ui?.theme },
         // Portfolio positions are edited on the Stocks tab, not in this panel.
         portfolio: config.value.portfolio,
+        closedPositions: config.value.closedPositions,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
       };
@@ -532,11 +535,20 @@ const App = {
 
     // A stock's position (quantity + average cost) saved or removed on its
     // Portfolio tab. config.portfolio is { SYMBOL: { quantity, avgCost } }.
-    function onSetPosition({ symbol, position }) {
+    // Also { updates: { SYMBOL: position | null, … } } — several positions in
+    // one save (a purchase paid from a cash holding changes both), so they
+    // can't land separately.
+    // `closed` (optional) replaces config.closedPositions — sold-out positions.
+    function onSetPosition({ symbol, position, updates, closed }) {
       const portfolio = { ...(config.value.portfolio ?? {}) };
-      if (position) portfolio[symbol] = position;
-      else delete portfolio[symbol];
-      persistConfig({ ...config.value, portfolio }, 'Portfolio position');
+      const changes = updates ?? (symbol ? { [symbol]: position } : {});
+      for (const [sym, pos] of Object.entries(changes)) {
+        if (pos) portfolio[sym] = pos;
+        else delete portfolio[sym];
+      }
+      const next = { ...config.value, portfolio };
+      if (closed) next.closedPositions = closed;
+      persistConfig(next, 'Portfolio position');
     }
 
 
