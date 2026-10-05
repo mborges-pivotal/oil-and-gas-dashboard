@@ -13,6 +13,9 @@ const STOCK_RANGE_OPTIONS = [{ id: '1D', label: '1D' }, ...RANGE_OPTIONS];
 import HistoryChart from './HistoryChart.js';
 import AllocationChart from './AllocationChart.js';
 import NoteForm from './NoteForm.js';
+import AlertForm from './AlertForm.js';
+import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
+import { describeAlert, alertPresets } from '../utils/alerts.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
 const INDEX_LABELS = {
@@ -78,7 +81,7 @@ const CHART_FETCH_RANGE = '5y';
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
@@ -654,7 +657,7 @@ export default {
     });
     onUnmounted(() => clearInterval(refreshTimer));
 
-    // ── Per-ticker detail panel: two tabs, "Historical Chart" and ──
+    // ── Per-ticker detail panel: "Charts" (price history) and ──
     // "Documents" (SEC filings — was a separate Documents tab with its own
     // configured company list; now pulled directly for whatever's in the
     // Stock Watchlist, so there's nothing extra to configure). Both tabs
@@ -813,6 +816,44 @@ export default {
         f.error = e.message;
         f.busy = false;
       }
+    }
+
+    // ── Alerts (🔔 tab; signed in) ──
+    // One open form per ticker: { alertId (null = new), initial, busy, error }.
+    const alertForms = reactive({});
+    function activeAlertCount(ticker) {
+      return alertsFor(ticker).filter(a => a.active).length;
+    }
+    function openAlertForm(ticker, initial, alertId = null) {
+      alertForms[ticker] = { alertId, initial, busy: false, error: null };
+    }
+    function closeAlertForm(ticker) {
+      delete alertForms[ticker];
+    }
+    async function submitAlert(ticker, fields) {
+      const f = alertForms[ticker];
+      f.busy = true;
+      f.error = null;
+      try {
+        // Re-saving a one-time alert that already fired re-arms it.
+        await saveAlert(f.alertId, f.alertId ? { ...fields, active: true } : { symbol: ticker, ...fields });
+        closeAlertForm(ticker);
+      } catch (e) {
+        f.error = e.message;
+        f.busy = false;
+      }
+    }
+    async function toggleAlert(alert) {
+      try { await setAlertActive(alert, !alert.active); } catch (e) { alert._error = e.message; }
+    }
+    async function deleteAlertConfirm(alert) {
+      if (!confirm(`Delete this ${alert.symbol} alert?\n\n${describeAlert(alert)}`)) return;
+      try { await removeAlert(alert.id); } catch (e) { alert._error = e.message; }
+    }
+    function alertStatus(a) {
+      if (a.active) return a.lastTriggeredAt ? `Active · last triggered ${formatRelativeTime(a.lastTriggeredAt)}` : 'Active';
+      if (a.repeat === 'once' && a.lastTriggeredAt) return `Triggered ${formatRelativeTime(a.lastTriggeredAt)}`;
+      return 'Paused';
     }
 
     // ── Portfolio: your position in a ticker (quantity × average cost) ──
@@ -1094,7 +1135,9 @@ export default {
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
       isPortfolioList, hasPortfolioTab, portfolioTotals,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
-      notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote, cashBalance, cashForm, editCash, saveCash,
+      notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
+      alertsStore, alertsFor, activeAlertCount, alertForms, openAlertForm, closeAlertForm, submitAlert,
+      toggleAlert, deleteAlertConfirm, alertStatus, describeAlert, alertPresets, cashBalance, cashForm, editCash, saveCash,
       allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
@@ -1383,17 +1426,25 @@ export default {
           <span v-else class="chevron">▶</span>
         </div>
 
-        <!-- Historical Chart + Documents (SEC filings) — same content that -->
+        <!-- Charts + Documents (SEC filings) — same content that -->
         <!-- used to live on the standalone Documents tab, now nested here. -->
         <div class="accordion-body" v-if="details[sym]?.open">
           <div class="filing-tabs">
-            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Historical Chart</button>
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Charts</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'news' }" @click.stop="setDetailTab(sym, 'news')">News</button>
-            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')">Documents</button>
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')"><span class="label-full">Documents</span><span class="label-short" aria-hidden="true">Docs</span></button>
             <button class="filing-tab" v-if="hasPortfolioTab" :class="{ active: details[sym]?.tab === 'portfolio' }" @click.stop="setDetailTab(sym, 'portfolio')">Portfolio</button>
+            <button class="filing-tab alerts-tab" :class="{ active: details[sym]?.tab === 'alerts' }" @click.stop="setDetailTab(sym, 'alerts')"
+                    :aria-label="'Alerts' + (activeAlertCount(sym) ? ', ' + activeAlertCount(sym) + ' active' : '')" title="Alerts">
+              <svg class="icon-bell" viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+                <path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z M10 20a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+              </svg>
+              <span class="alerts-tab-text">Alerts</span>
+              <span class="alerts-tab-count" v-if="activeAlertCount(sym)" aria-hidden="true">{{ activeAlertCount(sym) }}</span>
+            </button>
           </div>
 
-          <!-- Historical Chart -->
+          <!-- Charts (price history) -->
           <template v-if="details[sym]?.tab === 'chart'">
             <div class="chart-filters" style="padding:12px 16px 0">
               <div class="range-btn-group">
@@ -1566,6 +1617,51 @@ export default {
                 <button type="button" @click="startPositionEdit(sym)">Edit position</button>
                 <button type="button" class="danger" @click="removePosition(sym)">Remove</button>
               </div>
+            </template>
+          </div>
+
+          <!-- Alerts: this stock's alerts + quick presets (checked by the server on each quote refresh) -->
+          <div class="alerts-panel" v-else-if="details[sym]?.tab === 'alerts'">
+            <div class="notice" v-if="!user">
+              Alerts notify you in your <strong>Inbox</strong> when {{ sym }} crosses a price, moves sharply in a day, hits a
+              52-week high or low, or trades on unusual volume.
+              <a href="#" @click.prevent="$emit('go-account')">Sign in</a> to create alerts.
+            </div>
+            <template v-else>
+              <AlertForm v-if="alertForms[sym]" :symbol="sym" :quote="stockQuotes[sym]" :avg-cost="positionFor(sym)?.avgCost ?? null"
+                         :initial="alertForms[sym].initial" :submit-label="alertForms[sym].alertId ? 'Save changes' : 'Create alert'"
+                         :busy="alertForms[sym].busy" :error="alertForms[sym].error"
+                         @save="submitAlert(sym, $event)" @cancel="closeAlertForm(sym)" />
+              <template v-else>
+                <div class="alert-presets">
+                  <span class="alert-presets-label">Quick add</span>
+                  <button type="button" class="note-chip" v-for="pr in alertPresets({ hasPosition: !!positionFor(sym) })" :key="pr.label"
+                          @click.stop="openAlertForm(sym, pr)">{{ pr.label }}</button>
+                  <button type="button" class="note-chip alert-custom" @click.stop="openAlertForm(sym, undefined)">＋ Custom</button>
+                </div>
+                <ul class="alert-list" v-if="alertsFor(sym).length">
+                  <li v-for="a in alertsFor(sym)" :key="a.id" class="alert-item" :class="{ inactive: !a.active }">
+                    <span class="alert-dot" :class="a.active ? 'on' : 'off'" aria-hidden="true"></span>
+                    <div class="alert-item-body">
+                      <div class="alert-item-title">{{ describeAlert(a) }}</div>
+                      <div class="text-muted text-sm">{{ alertStatus(a) }} · {{ a.repeat === 'daily' ? 'every day' : 'once' }}</div>
+                      <div class="alert-item-note" v-if="a.note">{{ a.note }}</div>
+                      <div class="notice error" v-if="a._error" style="margin:4px 0 0">{{ a._error }}</div>
+                    </div>
+                    <div class="alert-item-actions">
+                      <button type="button" class="link-button" @click.stop="openAlertForm(sym, a, a.id)">Edit</button>
+                      <button type="button" class="link-button" @click.stop="toggleAlert(a)">
+                        {{ a.active ? 'Pause' : (a.repeat === 'once' && a.lastTriggeredAt ? 'Re-arm' : 'Resume') }}
+                      </button>
+                      <button type="button" class="link-button danger-link" @click.stop="deleteAlertConfirm(a)">Delete</button>
+                    </div>
+                  </li>
+                </ul>
+                <p class="text-muted text-sm alert-empty" v-else>
+                  No alerts for {{ sym }} yet — pick a quick alert above or create a custom one.
+                  Triggered alerts arrive in <strong>Inbox → Alerts</strong>.
+                </p>
+              </template>
             </template>
           </div>
 

@@ -1,7 +1,7 @@
 /**
  * SQLite persistence for user accounts, sessions, per-user profiles
  * (display name + dashboard settings), and signed-in users' additional
- * stock watchlists, and their saved news notes (with labels).
+ * stock watchlists, their saved news notes (with labels), and stock alerts.
  *
  * Uses Node's built-in node:sqlite (Node >= 22.13) so the project stays
  * dependency-free — no npm install. The database is a single file:
@@ -94,6 +94,38 @@ db.exec(`
     name    TEXT NOT NULL,
     UNIQUE (user_id, name COLLATE NOCASE)
   );
+  -- Stock alerts. kind: price | daily | position | high52 | low52 | volume;
+  -- params is kind-specific JSON (see server/alerts.js). repeat 'once'
+  -- deactivates after firing; 'daily' fires at most once per trading day.
+  CREATE TABLE IF NOT EXISTS alerts (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id            INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    symbol             TEXT NOT NULL,
+    kind               TEXT NOT NULL,
+    params             TEXT NOT NULL DEFAULT '{}',
+    repeat             TEXT NOT NULL DEFAULT 'once',
+    note               TEXT NOT NULL DEFAULT '',
+    active             INTEGER NOT NULL DEFAULT 1,
+    last_triggered_at  TEXT,
+    last_triggered_day TEXT,
+    created_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at         TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS alerts_user_id ON alerts(user_id);
+
+  -- Triggered alerts — what Inbox → Alerts lists. Kept if the alert is deleted.
+  CREATE TABLE IF NOT EXISTS alert_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    alert_id   INTEGER REFERENCES alerts(id) ON DELETE SET NULL,
+    symbol     TEXT NOT NULL,
+    title      TEXT NOT NULL,
+    body       TEXT NOT NULL DEFAULT '',
+    read       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS alert_events_user_id ON alert_events(user_id);
+
   CREATE TABLE IF NOT EXISTS note_label_links (
     note_id  INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     label_id INTEGER NOT NULL REFERENCES note_labels(id) ON DELETE CASCADE,
@@ -147,6 +179,30 @@ function migrateNotesTable() {
 migrateNotesTable();
 
 const stmts = {
+  // Alerts — scoped by user_id like everything else.
+  alerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? ORDER BY symbol, created_at, id'),
+  activeAlerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? AND active = 1'),
+  alert: db.prepare('SELECT * FROM alerts WHERE id = ? AND user_id = ?'),
+  countAlerts: db.prepare('SELECT COUNT(*) AS n FROM alerts WHERE user_id = ?'),
+  insertAlert: db.prepare('INSERT INTO alerts (user_id, symbol, kind, params, repeat, note) VALUES (?, ?, ?, ?, ?, ?)'),
+  updateAlert: db.prepare(`
+    UPDATE alerts SET kind = ?, params = ?, repeat = ?, note = ?, active = ?, updated_at = datetime('now')
+    WHERE id = ? AND user_id = ?
+  `),
+  markAlertFired: db.prepare(`
+    UPDATE alerts SET last_triggered_at = datetime('now'), last_triggered_day = ?, active = ? WHERE id = ? AND user_id = ?
+  `),
+  deleteAlert: db.prepare('DELETE FROM alerts WHERE id = ? AND user_id = ?'),
+  insertAlertEvent: db.prepare('INSERT INTO alert_events (user_id, alert_id, symbol, title, body) VALUES (?, ?, ?, ?, ?)'),
+  alertEvents: db.prepare('SELECT * FROM alert_events WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 200'),
+  alertEvent: db.prepare('SELECT * FROM alert_events WHERE id = ? AND user_id = ?'),
+  markEventRead: db.prepare('UPDATE alert_events SET read = 1 WHERE id = ? AND user_id = ?'),
+  markAllEventsRead: db.prepare('UPDATE alert_events SET read = 1 WHERE user_id = ? AND read = 0'),
+  pruneAlertEvents: db.prepare(`
+    DELETE FROM alert_events WHERE user_id = ? AND id NOT IN
+      (SELECT id FROM alert_events WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 500)
+  `),
+
   insertUser: db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)'),
   insertProfile: db.prepare('INSERT INTO profiles (user_id, display_name) VALUES (?, ?)'),
   userByEmail: db.prepare('SELECT id, email, password_hash FROM users WHERE email = ?'),
@@ -322,6 +378,34 @@ function inTransaction(fn) {
   }
 }
 
+function toAlert(row) {
+  return row && {
+    id: row.id,
+    symbol: row.symbol,
+    kind: row.kind,
+    params: JSON.parse(row.params),
+    repeat: row.repeat,
+    note: row.note,
+    active: !!row.active,
+    lastTriggeredAt: row.last_triggered_at ? toIso(row.last_triggered_at) : null,
+    lastTriggeredDay: row.last_triggered_day,
+    createdAt: toIso(row.created_at),
+    updatedAt: toIso(row.updated_at),
+  };
+}
+
+function toAlertEvent(row) {
+  return row && {
+    id: row.id,
+    alertId: row.alert_id,
+    symbol: row.symbol,
+    title: row.title,
+    body: row.body,
+    read: !!row.read,
+    createdAt: toIso(row.created_at),
+  };
+}
+
 module.exports = {
   DB_PATH,
   createUser,
@@ -379,4 +463,29 @@ module.exports = {
   }),
   deleteNote: (userId, id) => stmts.deleteNote.run(id, userId).changes > 0,
   deleteLabel: (userId, id) => stmts.deleteLabel.run(id, userId).changes > 0,
+
+  listAlerts: (userId) => stmts.alerts.all(userId).map(toAlert),
+  listActiveAlerts: (userId) => stmts.activeAlerts.all(userId).map(toAlert),
+  getAlert: (userId, id) => toAlert(stmts.alert.get(id, userId)),
+  countAlerts: (userId) => stmts.countAlerts.get(userId).n,
+  createAlert: (userId, a) =>
+    Number(stmts.insertAlert.run(userId, a.symbol, a.kind, JSON.stringify(a.params), a.repeat, a.note).lastInsertRowid),
+  updateAlert: (userId, id, a) =>
+    stmts.updateAlert.run(a.kind, JSON.stringify(a.params), a.repeat, a.note, a.active ? 1 : 0, id, userId).changes > 0,
+  deleteAlert: (userId, id) => stmts.deleteAlert.run(id, userId).changes > 0,
+  // Record a trigger: the event for Inbox, plus the alert's fired state
+  // (a one-time alert switches off), atomically.
+  fireAlert: (userId, alert, dayKey, title, body) => inTransaction(() => {
+    stmts.markAlertFired.run(dayKey, alert.repeat === 'once' ? 0 : 1, alert.id, userId);
+    const id = Number(stmts.insertAlertEvent.run(userId, alert.id, alert.symbol, title, body).lastInsertRowid);
+    stmts.pruneAlertEvents.run(userId, userId);
+    return toAlertEvent(stmts.alertEvent.get(id, userId));
+  }),
+  listAlertEvents: (userId) => stmts.alertEvents.all(userId).map(toAlertEvent),
+  markAlertEventsRead: (userId, ids) => {
+    if (!ids) return stmts.markAllEventsRead.run(userId).changes;
+    let n = 0;
+    for (const id of ids) n += stmts.markEventRead.run(id, userId).changes;
+    return n;
+  },
 };

@@ -8,8 +8,10 @@ import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 import MarketsComponent from './components/Markets.js';
 import NewsComponent from './components/News.js';
 import StocksComponent from './components/Stocks.js';
-import NotesComponent from './components/Notes.js';
+import InboxComponent from './components/Inbox.js';
 import { loadNotes, clearNotes } from './utils/notesStore.js';
+import { unreadTotal, defaultInboxSection, clearInbox, onMarkRead } from './utils/inboxStore.js';
+import { loadAlerts, clearAlerts, checkNow, persistAlertsRead } from './utils/alertsStore.js';
 import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
 import UserMenu from './components/UserMenu.js';
@@ -317,7 +319,7 @@ const App = {
   components: {
     Markets: MarketsComponent,
     Stocks: StocksComponent,
-    Notes: NotesComponent,
+    Inbox: InboxComponent,
     News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
@@ -348,16 +350,47 @@ const App = {
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
       ...(hasPositions.value ? [{ id: 'portfolio', label: 'Portfolio' }] : []),
-      ...(user.value ? [{ id: 'notes', label: 'Notes' }] : []),
+      // Inbox (signed in): Notes · Alerts · Messages, badged with unread alerts + messages.
+      ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
     ]);
-    // Notes are per account (DB): load on sign-in, drop on sign-out.
-    watch(() => user.value?.id ?? null, id => {
-      if (id) loadNotes();
-      else {
+
+    // Inbox sub-tab. Opening Inbox lands on unread alerts, then unread
+    // messages, else Notes; links from a saved news item go to Notes.
+    const inboxSection = ref('notes');
+    function selectTab(id) {
+      if (id === 'inbox' && activeTab.value !== 'inbox') inboxSection.value = defaultInboxSection();
+      activeTab.value = id;
+    }
+    function openNotes() {
+      inboxSection.value = 'notes';
+      activeTab.value = 'inbox';
+    }
+    // Notes and alerts are per account (DB): load on sign-in, drop on sign-out.
+    // Alerts are evaluated by the server whenever quotes refresh — on load
+    // and then every refresh interval — while someone is signed in.
+    onMarkRead('alerts', persistAlertsRead);
+    let alertTimer = null;
+    function startAlertChecks() {
+      clearInterval(alertTimer);
+      const interval = Math.max(30, config.value?.ui?.refreshIntervalSeconds ?? 60) * 1000;
+      alertTimer = setInterval(checkNow, interval);
+    }
+    watch(() => user.value?.id ?? null, async id => {
+      clearInterval(alertTimer);
+      if (id) {
+        loadNotes();
+        await loadAlerts();
+        checkNow();
+        startAlertChecks();
+      } else {
         clearNotes();
-        if (activeTab.value === 'notes') activeTab.value = 'markets';
+        clearAlerts();
+        clearInbox();
+        if (activeTab.value === 'inbox') activeTab.value = 'markets';
       }
     }, { immediate: true });
+    // A changed refresh interval (Settings) re-times the checks.
+    watch(() => config.value?.ui?.refreshIntervalSeconds, () => { if (user.value) startAlertChecks(); });
     // Last position removed (or signed out / reset) while on Portfolio.
     watch(hasPositions, has => {
       if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
@@ -511,6 +544,7 @@ const App = {
 
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
+      inboxSection, selectTab, openNotes,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
       themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onSetCash,
@@ -529,8 +563,9 @@ const App = {
             :key="tab.id"
             class="tab-btn"
             :class="{ active: activeTab === tab.id }"
-            @click="activeTab = tab.id"
-          >{{ tab.label }}</button>
+            :aria-label="tab.badge ? tab.label + ', ' + tab.badge + ' unread' : null"
+            @click="selectTab(tab.id)"
+          >{{ tab.label }}<span class="count-badge" v-if="tab.badge" aria-hidden="true">{{ tab.badge > 99 ? '99+' : tab.badge }}</span></button>
         </nav>
         <div class="theme-switch header-theme-switch" role="group" aria-label="Color theme">
           <button
@@ -565,11 +600,11 @@ const App = {
 
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
             @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'"
-            @go-notes="activeTab = 'notes'" />
+            @go-notes="openNotes" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
-            @set-position="onSetPosition" @set-cash="onSetCash" @go-notes="activeTab = 'notes'" />
-          <Notes         v-if="activeTab === 'notes'"     :config="config" />
+            @set-position="onSetPosition" @set-cash="onSetCash" @go-notes="openNotes" />
+          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"

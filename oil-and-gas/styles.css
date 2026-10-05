@@ -1057,7 +1057,8 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 @media (max-width: 360px) {
   .range-btn-group { gap: 2px; }
   .range-btn { font-size: 11px; }
-  .tab-btn { padding-left: 6px; padding-right: 6px; }
+  .tab-btn { padding-left: 5px; padding-right: 5px; }
+  .tab-btn .count-badge { min-width: 15px; height: 15px; padding: 0 4px; margin-left: 3px; font-size: 10px; line-height: 15px; }
 }
 
 /* ============================================================
@@ -1366,6 +1367,95 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .note-saved-at { margin-left: auto; }
 .notes-head-right { display: flex; align-items: center; gap: 12px; }
+
+/* Stock card 🔔 tab + alerts panel */
+.alerts-tab { display: inline-flex; align-items: center; gap: 5px; }
+.icon-bell { flex: none; }
+.alerts-tab-count {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+}
+.alerts-tab.active .alerts-tab-count { border-color: var(--accent); color: var(--accent); }
+@media (max-width: 480px) {
+  .alerts-tab-text { display: none; }  /* phones: just the bell (+ count) */
+  /* Stock detail tabs (Charts · News · Docs · Portfolio · 🔔) fit one row. */
+  .accordion-body > .filing-tabs .filing-tab { padding-left: 9px; padding-right: 9px; }
+  .accordion-body > .filing-tabs .label-full { display: none; }
+  .accordion-body > .filing-tabs .label-short { display: inline; }
+}
+.alerts-panel { padding: 12px 16px 14px; }
+.alert-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.alert-presets-label { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-right: 2px; }
+.alert-custom { border-style: dashed; }
+.alert-list { list-style: none; margin: 0; padding: 0; }
+.alert-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+.alert-item.inactive .alert-item-title { color: var(--text-muted); }
+.alert-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; }
+.alert-dot.on { background: var(--positive); }
+.alert-dot.off { background: var(--text-muted); opacity: 0.5; }
+.alert-item-body { flex: 1; min-width: 0; }
+.alert-item-title { font-weight: 600; font-size: 13px; }
+.alert-item-note { font-size: 12px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
+.alert-item-actions { flex: none; display: flex; gap: 12px; }
+.alert-item-actions .link-button { padding: 0; }
+.alert-empty { margin: 0; }
+@media (max-width: 480px) {
+  .alert-item { flex-wrap: wrap; }
+  .alert-item-actions { flex-basis: 100%; padding-left: 18px; }
+}
+/* Alert form */
+.alert-form { display: flex; flex-direction: column; gap: 10px; }
+.alert-field { display: flex; align-items: center; gap: 10px; margin: 0; }
+.alert-field select { flex: 0 1 240px; }
+.alert-field-label { font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap; }
+.alert-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.alert-seg { width: auto !important; flex-wrap: nowrap; }
+.alert-seg .range-btn { flex: none !important; padding: 5px 12px !important; }
+.alert-amount { display: inline-flex; align-items: center; gap: 6px; }
+.alert-amount input { width: 96px; }
+.alert-unit { font-size: 12px; color: var(--text-muted); }
+.alert-helper { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.alert-note { width: 100%; }
+.alert-error { margin: 0; }
+.alert-actions { display: flex; gap: 8px; }
+
+/* Unread counts: on the Inbox top tab and its Alerts / Messages sub-tabs */
+.count-badge {
+  display: inline-block;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 5px;
+  border-radius: 999px;
+  background: var(--negative);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  vertical-align: 1px;
+  font-variant-numeric: tabular-nums;
+}
+/* Inbox: alerts / messages list */
+.inbox-list-head { display: flex; justify-content: flex-end; margin-bottom: 8px; }
+.inbox-list { list-style: none; margin: 0; padding: 0; }
+.inbox-item { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 8px; cursor: pointer; }
+.inbox-item.unread { border-left: 3px solid var(--accent); }
+.inbox-dot { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--accent); }
+.inbox-item-body { flex: 1; min-width: 0; }
+.inbox-item-title { font-weight: 600; }
+.inbox-item.unread .inbox-item-title { font-weight: 700; }
+.inbox-item-text { font-size: 13px; color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.inbox-item-time { flex: none; }
 .notes-head-right button { padding: 5px 12px; }
 .note-new { margin-bottom: 14px; }
 .note-new .note-form { border: none; padding: 0; margin: 0; background: transparent; }

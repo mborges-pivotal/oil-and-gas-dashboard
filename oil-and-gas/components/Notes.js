@@ -13,7 +13,8 @@ import { formatDate, formatRelativeTime } from '../utils/formatters.js';
 export default {
   name: 'Notes',
   components: { NoteForm },
-  props: ['config'],
+  // embedded: shown as the Inbox's Notes sub-tab — the page title comes from Inbox.
+  props: { config: Object, embedded: Boolean },
   setup(props) {
     const symbolFilter = ref('');      // '' = all stocks
     const labelFilter = ref([]);       // label ids; a note matches if it has any
@@ -125,7 +126,8 @@ export default {
   template: `
     <div class="notes-page">
       <div class="flex-between mb-16 notes-head">
-        <div class="section-header" style="margin-bottom:0">Notes</div>
+        <div class="section-header" style="margin-bottom:0" v-if="!embedded">Notes</div>
+        <span v-else></span>
         <div class="notes-head-right">
           <span class="text-muted text-sm" v-if="notesStore.loaded && notesStore.notes.length">
             {{ filtering ? filtered.length + ' of ' : '' }}{{ notesStore.notes.length }} note{{ notesStore.notes.length === 1 ? '' : 's' }}
