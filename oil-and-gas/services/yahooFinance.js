@@ -55,7 +55,8 @@ async function fetchWithFallback(url) {
 /**
  * Fetch current quote data for a single symbol.
  * Returns: { symbol, shortName, price, previousClose, change, pctChange, volume, currency,
- *            open, dayHigh, dayLow, fiftyTwoWeekHigh, fiftyTwoWeekLow }
+ *            open, dayHigh, dayLow, fiftyTwoWeekHigh, fiftyTwoWeekLow, instrumentType }
+ * instrumentType is Yahoo's EQUITY | ETF | MUTUALFUND | CRYPTOCURRENCY | MONEYMARKET | FUTURE | ...
  */
 export async function fetchQuote(symbol) {
   const url = `${BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
@@ -74,8 +75,11 @@ export async function fetchQuote(symbol) {
   const prev = meta.previousClose
     ?? (closes.length >= 2 && closes[closes.length - 2] != null ? closes[closes.length - 2] : null)
     ?? meta.chartPreviousClose;
-  const change = price - prev;
-  const pctChange = prev !== 0 ? (change / prev) * 100 : 0;
+  // Some instruments (e.g. $1-NAV money-market funds) report no previous
+  // close — leave the change unknown rather than NaN.
+  const hasPrev = prev != null && Number.isFinite(prev);
+  const change = hasPrev ? price - prev : null;
+  const pctChange = hasPrev && prev !== 0 ? (change / prev) * 100 : (hasPrev ? 0 : null);
   return {
     symbol,
     shortName: meta.shortName ?? symbol,
@@ -90,6 +94,7 @@ export async function fetchQuote(symbol) {
     dayLow: meta.regularMarketDayLow ?? null,
     fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? null,
     fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? null,
+    instrumentType: meta.instrumentType ?? null,
   };
 }
 
@@ -257,4 +262,31 @@ export async function searchSymbols(query, count = 8) {
       exchange: r.exchDisp || r.exchange || '',
       type: r.typeDisp || r.quoteType || '',
     }));
+}
+
+// symbol → Promise<{ sector, industry } | null>, kept for the page's lifetime
+// (a company's sector doesn't change between refreshes).
+const profileCache = new Map();
+
+/**
+ * A stock's sector and industry (e.g. Energy / Oil & Gas Integrated), from
+ * Yahoo's search endpoint — the profile endpoint needs an auth crumb this
+ * app doesn't have. Only equities have one; funds, crypto, etc. return null.
+ */
+export function fetchSector(symbol) {
+  if (!profileCache.has(symbol)) {
+    const url = `${BASE}/v1/finance/search?q=${encodeURIComponent(symbol)}&quotesCount=5&newsCount=0&enableFuzzyQuery=false`;
+    const p = fetchWithFallback(url)
+      .then(data => {
+        const q = (data?.quotes ?? []).find(r => r.symbol?.toUpperCase() === symbol.toUpperCase());
+        const sector = q?.sectorDisp || q?.sector || null;
+        return sector ? { sector, industry: q.industryDisp || q.industry || null } : null;
+      })
+      .catch(err => {
+        profileCache.delete(symbol); // let a later refresh retry
+        throw err;
+      });
+    profileCache.set(symbol, p);
+  }
+  return profileCache.get(symbol);
 }

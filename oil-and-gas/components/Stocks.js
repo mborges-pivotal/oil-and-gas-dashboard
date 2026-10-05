@@ -1,5 +1,6 @@
 const { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
-import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols } from '../services/yahooFinance.js';
+import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, fetchSector } from '../services/yahooFinance.js';
+import { CATEGORIES, CATEGORY_LABELS, CATEGORY_SHORT, autoCategory, buildSlices, assignSlots, shortSector } from '../utils/allocation.js';
 import { fetchWatchlists, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/watchlists.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
 import { formatUSD, formatNumber, formatPct, formatPercentLevel, formatVolume, formatLargeUSD, formatDate, formatRelativeTime, changeClass } from '../utils/formatters.js';
@@ -10,6 +11,7 @@ import { RANGE_OPTIONS, cutoffDateFor } from '../utils/dateRange.js';
 // serve daily/weekly series where a single day doesn't make sense.
 const STOCK_RANGE_OPTIONS = [{ id: '1D', label: '1D' }, ...RANGE_OPTIONS];
 import HistoryChart from './HistoryChart.js';
+import AllocationChart from './AllocationChart.js';
 
 const INDEX_LABELS = {
   '^GSPC': 'S&P 500',
@@ -74,13 +76,14 @@ const CHART_FETCH_RANGE = '5y';
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart },
+  components: { HistoryChart, AllocationChart },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
-  // set-position: { symbol, position: { quantity, avgCost } | null } for config.portfolio
-  emits: ['set-tickers', 'set-position', 'updated', 'go-account'],
+  // set-position: { symbol, position: { quantity, avgCost, category? } | null } for config.portfolio
+  // set-cash: cash balance (number) for config.portfolioCash
+  emits: ['set-tickers', 'set-position', 'set-cash', 'updated', 'go-account'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -787,7 +790,7 @@ export default {
     // Saved in config.portfolio — with the rest of the settings, so in the
     // profile when signed in, else this browser — keyed by symbol, so the
     // same holding shows in every watchlist that contains the ticker.
-    const positionForms = reactive({}); // ticker → { quantity, avgCost, error } while editing
+    const positionForms = reactive({}); // ticker → { quantity, avgCost, category, error } while editing
 
     // Only the additional (DB) watchlists get a Portfolio tab, not Default.
     // Switching to Default moves any open Portfolio tab back to the chart
@@ -809,7 +812,12 @@ export default {
 
     function startPositionEdit(ticker) {
       const p = positionFor(ticker);
-      positionForms[ticker] = { quantity: p ? String(p.quantity) : '', avgCost: p ? String(p.avgCost) : '', error: null };
+      positionForms[ticker] = {
+        quantity: p ? String(p.quantity) : '',
+        avgCost: p ? String(p.avgCost) : '',
+        category: p?.category ?? '', // '' = automatic, from Yahoo's instrument type
+        error: null,
+      };
     }
 
     function cancelPositionEdit(ticker) {
@@ -825,7 +833,9 @@ export default {
         f.error = 'Enter an average cost of 0 or more.';
         return;
       }
-      emit('set-position', { symbol: ticker, position: { quantity, avgCost } });
+      const position = { quantity, avgCost };
+      if (f.category) position.category = f.category;
+      emit('set-position', { symbol: ticker, position });
       delete positionForms[ticker];
     }
 
@@ -834,24 +844,147 @@ export default {
       emit('set-position', { symbol: ticker, position: null });
       // Back to an empty form (the config prop hasn't re-rendered yet, so
       // startPositionEdit would still see the old position).
-      positionForms[ticker] = { quantity: '', avgCost: '', error: null };
+      positionForms[ticker] = { quantity: '', avgCost: '', category: '', error: null };
     }
+
+    // Category: the one chosen on the position, else automatic from Yahoo's
+    // instrument type (null until the quote has loaded).
+    function autoCategoryFor(ticker) {
+      const type = stockQuotes[ticker]?.instrumentType;
+      return type ? autoCategory(type) : null;
+    }
+    function categoryFor(ticker) {
+      return positionFor(ticker)?.category || autoCategoryFor(ticker);
+    }
+
+    // ── Cash balance (Portfolio page) — config.portfolioCash ──
+    const cashBalance = computed(() => {
+      const n = Number(props.config.portfolioCash);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    });
+    const cashForm = ref(null); // { amount, error } while editing
+    function editCash() {
+      cashForm.value = { amount: cashBalance.value ? String(cashBalance.value) : '', error: null };
+    }
+    function saveCash() {
+      const raw = String(cashForm.value.amount).trim();
+      const amount = raw === '' ? 0 : Number(raw);
+      if (!Number.isFinite(amount) || amount < 0) {
+        cashForm.value.error = 'Enter an amount of 0 or more.';
+        return;
+      }
+      emit('set-cash', amount);
+      cashForm.value = null;
+    }
+
+    // ── Sectors (equities only), for the Portfolio page's sector chart ──
+    const sectors = reactive({}); // ticker → sector string | null (none) — absent while loading
+    function loadSector(ticker) {
+      if (ticker in sectors) return;
+      fetchSector(ticker)
+        .then(info => { sectors[ticker] = info?.sector ?? null; })
+        .catch(() => { sectors[ticker] = null; });
+    }
+    watch(() => (props.portfolioOnly ? portfolioTickers.value : []), syms => syms.forEach(loadSector), { immediate: true });
 
     // Totals across the Portfolio list. Value and G/L wait until every
     // position has a price, so they're never a misleading partial sum.
     const portfolioTotals = computed(() => {
       const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
-      if (!rows.length) return null;
+      const cash = cashBalance.value;
+      if (!rows.length && !cash) return null;
       const totalCost = rows.reduce((sum, r) => sum + r.totalCost, 0);
       const priced = rows.every(r => r.value != null);
       const value = priced ? rows.reduce((sum, r) => sum + r.value, 0) : null;
       const gain = value != null ? value - totalCost : null;
       const gainPct = gain != null && totalCost > 0 ? (gain / totalCost) * 100 : null;
-      const dayGain = rows.every(r => r.dayGain != null) ? rows.reduce((sum, r) => sum + r.dayGain, 0) : null;
+      // Holdings with no daily change (e.g. a $1 money-market fund) add nothing.
+      const changed = rows.filter(r => r.dayGain != null);
+      const dayGain = changed.length ? changed.reduce((sum, r) => sum + r.dayGain, 0) : null;
       // Today's % is relative to yesterday's value (today's value − today's G/L).
       const dayPct = dayGain != null && value != null && value - dayGain > 0 ? (dayGain / (value - dayGain)) * 100 : null;
-      return { count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct };
+      return {
+        count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct,
+        cash, totalWithCash: value != null ? value + cash : null,
+      };
     });
+
+    // ── Allocation charts (Portfolio page), shown side by side ──
+    // Slices wait for every price and category (and, by sector, every
+    // stock's sector) so a chart never shows a partial picture.
+    const categoryOrder = CATEGORIES.map(c => c.id);
+    function allocationRows() {
+      const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
+      return rows.some(r => r.value == null || !r.category) ? null : rows;
+    }
+    function cashItems() {
+      return cashBalance.value ? [{ key: 'cash', label: 'Cash', value: cashBalance.value, symbol: 'Cash' }] : [];
+    }
+    const allocationByType = computed(() => {
+      const rows = allocationRows();
+      if (!rows) return null;
+      return assignSlots(buildSlices([
+        ...rows.map(r => ({ key: r.category, label: r.categoryLabel, short: CATEGORY_SHORT[r.category], value: r.value, symbol: r.symbol })),
+        ...cashItems(),
+      ], categoryOrder));
+    });
+    const allocationBySector = computed(() => {
+      const rows = allocationRows();
+      if (!rows) return null;
+      const cash = cashItems();
+
+      // By sector: stocks by their sector; everything else by its category
+      // (fund sector breakdowns aren't available without Yahoo auth).
+      if (rows.some(r => r.category === 'stocks' && !(r.symbol in sectors))) return null;
+      const items = rows.map(r => {
+        if (r.category !== 'stocks') return { key: r.category, label: r.categoryLabel, short: CATEGORY_SHORT[r.category], value: r.value, symbol: r.symbol };
+        const sector = sectors[r.symbol];
+        return sector
+          ? { key: 'sector:' + sector, label: sector, short: shortSector(sector), value: r.value, symbol: r.symbol }
+          : { key: 'sector:?', label: 'Unclassified stocks', short: 'Unclassified', value: r.value, symbol: r.symbol };
+      });
+      const sectorKeys = [...new Set(items.filter(i => i.key.startsWith('sector:') && i.key !== 'sector:?').map(i => i.key))].sort();
+      return assignSlots(buildSlices([...items, ...cash], [...sectorKeys, 'sector:?', ...categoryOrder]));
+    });
+    const hasNonStockHoldings = computed(() =>
+      portfolioTickers.value.some(t => categoryFor(t) && categoryFor(t) !== 'stocks')
+    );
+
+    // ── 52-week range bar on every card ──
+    // Positions (0–100%) along a scale spanning the 52-week low→high. On the
+    // Portfolio page (withAvg) it also marks your average cost — the scale
+    // widens to include it when it falls outside the range — and colors
+    // price vs. cost; watchlists show just the range and today's price.
+    // null when there's no real range (e.g. a $1 money-market fund).
+    function rangeFor(ticker, withAvg = false) {
+      const q = stockQuotes[ticker];
+      const lo = q?.fiftyTwoWeekLow;
+      const hi = q?.fiftyTwoWeekHigh;
+      const price = q?.price;
+      if (![lo, hi, price].every(Number.isFinite) || !(hi > lo)) return null;
+      const avg = withAvg ? positionFor(ticker)?.avgCost ?? null : null;
+      if (withAvg && avg == null) return null;
+      const min = Math.min(lo, price, avg ?? lo);
+      const max = Math.max(hi, price, avg ?? hi);
+      const at = v => ((v - min) / (max - min)) * 100;
+      const pctOfRange = ((price - lo) / (hi - lo)) * 100;
+      const tip = `52-week range ${formatUSD(lo)} – ${formatUSD(hi)} · price ${formatUSD(price)} (${Math.round(pctOfRange)}% of range)`
+        + (avg != null ? ` · avg cost ${formatUSD(avg)}` : '');
+      return {
+        lo, hi, price, avg, tip,
+        gain: avg != null ? price >= avg : null,
+        loAt: at(lo), hiAt: at(hi), priceAt: at(price), avgAt: avg != null ? at(avg) : null,
+      };
+    }
+
+    // Range-bar labels: exact under $10K, compact above ($57.7K) so a
+    // bitcoin-sized price doesn't crowd the bar. Tooltips keep exact values.
+    const compactPriceFmt = new Intl.NumberFormat('en-US', {
+      style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1,
+    });
+    function rangeLabel(v) {
+      return Math.abs(v) >= 10000 ? compactPriceFmt.format(v) : formatUSD(v);
+    }
 
     // Whole or fractional shares, without trailing zeros (100, 12.5, 0.0035).
     const sharesFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
@@ -870,7 +1003,11 @@ export default {
       const gain = value != null ? value - totalCost : null;
       const gainPct = gain != null && totalCost > 0 ? (gain / totalCost) * 100 : null;
       const dayGain = q?.change != null ? p.quantity * q.change : null;
-      return { ...p, price, totalCost, value, gain, gainPct, dayGain, dayPct: q?.pctChange ?? null };
+      const category = categoryFor(ticker);
+      return {
+        ...p, symbol: ticker, price, totalCost, value, gain, gainPct, dayGain, dayPct: q?.pctChange ?? null,
+        category, categoryLabel: category ? CATEGORY_LABELS[category] : null, categoryIsAuto: !p.category,
+      };
     }
 
     function toggleDetail(ticker) {
@@ -926,7 +1063,9 @@ export default {
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
-      isPortfolioList, hasPortfolioTab, portfolioTotals, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
+      isPortfolioList, hasPortfolioTab, portfolioTotals,
+      CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel, cashBalance, cashForm, editCash, saveCash,
+      allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
       safeArticleUrl, onArticleClick,
@@ -1078,10 +1217,51 @@ export default {
             {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
           </span>
         </div>
+        <div class="portfolio-stat">
+          <span class="portfolio-label">
+            Cash
+            <button type="button" class="link-button" v-if="!cashForm" @click="editCash">Edit</button>
+          </span>
+          <span class="portfolio-value">{{ formatUSD(portfolioTotals.cash) }}</span>
+        </div>
+        <div class="portfolio-stat">
+          <span class="portfolio-label">Total incl. cash</span>
+          <span class="portfolio-value">{{ portfolioTotals.totalWithCash != null ? formatUSD(portfolioTotals.totalWithCash) : '—' }}</span>
+        </div>
+      </div>
+
+      <form class="watchlist-form cash-form" v-if="isPortfolioList && cashForm" @submit.prevent="saveCash" novalidate>
+        <input type="number" inputmode="decimal" min="0" step="any" placeholder="Cash balance ($)"
+               aria-label="Cash balance in dollars" v-model="cashForm.amount" @keydown.esc="cashForm = null" />
+        <button type="submit" class="primary">Save cash</button>
+        <button type="button" @click="cashForm = null">Cancel</button>
+        <div class="notice error watchlist-form-error" v-if="cashForm.error">{{ cashForm.error }}</div>
+      </form>
+
+      <!-- Allocation: by asset type and by sector, side by side -->
+      <div class="card allocation-card" v-if="isPortfolioList && portfolioTotals">
+        <div class="card-title allocation-head">Allocation</div>
+        <div class="allocation-pair">
+          <section class="allocation-panel" aria-label="Allocation by asset type">
+            <h3 class="allocation-panel-title">By asset type</h3>
+            <AllocationChart v-if="allocationByType && allocationByType.length" :slices="allocationByType" label="Allocation by asset type" />
+            <div class="skeleton allocation-skeleton" v-else></div>
+          </section>
+          <section class="allocation-panel" aria-label="Allocation by sector">
+            <h3 class="allocation-panel-title">By sector</h3>
+            <AllocationChart v-if="allocationBySector && allocationBySector.length" :slices="allocationBySector" label="Allocation by sector" />
+            <div class="skeleton allocation-skeleton" v-else></div>
+          </section>
+        </div>
+        <p class="text-muted text-sm allocation-note">
+          By current market value{{ cashBalance ? ', including cash' : '' }}.
+          Asset types come from Yahoo Finance — change one on a stock's Portfolio tab (e.g. a bond fund → Bonds).
+          <template v-if="hasNonStockHoldings || cashBalance">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
+        </p>
       </div>
 
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
-      <div class="notice" v-else-if="isPortfolioList && !tickers.length">
+      <div class="notice" v-else-if="isPortfolioList && !tickers.length && !cashBalance">
         No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to enter quantity and average cost.
       </div>
       <div class="notice" v-else-if="tickers.length === 0">
@@ -1110,6 +1290,33 @@ export default {
               <span class="stock-row-ticker">{{ sym }}</span>
               <span class="text-muted text-sm">{{ stockQuotes[sym]?.shortName }}</span>
             </div>
+            <!-- 52-week range: today's price (●); on the Portfolio page also your average cost (│) -->
+            <template v-for="r in [rangeFor(sym, portfolioOnly)]" :key="'r52-' + sym">
+            <div class="range52" v-if="r" :title="r.tip" role="img" :aria-label="r.tip">
+              <!-- top: avg (Portfolio) or "52W" (left), and the 52-week high right-aligned over the high end -->
+              <span class="range52-row">
+                <span class="range52-caption" v-if="r.avg != null">avg {{ rangeLabel(r.avg) }}</span>
+                <span class="range52-caption range52-tag" v-else>52W</span>
+                <span class="range52-hi" :style="{ right: 'max(0px, ' + (100 - r.hiAt) + '%)' }">{{ rangeLabel(r.hi) }}</span>
+              </span>
+              <span class="range52-track">
+                <!-- dashed: the part of the scale outside the 52-week range -->
+                <span class="range52-outside" v-if="r.loAt > 0" :style="{ left: 0, width: r.loAt + '%' }"></span>
+                <span class="range52-outside" v-if="r.hiAt < 100" :style="{ left: r.hiAt + '%', right: 0 }"></span>
+                <span class="range52-line" :style="{ left: r.loAt + '%', width: (r.hiAt - r.loAt) + '%' }"></span>
+                <template v-if="r.avg != null">
+                  <span class="range52-band" :class="r.gain ? 'gain' : 'loss'"
+                        :style="{ left: Math.min(r.avgAt, r.priceAt) + '%', width: Math.abs(r.priceAt - r.avgAt) + '%' }"></span>
+                  <span class="range52-avg" :style="{ left: r.avgAt + '%' }"></span>
+                </template>
+                <span class="range52-price" :class="r.gain == null ? 'neutral' : (r.gain ? 'gain' : 'loss')" :style="{ left: r.priceAt + '%' }"></span>
+              </span>
+              <!-- bottom: the 52-week low, left-aligned under the low end -->
+              <span class="range52-row">
+                <span class="range52-lo" :style="{ left: 'min(' + r.loAt + '%, calc(100% - 64px))' }">{{ rangeLabel(r.lo) }}</span>
+              </span>
+            </div>
+            </template>
             <div class="stock-row-metrics">
               <template v-if="stockQuotes[sym]?.loading && stockQuotes[sym]?.price == null">
                 <span class="skeleton" style="width:100%;height:14px;grid-column:1 / -2"></span>
@@ -1118,7 +1325,10 @@ export default {
                 <span class="text-muted text-sm" style="grid-column:1 / -2">Unavailable</span>
               </template>
               <template v-else>
-                <span class="stock-row-num">{{ formatUSD(stockQuotes[sym]?.price) }}</span>
+                <span class="stock-row-num">
+                  <span class="stock-row-label">Last</span>
+                  <span>{{ formatUSD(stockQuotes[sym]?.price) }}</span>
+                </span>
                 <span class="stock-row-num">
                   <span class="stock-row-label">Chg</span>
                   <span :class="changeClass(stockQuotes[sym]?.change)">{{ formatUSD(stockQuotes[sym]?.change) }}</span>
@@ -1249,6 +1459,13 @@ export default {
                   <input type="number" inputmode="decimal" min="0" step="any" placeholder="e.g. 152.40"
                          v-model="positionForms[sym].avgCost" />
                 </label>
+                <label>
+                  <span>Category</span>
+                  <select v-model="positionForms[sym].category">
+                    <option value="">Automatic{{ autoCategoryFor(sym) ? ' (' + CATEGORY_LABELS[autoCategoryFor(sym)] + ')' : '' }}</option>
+                    <option v-for="c in CATEGORIES" :key="c.id" :value="c.id">{{ c.label }}</option>
+                  </select>
+                </label>
               </div>
               <div class="notice error portfolio-error" v-if="positionForms[sym].error">{{ positionForms[sym].error }}</div>
               <div class="portfolio-actions">
@@ -1259,6 +1476,12 @@ export default {
 
             <template v-else-if="positionSummary(sym)">
               <div class="portfolio-grid">
+                <div class="portfolio-stat">
+                  <span class="portfolio-label">Category</span>
+                  <span class="portfolio-value">
+                    {{ positionSummary(sym).categoryLabel ?? '—' }}<span class="text-muted portfolio-auto" v-if="positionSummary(sym).categoryIsAuto && positionSummary(sym).categoryLabel"> (auto)</span>
+                  </span>
+                </div>
                 <div class="portfolio-stat">
                   <span class="portfolio-label">Quantity</span>
                   <span class="portfolio-value">{{ formatShares(positionSummary(sym).quantity) }}</span>

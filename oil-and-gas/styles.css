@@ -24,6 +24,22 @@
   --radius: 6px;
   --font: -apple-system, "Segoe UI", system-ui, sans-serif;
   --transition: 0.15s ease;
+  /* Categorical chart slots (allocation donut), in fixed order — the dark
+     steps of the validated reference palette, checked against --surface. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --series-other: #6e7681;
+  /* Ink for % labels drawn on each slot (white or near-black, whichever
+     contrasts more — all ≥ 4.6:1 on these dark-theme steps). */
+  --series-1-ink: #111111; --series-2-ink: #111111; --series-3-ink: #111111; --series-4-ink: #111111;
+  --series-5-ink: #111111; --series-6-ink: #ffffff; --series-7-ink: #111111; --series-8-ink: #111111;
+  --series-other-ink: #ffffff;
 }
 
 :root[data-theme="light"] {
@@ -43,6 +59,20 @@
   --negative-bg: rgba(207, 34, 46, 0.07);
   --positive-fill: rgba(26, 127, 55, 0.16);
   --negative-fill: rgba(207, 34, 46, 0.14);
+  /* Light steps of the same slots. Three sit under 3:1 on white, so the
+     chart always shows its legend table with names and values. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
+  --series-other: #8c959f;
+  --series-1-ink: #ffffff; --series-2-ink: #111111; --series-3-ink: #111111; --series-4-ink: #111111;
+  --series-5-ink: #111111; --series-6-ink: #ffffff; --series-7-ink: #ffffff; --series-8-ink: #111111;
+  --series-other-ink: #111111;
 }
 
 /* ============================================================
@@ -520,6 +550,7 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   min-width: 0;
 }
 .stock-row-id { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
+.stock-row-id > .text-muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stock-row-ticker { font-weight: 700; flex: none; }
 .stock-row-metrics {
   display: grid;
@@ -532,6 +563,147 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .stock-row-num > span { display: block; }
 .stock-row-label { font-size: 10px; font-weight: 400; color: var(--text-muted); line-height: 1.2; }
 .stock-row-sparkline { display: flex; justify-content: flex-end; width: 80px; flex: none; }
+
+/* Portfolio page: 52-week range bar inside each card's header row */
+.range52 {
+  /* Fixed width, pushed against the price column, so bars line up row to row
+     (long names truncate instead). Stacked: avg / "52W" + 52-wk high above
+     the track, 52-wk low below it. */
+  flex: 0 0 300px;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font-size: 10px;
+  line-height: 12px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.range52-row { position: relative; height: 12px; }
+.range52-row > span { position: absolute; top: 0; white-space: nowrap; }
+.range52-caption { left: 0; color: var(--text); font-weight: 600; }
+.range52-track { position: relative; height: 12px; }
+.range52-track > span { position: absolute; top: 50%; transform: translateY(-50%); }
+.range52-line { height: 2px; background: var(--text-muted); border-radius: 1px; opacity: 0.6; }
+.range52-outside { height: 0; border-top: 1px dashed var(--text-muted); opacity: 0.6; }
+.range52-band { height: 4px; border-radius: 2px; opacity: 0.35; }
+.range52-band.gain, .range52-price.gain { background: var(--positive); }
+.range52-band.loss, .range52-price.loss { background: var(--negative); }
+.range52-price.neutral { background: var(--accent); }
+.range52-tag { color: var(--text-muted); font-weight: 600; letter-spacing: 0.04em; }
+.range52-avg { width: 2px; height: 12px; margin-left: -1px; background: var(--text); border-radius: 1px; }
+.range52-price {
+  width: 9px;
+  height: 9px;
+  margin-left: -4.5px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--surface); /* ring keeps it distinct where it overlaps the avg tick */
+}
+
+/* Tablet widths: no room for name + bar + all the columns in one row —
+   name and numbers stay on top, the bar drops to its own line beneath. */
+@media (min-width: 769px) and (max-width: 1000px) {
+  .stock-row-main { flex-wrap: wrap; row-gap: 4px; }
+  /* The name keeps room for itself, which pushes the bar onto the next line. */
+  .stock-row-id { flex: 1 1 220px; min-width: 220px; }
+  .range52 { order: 3; flex: 0 1 360px; margin-left: 0; }
+}
+
+/* Portfolio page: allocation donut + legend table */
+.allocation-card { margin-bottom: 10px; }
+.allocation-head { margin-bottom: 12px; }
+/* Two panels side by side; each stacks its donut above its legend. */
+.allocation-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px 32px; }
+.allocation-panel { min-width: 0; }
+.allocation-panel-title { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--text-muted); }
+.allocation { display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+.allocation-donut-wrap { position: relative; width: 180px; height: 180px; align-self: center; }
+.allocation-donut { width: 180px; height: 180px; display: block; }
+.allocation-slice { stroke: var(--surface); stroke-width: 2; stroke-linejoin: round; cursor: pointer; transition: opacity var(--transition); }
+.allocation-slice.dim, .allocation-slice-label.dim { opacity: 0.35; }
+.allocation-slice-label { font-size: 11px; font-weight: 700; pointer-events: none; font-variant-numeric: tabular-nums; }
+/* HTML over the donut's hole so long names and holdings can wrap. */
+.allocation-center {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 96px;
+  height: 96px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  pointer-events: none;
+  line-height: 1.25;
+}
+.allocation-center-label { color: var(--text-muted); font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.allocation-center-value { color: var(--text); font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.allocation-center-symbols {
+  color: var(--text-muted);
+  font-size: 10px;
+  margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Two-column legend: ● Name  32%  $6.6K */
+.allocation-legend {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px 12px;
+  width: 100%;
+  max-width: 400px;
+  align-self: center;
+  font-size: 12px;
+}
+.allocation-legend li {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 3px 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity var(--transition);
+}
+.allocation-legend li.dim { opacity: 0.45; }
+.allocation-legend li.active { background: var(--surface-2); }
+.allocation-swatch { flex: none; width: 9px; height: 9px; border-radius: 2px; align-self: center; }
+.allocation-name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.allocation-pct { font-weight: 700; font-variant-numeric: tabular-nums; }
+.allocation-value { color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+/* Phones: name + % only — tap an item for its exact $ value in the center. */
+@media (max-width: 420px) {
+  .allocation-value { display: none; }
+}
+.allocation-skeleton { width: 100%; height: 180px; }
+.allocation-note { margin: 10px 0 0; }
+.portfolio-auto { font-weight: 400; }
+.cash-form input { flex: 0 1 220px; }
+.link-button {
+  border: none;
+  background: none;
+  padding: 0 0 0 6px;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.link-button:hover { text-decoration: underline; background: none; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 /* Portfolio list: totals across all positions, above the cards */
 .portfolio-totals {
@@ -849,7 +1021,9 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
      and drop volume. Tab rows scroll sideways rather than clip. */
   .stock-row-header { padding: 10px 12px; }
   .stock-row-main { flex-direction: column; align-items: stretch; gap: 6px; }
-  .stock-row-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)) 80px; gap: 8px; }
+  .range52 { flex: none; margin-left: 0; }
+  /* Price column sizes to its content so a large price ($86,030.47) can't run into Chg. */
+  .stock-row-metrics { grid-template-columns: max-content repeat(2, minmax(0, 1fr)) 80px; gap: 8px; }
   .stock-row-vol { display: none; }
   .stock-row-header .chevron { margin-left: 14px; }
   .filing-tabs, .subtab-bar { overflow-x: auto; scrollbar-width: none; }

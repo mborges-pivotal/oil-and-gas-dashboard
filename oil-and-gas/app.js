@@ -339,6 +339,7 @@ const App = {
     // Portfolio only appears while you hold at least one position.
     const hasPositions = computed(() =>
       Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
+      || Number(config.value?.portfolioCash) > 0
     );
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
@@ -395,6 +396,7 @@ const App = {
         ui: { ...updated.ui, theme: config.value.ui?.theme },
         // Portfolio positions are edited on the Stocks tab, not in this panel.
         portfolio: config.value.portfolio,
+        portfolioCash: config.value.portfolioCash,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
       };
@@ -487,6 +489,11 @@ const App = {
       persistConfig({ ...config.value, portfolio }, 'Portfolio position');
     }
 
+    // Cash balance edited on the Portfolio page.
+    function onSetCash(amount) {
+      persistConfig({ ...config.value, portfolioCash: amount }, 'Cash balance');
+    }
+
     // Provide config to all child components
     provide('config', config);
 
@@ -494,7 +501,7 @@ const App = {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onSetCash,
     };
   },
   template: `
@@ -545,7 +552,7 @@ const App = {
             @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
-            @set-position="onSetPosition" />
+            @set-position="onSetPosition" @set-cash="onSetCash" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"
