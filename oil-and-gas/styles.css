@@ -1613,6 +1613,75 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .alert-item-note { font-size: 12px; color: var(--text-muted); font-style: italic; overflow-wrap: anywhere; }
 .alert-item-actions { flex: none; display: flex; gap: 12px; }
 .alert-item-actions .link-button { padding: 0; }
+/* Options (stock card → Portfolio tab; Portfolio page) */
+.options-section { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.options-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.options-head button { padding: 5px 12px; }
+.option-form { margin-bottom: 12px; }
+.option-toggles { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
+.option-check { margin: 10px 0 0; font-size: 13px; color: var(--text-muted); }
+.option-check.ok { color: var(--positive); }
+.option-check.missing { color: var(--negative); }
+.option-empty { margin: 0; }
+.option-list { list-style: none; margin: 0; padding: 0; }
+.option-item { border-top: 1px solid var(--border); padding: 10px 0; }
+.option-item:first-child { border-top: none; }
+.option-row { display: grid; grid-template-columns: minmax(180px, 1fr) auto auto; align-items: center; gap: 8px 20px; }
+.option-id { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.option-name { font-weight: 700; font-size: 14px; }
+.option-side, .option-money, .option-days {
+  font-size: 11px; font-weight: 700; line-height: 16px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-muted); background: var(--surface-2); white-space: nowrap;
+}
+.option-side.long { color: var(--positive); border-color: currentColor; background: transparent; }
+.option-side.short { color: var(--negative); border-color: currentColor; background: transparent; }
+.option-money.itm { color: var(--text); }
+.option-days.soon { color: var(--warning); background: var(--warning-bg); border-color: transparent; }
+.option-days.expired { color: var(--negative); background: var(--negative-bg); border-color: transparent; }
+.option-nums { display: grid; grid-template-columns: repeat(5, auto); gap: 4px 18px; }
+.option-actions { display: flex; align-items: center; gap: 12px; }
+.option-actions .link-button { padding: 0; white-space: nowrap; }
+.option-sub { margin: 4px 0 0; }
+.option-close, .option-panel { margin-top: 10px; padding: 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.option-panel.transactions { padding: 4px 8px; }
+.closed-id .option-side { margin-right: 6px; }
+.option-cover { margin: 12px 0 0; padding: 10px 12px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--border); }
+.option-cover-check { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
+.option-cover-check input { width: auto; margin: 0; }
+.option-cover-detail { margin: 6px 0 0; font-size: 13px; font-variant-numeric: tabular-nums; }
+.option-cover-fields { margin-top: 8px; }
+.warning-text { color: var(--warning); }
+.option-cover-badge { font-size: 11px; font-weight: 700; line-height: 16px; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
+.option-cover-badge.cash, .option-cover-badge.shares { color: var(--accent); background: var(--surface-2); border: 1px solid currentColor; }
+.option-cover-badge.naked { color: var(--warning); background: var(--warning-bg); }
+.cash-reserve-line { margin: -4px 16px 10px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* Portfolio page: contract lines under a holding's header */
+.option-subrows { list-style: none; margin: 0; padding: 0 16px 10px; }
+.option-subrow {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto 70px 90px 90px; align-items: center; gap: 8px;
+  width: 100%; padding: 5px 8px; border: none; border-radius: 6px; background: var(--surface-2);
+  color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; margin-top: 4px;
+}
+.option-subrow:hover { background: var(--border); }
+.option-subrow .option-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.option-sub-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+@media (max-width: 900px) {
+  .option-row { grid-template-columns: 1fr auto; }
+  .option-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(5, auto); justify-content: start; }
+}
+@media (max-width: 480px) {
+  .option-row { grid-template-columns: 1fr; }
+  .option-nums { grid-column: auto; grid-row: auto; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .option-nums .stock-row-num { text-align: left; }
+  .option-actions { flex-wrap: wrap; }
+  .option-close, .option-panel { padding: 10px 8px; }
+  .option-panel.transactions { padding: 2px 0; }
+  .option-subrow { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+  .option-subrow .option-sub-num:nth-last-child(3), .option-subrow .option-sub-num:nth-last-child(2) { display: none; }
+  .option-subrow .option-money { display: none; }
+}
+
 /* Profile → Alerts */
 .alerts-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; }
 .alerts-search { flex: 0 1 220px; min-width: 0; }

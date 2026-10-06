@@ -4,6 +4,7 @@
  * Conditions mirror server/alerts.js (which does the evaluating).
  */
 import { formatPrice, formatRelativeTime } from './formatters.js';
+import { isOptionSymbol, optionLabel } from './options.js';
 
 const pct = v => `${Math.round(v * 100) / 100}%`;
 
@@ -16,12 +17,26 @@ export const ALERT_KINDS = [
   { id: 'volume',   label: 'Volume spike' },
 ];
 
+// Option contracts: the premium's price/daily/position alerts, plus expiry and moneyness.
+export const OPTION_ALERT_KINDS = [
+  { id: 'price',    label: 'Premium target' },
+  { id: 'daily',    label: 'Daily premium move' },
+  { id: 'position', label: 'Position gain/loss' },
+  { id: 'expiry',   label: 'Days to expiration' },
+  { id: 'strike',   label: 'In / out of the money' },
+];
+
+/** What an alert is on: the ticker, or the contract's label for an option. */
+export function alertSubject(symbol) {
+  return isOptionSymbol(symbol) ? optionLabel(symbol) : symbol;
+}
+
 /** One-line description of an alert's condition. */
 export function describeAlert(a) {
   const p = a.params;
   switch (a.kind) {
     case 'price':
-      return `Price ${p.direction} ${formatPrice(p.target)}`
+      return `${isOptionSymbol(a.symbol) ? 'Premium' : 'Price'} ${p.direction} ${formatPrice(p.target)}`
         + (p.basis === 'percent' ? ` (${p.percent >= 0 ? '+' : ''}${pct(p.percent)} from ${formatPrice(p.basePrice)})` : '');
     case 'daily':
       return `${p.direction === 'either' ? 'Moves ±' : p.direction === 'up' ? 'Up ' : 'Down '}${pct(p.percent)} or more in a day`;
@@ -33,6 +48,10 @@ export function describeAlert(a) {
       return p.within ? `Within ${pct(p.within)} of the 52-week low` : 'Reaches a new 52-week low';
     case 'volume':
       return `Volume ${p.multiple}× the 3-month average`;
+    case 'expiry':
+      return p.days ? `${p.days} day${p.days === 1 ? '' : 's'} or less to expiration` : 'On expiration day';
+    case 'strike':
+      return `Goes ${p.state === 'itm' ? 'in' : 'out of'} the money`;
     default:
       return a.kind;
   }
@@ -55,6 +74,17 @@ export function alertPresets({ hasPosition }) {
     ] : []),
     { label: '52-wk high',    kind: 'high52', params: { within: 0 } },
     { label: 'Volume 2×',     kind: 'volume', params: { multiple: 2 }, repeat: 'daily' },
+  ];
+}
+
+/** Starting points for an option contract's alerts (short = sold to open; covered by shares or cash). */
+export function optionAlertPresets({ short, covered = false }) {
+  return [
+    { label: '+50% gain',      kind: 'position', params: { direction: 'gain', percent: 50 } },
+    { label: '−50% loss',      kind: 'position', params: { direction: 'loss', percent: 50 } },
+    { label: '7 days left',    kind: 'expiry',   params: { days: 7 } },
+    { label: short ? (covered ? 'Assignment risk' : 'Goes ITM (assignment risk)') : 'Goes ITM', kind: 'strike', params: { state: 'itm' }, note: short ? 'In the money — may be assigned' : '' },
+    { label: 'Goes OTM',       kind: 'strike',   params: { state: 'otm' } },
   ];
 }
 

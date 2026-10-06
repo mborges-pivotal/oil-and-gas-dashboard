@@ -26,6 +26,10 @@
  *   high52    { within }   price at/within X% of the 52-week high (0 = at it)
  *   low52     { within }   … of the 52-week low
  *   volume    { multiple } today's volume ≥ N × 3-month average
+ * Option contracts (symbol = OCC, e.g. XOM261218C00170000) take price, daily
+ * and position (premium; a short position gains as the premium falls) plus:
+ *   expiry    { days }                    N or fewer days to expiration
+ *   strike    { state: itm|otm }          the underlying is in / out of the money
  * repeat: 'once' (switches off after firing) | 'daily' (at most once per trading day).
  */
 
@@ -36,11 +40,42 @@ const MAX_ALERTS = 200;
 const MAX_BULK = 50;
 const MAX_NOTE_LENGTH = 500;
 const TICKER_RE = /^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$/; // matches server/watchlists.js
-const KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume'];
+const KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume', 'expiry', 'strike'];
+const STOCK_KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume'];
+const OPTION_KINDS = ['price', 'daily', 'position', 'expiry', 'strike'];
 const NEAR_TOLERANCE_PCT = 0.1;   // "at" a 52-week high/low allows 0.1%
 const CHECK_MIN_INTERVAL_MS = 15 * 1000;
 const QUOTE_TTL_MS = 60 * 1000;
 const AVG_VOLUME_DAYS = 63;       // ~3 months of sessions
+
+// ── Option contracts (OCC symbols; mirrors utils/options.js) ─────────────
+const OCC_RE = /^([A-Z]{1,6})(\d{2})(\d{2})(\d{2})([CP])(\d{8})$/;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function parseOcc(symbol) {
+  const m = OCC_RE.exec(symbol);
+  if (!m) return null;
+  return { underlying: m[1], expiry: `20${m[2]}-${m[3]}-${m[4]}`, type: m[5] === 'P' ? 'put' : 'call', strike: Number(m[6]) / 1000 };
+}
+
+/** "XOM Dec 18 '26 170 Call" for an OCC symbol; anything else unchanged. */
+function label(symbol) {
+  const o = parseOcc(symbol);
+  if (!o) return symbol;
+  const [y, m, d] = o.expiry.split('-');
+  return `${o.underlying} ${MONTHS[Number(m) - 1]} ${Number(d)} '${y.slice(2)} ${Math.round(o.strike * 1000) / 1000} ${o.type === 'put' ? 'Put' : 'Call'}`;
+}
+
+// Calendar days from `day` (YYYY-MM-DD, exchange time) to expiration.
+function daysBetween(day, expiry) {
+  return Math.round((Date.parse(expiry + 'T00:00:00Z') - Date.parse(day + 'T00:00:00Z')) / 86400000);
+}
+
+function checkKindForSymbol(kind, symbol) {
+  const option = !!parseOcc(symbol);
+  if (option && !OPTION_KINDS.includes(kind)) throw new HttpError(400, 'That alert type isn\'t available for option contracts');
+  if (!option && !STOCK_KINDS.includes(kind)) throw new HttpError(400, 'That alert type is only for option contracts');
+}
 
 // ── Validation ────────────────────────────────────────────────────────────
 function num(value, field, { min = -Infinity, max = Infinity, gt = null } = {}) {
@@ -83,6 +118,13 @@ function validateParams(kind, p) {
       return { within: num(p.within ?? 0, 'Within', { min: 0, max: 50 }) };
     case 'volume':
       return { multiple: num(p.multiple, 'Multiple', { gt: 1, max: 100 }) };
+    case 'expiry': {
+      const days = num(p.days, 'Days', { min: 0, max: 365 });
+      if (!Number.isInteger(days)) throw new HttpError(400, 'Days must be a whole number');
+      return { days };
+    }
+    case 'strike':
+      return { state: oneOf(p.state, 'state', ['itm', 'otm']) };
     default:
       throw new HttpError(400, 'Unknown alert type');
   }
@@ -135,6 +177,10 @@ function describe(a) {
       return p.within ? `Within ${pct(p.within)} of the 52-week low` : 'New 52-week low';
     case 'volume':
       return `Volume ${p.multiple}× the 3-month average`;
+    case 'expiry':
+      return p.days ? `${p.days} day${p.days === 1 ? '' : 's'} or less to expiration` : 'Expiration day';
+    case 'strike':
+      return `Goes ${p.state === 'itm' ? 'in' : 'out of'} the money`;
     default:
       return a.kind;
   }
@@ -199,12 +245,29 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 // ── Evaluation ────────────────────────────────────────────────────────────
-/** null if not met (or not evaluable), else { title, detail }. */
-function evaluate(alert, q, avgCost) {
+/**
+ * null if not met (or not evaluable), else { title, detail }.
+ * ctx (option contracts): { short, underlying: quote of the underlying stock }.
+ */
+function evaluate(alert, q, avgCost, ctx = {}) {
   const p = alert.params;
+  const s = label(alert.symbol);
+  const o = parseOcc(alert.symbol);
+  if (alert.kind === 'expiry') {
+    if (!o) return null;
+    const days = daysBetween(q.day, o.expiry);
+    if (days < 0 || days > p.days) return null;
+    return { title: days === 0 ? `${s} expires today` : `${s} expires in ${days} day${days === 1 ? '' : 's'}`, detail: `Expiration ${o.expiry}` };
+  }
+  if (alert.kind === 'strike') {
+    const u = ctx.underlying?.price;
+    if (!o || !(u > 0)) return null;
+    const itm = o.type === 'call' ? u > o.strike : u < o.strike;
+    if (itm !== (p.state === 'itm')) return null;
+    return { title: `${s} is ${itm ? 'in' : 'out of'} the money`, detail: `${o.underlying} ${usd(u)} vs. strike ${usd(o.strike)}` };
+  }
   const price = q.price;
   if (price == null) return null;
-  const s = alert.symbol;
   switch (alert.kind) {
     case 'price':
       if (p.direction === 'above' ? price >= p.target : price <= p.target) {
@@ -221,9 +284,10 @@ function evaluate(alert, q, avgCost) {
     }
     case 'position': {
       if (!(avgCost > 0)) return null;
-      const g = ((price - avgCost) / avgCost) * 100;
+      // A short option (sold to open) gains as its premium falls.
+      const g = ((ctx.short ? avgCost - price : price - avgCost) / avgCost) * 100;
       const hit = p.direction === 'gain' ? g >= p.percent : g <= -p.percent;
-      return hit ? { title: `${s} position ${g >= 0 ? 'up' : 'down'} ${pct(Math.abs(g))}`, detail: `Price ${usd(price)} vs. your average cost ${usd(avgCost)}` } : null;
+      return hit ? { title: `${s} position ${g >= 0 ? 'up' : 'down'} ${pct(Math.abs(g))}`, detail: `Price ${usd(price)} vs. your average ${o ? 'premium' : 'cost'} ${usd(avgCost)}` } : null;
     }
     case 'high52': {
       if (!q.high52) return null;
@@ -251,18 +315,27 @@ const lastCheck = new Map(); // userId → ms
 async function runCheck(userId, onlyIds = null) {
   const active = db.listActiveAlerts(userId).filter(a => !onlyIds || onlyIds.includes(a.id));
   if (!active.length) return [];
-  const symbols = [...new Set(active.map(a => a.symbol))];
+  // Strike alerts also need the option's underlying stock.
+  const symbols = [...new Set(active.flatMap(a => (a.kind === 'strike' ? [a.symbol, parseOcc(a.symbol)?.underlying] : [a.symbol]).filter(Boolean)))];
   const quotes = new Map();
   await Promise.all(symbols.map(async sym => {
     try { quotes.set(sym, await getQuote(sym)); } catch { /* skip this symbol this round */ }
   }));
-  const portfolio = db.getProfile(userId)?.settings?.portfolio ?? {};
+  const settings = db.getProfile(userId)?.settings ?? {};
+  const portfolio = settings.portfolio ?? {};
+  const options = settings.optionPositions ?? {};
   const events = [];
   for (const alert of active) {
-    const q = quotes.get(alert.symbol);
+    const option = parseOcc(alert.symbol);
+    let q = quotes.get(alert.symbol);
+    // An expiration countdown doesn't need the contract's quote (an expired
+    // or untraded contract may have none) — only today's date in New York.
+    if (!q && alert.kind === 'expiry') q = { day: dayIn('America/New_York', Math.floor(Date.now() / 1000)), price: null };
     if (!q) continue;
     if (alert.repeat === 'daily' && alert.lastTriggeredDay === q.day) continue;
-    const hit = evaluate(alert, q, Number(portfolio[alert.symbol]?.avgCost));
+    const pos = option ? options[alert.symbol] : portfolio[alert.symbol];
+    const ctx = option ? { short: pos?.side === 'short', underlying: quotes.get(option.underlying) } : {};
+    const hit = evaluate(alert, q, Number(pos?.avgCost), ctx);
     if (!hit) continue;
     const body = [hit.detail, `Alert: ${describe(alert)}${alert.repeat === 'daily' ? ' (daily)' : ''}`, alert.note].filter(Boolean).join('\n');
     events.push(db.fireAlert(userId, alert, q.day, hit.title, body));
@@ -281,6 +354,7 @@ async function create(req, res) {
   const symbol = typeof body.symbol === 'string' ? body.symbol.trim().toUpperCase() : '';
   if (!TICKER_RE.test(symbol)) throw new HttpError(400, 'Invalid ticker symbol');
   const kind = oneOf(body.kind, 'kind', KINDS);
+  checkKindForSymbol(kind, symbol);
   const alert = {
     symbol,
     kind,
@@ -293,7 +367,7 @@ async function create(req, res) {
     alert.params = await withBasePrice(kind, alert.params, symbol);
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    throw new HttpError(502, `Couldn't get ${symbol}'s current price — try again, or use a fixed price`);
+    throw new HttpError(502, `Couldn't get ${label(symbol)}'s current price — try again, or use a fixed price`);
   }
   const id = db.createAlert(userId, alert);
   const events = await runCheck(userId, [id]); // already met? fire now, not on the next refresh
@@ -311,7 +385,7 @@ async function createBulk(req, res) {
   const bad = symbols.find(s => !TICKER_RE.test(s));
   if (bad !== undefined) throw new HttpError(400, `Invalid ticker symbol: ${String(bad).slice(0, 24)}`);
   if (symbols.length > MAX_BULK) throw new HttpError(400, `Pick at most ${MAX_BULK} stocks at a time`);
-  const kind = oneOf(body.kind, 'kind', KINDS);
+  const kind = oneOf(body.kind, 'kind', STOCK_KINDS);
   const params = validateParams(kind, body.params);
   const repeat = oneOf(body.repeat ?? 'once', 'repeat', ['once', 'daily']);
   const note = validateNote(body.note);
@@ -347,6 +421,7 @@ async function update(req, res, id) {
   if (!existing) throw new HttpError(404, 'Alert not found');
   if ('kind' in body && !('params' in body)) throw new HttpError(400, 'Changing the alert type needs its params too');
   const kind = 'kind' in body ? oneOf(body.kind, 'kind', KINDS) : existing.kind;
+  checkKindForSymbol(kind, existing.symbol);
   const next = {
     kind,
     params: 'params' in body ? validateParams(kind, body.params) : existing.params,
@@ -419,4 +494,4 @@ async function handleAlertsApi(req, res, reqUrl) {
   await dispatch(req, res, reqUrl, handler);
 }
 
-module.exports = { handleAlertsApi, evaluate, describe };
+module.exports = { handleAlertsApi, evaluate, describe, parseOcc, label };

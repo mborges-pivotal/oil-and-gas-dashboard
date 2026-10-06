@@ -16,7 +16,8 @@ import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
-import { describeAlert, alertPresets, alertStatus } from '../utils/alerts.js';
+import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
+import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
 const INDEX_LABELS = {
@@ -109,11 +110,16 @@ export default {
     );
     // The Portfolio page (portfolioOnly) is a virtual, read-only list: every
     // ticker with a saved position (config.portfolio), in the order added.
-    const portfolioTickers = computed(() =>
-      Object.entries(props.config.portfolio ?? {})
+    // Stocks you hold only options on are listed too (their contracts show under them).
+    const portfolioTickers = computed(() => {
+      const held = Object.entries(props.config.portfolio ?? {})
         .filter(([, p]) => p?.quantity > 0)
-        .map(([sym]) => sym)
-    );
+        .map(([sym]) => sym);
+      const underlyings = Object.values(props.config.optionPositions ?? {})
+        .filter(p => p?.quantity > 0)
+        .map(p => p.underlying);
+      return [...new Set([...held, ...underlyings])];
+    });
     const isPortfolioList = computed(() => props.portfolioOnly);
     // Default has no Portfolio tab; your own lists and the Portfolio list do.
 
@@ -685,7 +691,7 @@ export default {
     async function refreshAll() {
       // The list shown plus whatever Top movers ranks (they can differ).
       const symbols = [...new Set([...tickers.value, ...moverSymbols.value])];
-      await Promise.all([fetchStockQuotes(symbols), props.portfolioOnly ? null : fetchIndexes()]);
+      await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), props.portfolioOnly ? null : fetchIndexes()]);
     }
 
     // Switching lists or adding a ticker: fetch whatever has no quote yet.
@@ -833,7 +839,7 @@ export default {
         loadStats(ticker);
       } else if (tab === 'news') loadNews(ticker);
       else if (tab === 'documents') loadDocs(ticker);
-      else if (tab === 'portfolio' && props.user && !positionFor(ticker) && !positionForms[ticker]) startPurchase(ticker);
+      else if (tab === 'portfolio' && props.user && !positionFor(ticker) && !positionForms[ticker] && !optionsFor(ticker).length) startPurchase(ticker);
     }
 
     // ── Save stock news to Notes (signed in) ──
@@ -891,7 +897,7 @@ export default {
       try { await setAlertActive(alert, !alert.active); } catch (e) { alert._error = e.message; }
     }
     async function deleteAlertConfirm(alert) {
-      if (!confirm(`Delete this ${alert.symbol} alert?\n\n${describeAlert(alert)}`)) return;
+      if (!confirm(`Delete this ${alertSubject(alert.symbol)} alert?\n\n${describeAlert(alert)}`)) return;
       try { await removeAlert(alert.id); } catch (e) { alert._error = e.message; }
     }
 
@@ -937,6 +943,8 @@ export default {
         f.error = 'Enter an average cost of 0 or more.';
         return;
       }
+      const covering = sharesCovering(ticker);
+      if (quantity < covering - 1e-9) { f.error = `${formatShares(covering)} shares cover open calls — the quantity can't go below that.`; return; }
       const position = { quantity, avgCost };
       if (f.category) position.category = f.category;
       // Editing the totals keeps the purchase history.
@@ -973,12 +981,15 @@ export default {
     // Holdings whose asset type is Cash (money-market funds like SPAXX, or set
     // to Cash by hand), other than the stock being bought, with what's
     // available at the current price ($1 NAV when there's no quote yet).
+    // `available` is what's not reserved for cash-secured puts (see cashReserved).
     function cashSources(ticker) {
       return Object.entries(props.config.portfolio ?? {})
         .filter(([sym, p]) => sym !== ticker && p?.quantity > 0 && categoryFor(sym) === 'cash')
         .map(([sym, p]) => {
           const price = stockQuotes[sym]?.price || 1;
-          return { symbol: sym, price, available: p.quantity * price };
+          const balance = p.quantity * price;
+          const reserved = cashReserved(sym);
+          return { symbol: sym, price, balance, reserved, available: balance - reserved };
         });
     }
     function payFromFor(ticker) {
@@ -1022,7 +1033,7 @@ export default {
       const src = cashSources(ticker).find(c => c.symbol === payFromFor(ticker));
       if (src) {
         if (next.cost > src.available + 0.005) {
-          f.error = `Only ${formatUSD(src.available)} in ${src.symbol} — pay from another holding, or choose "Outside the portfolio".`;
+          f.error = `Only ${formatUSD(src.available)} available in ${src.symbol}${src.reserved > 0 ? ` (${formatUSD(src.reserved)} is reserved for cash-secured puts)` : ''} — pay from another holding, or choose "Outside the portfolio".`;
           return;
         }
         const cashPos = positionFor(src.symbol);
@@ -1110,6 +1121,11 @@ export default {
       if (!p) return;
       if (!(qty > 0) || !Number.isFinite(qty)) { f.error = 'Enter how many shares you sold.'; return; }
       if (qty > p.quantity + 1e-9) { f.error = `You hold ${formatShares(p.quantity)} shares — you can't sell more.`; return; }
+      const covering = sharesCovering(ticker);
+      if (p.quantity - qty < covering - 1e-9) {
+        f.error = `${formatShares(covering)} of your ${ticker} shares cover open calls — you can sell at most ${formatShares(Math.max(0, p.quantity - covering))}. Buy back (close) those calls first.`;
+        return;
+      }
       if (!(price > 0) || !Number.isFinite(price)) { f.error = 'Enter the sale price per share.'; return; }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the sale date.'; return; }
       if (f.date > todayISO()) { f.error = "The sale date can't be in the future."; return; }
@@ -1163,6 +1179,7 @@ export default {
 
     // Closed positions: undo the final sale (back to Holdings), or delete the record.
     function reopenClosed(rec) {
+      if (rec.kind === 'option') return reopenClosedOption(rec);
       if (positionFor(rec.symbol)) {
         alert(`You hold ${rec.symbol} again — record further sales or purchases on its open position instead.`);
         return;
@@ -1180,8 +1197,24 @@ export default {
       updates[rec.symbol] = position;
       emit('set-position', { updates, closed: closedPositions.value.filter(c => c.id !== rec.id) });
     }
+    function reopenClosedOption(rec) {
+      if (optionPositionFor(rec.symbol)) {
+        alert(`You hold ${rec.name} again — close or add to that position instead.`);
+        return;
+      }
+      const last = [...rec.transactions].reverse().find(t => t.type === 'close');
+      if (!last) return;
+      if (!confirm(`Undo closing ${last.quantity} × ${rec.name} on ${last.date}?\n\nIt goes back to your open options.`)) return;
+      const updates = {};
+      reverseCash(updates, last);
+      const position = {
+        ...rec.option, quantity: last.quantity, avgCost: last.avgCost,
+        transactions: rec.transactions.filter(t => t.id !== last.id),
+      };
+      emit('set-position', { updates, options: { [rec.symbol]: position }, closed: closedPositions.value.filter(c => c.id !== rec.id) });
+    }
     function deleteClosed(rec) {
-      if (!confirm(`Delete the closed ${rec.symbol} position from your history?\n\nThis doesn't change any cash holding.`)) return;
+      if (!confirm(`Delete the closed ${rec.kind === 'option' ? rec.name : rec.symbol} position from your history?\n\nThis doesn't change any cash holding.`)) return;
       emit('set-position', { closed: closedPositions.value.filter(c => c.id !== rec.id) });
     }
 
@@ -1245,12 +1278,436 @@ export default {
     }
 
     function removePosition(ticker) {
+      if (sharesCovering(ticker) > 0) {
+        alert(`Your ${ticker} shares cover open calls — close those calls before removing the position.`);
+        return;
+      }
+      if (cashReserved(ticker) > 0) {
+        alert(`${ticker} secures open puts — close those puts before removing it.`);
+        return;
+      }
       const n = positionFor(ticker)?.transactions?.length ?? 0;
       if (!confirm(`Remove your ${ticker} position${n ? ` and its ${n} purchase${n === 1 ? '' : 's'}` : ''}?`)) return;
       emit('set-position', { symbol: ticker, position: null });
       // Back to "add a purchase" for this stock.
       delete positionForms[ticker];
       startPurchase(ticker);
+    }
+
+    // ── Options (v1): calls and puts on a stock, bought (long) or sold (short) to open ──
+    // Saved in config.optionPositions, keyed by the contract's OCC symbol:
+    // { underlying, type, strike, expiry, side, multiplier, quantity (contracts),
+    //   avgCost (premium per share), transactions }. Yahoo has no option chain
+    // without auth, so the form builds the symbol from expiration + strike and
+    // checks the contract exists by fetching its quote. A long option is an
+    // asset (value = contracts × 100 × premium); a short one is a liability —
+    // its value counts negative and it gains as the premium falls.
+    const optionPositions = computed(() => props.config.optionPositions ?? {});
+    function optionPositionFor(occ) {
+      const p = optionPositions.value[occ];
+      return p && p.quantity > 0 ? p : null;
+    }
+    const openOptionSymbols = computed(() => Object.keys(optionPositions.value).filter(optionPositionFor));
+    // A stock's open contracts, nearest expiration first.
+    function optionsFor(underlying) {
+      return openOptionSymbols.value
+        .filter(occ => optionPositions.value[occ].underlying === underlying)
+        .sort((a, b) => optionPositions.value[a].expiry.localeCompare(optionPositions.value[b].expiry) || a.localeCompare(b));
+    }
+
+    // ── Covered options: reservations derived from open short contracts ──
+    // A cash-secured put reserves strike × 100 × contracts of a cash holding;
+    // a covered call reserves 100 shares per contract of its stock. Nothing
+    // moves — closing, expiring or deleting the contract releases it.
+    const reserveOf = p => p.strike * (p.multiplier ?? MULTIPLIER) * p.quantity;
+    const sharesOf = p => (p.multiplier ?? MULTIPLIER) * p.quantity;
+    function cashSecuring(cashSymbol) {
+      return openOptionSymbols.value.filter(occ => {
+        const p = optionPositions.value[occ];
+        return p.side === 'short' && p.covered?.by === 'cash' && p.covered.symbol === cashSymbol;
+      });
+    }
+    function cashReserved(cashSymbol) {
+      return cashSecuring(cashSymbol).reduce((sum, occ) => sum + reserveOf(optionPositions.value[occ]), 0);
+    }
+    function coveredCalls(underlying) {
+      return openOptionSymbols.value.filter(occ => {
+        const p = optionPositions.value[occ];
+        return p.underlying === underlying && p.side === 'short' && p.type === 'call' && p.covered?.by === 'shares';
+      });
+    }
+    function sharesCovering(underlying) {
+      return coveredCalls(underlying).reduce((sum, occ) => sum + sharesOf(optionPositions.value[occ]), 0);
+    }
+    const totalReserved = computed(() => openOptionSymbols.value.reduce((sum, occ) => {
+      const p = optionPositions.value[occ];
+      return sum + (p.side === 'short' && p.covered?.by === 'cash' ? reserveOf(p) : 0);
+    }, 0));
+    // How a short contract is covered, for badges and its detail line.
+    function coverInfo(p) {
+      if (p.side !== 'short') return null;
+      if (p.covered?.by === 'cash') return { kind: 'cash', badge: 'Cash-secured', text: `Reserves ${formatUSD(reserveOf(p))} of ${p.covered.symbol}` };
+      if (p.covered?.by === 'shares') return { kind: 'shares', badge: 'Covered', text: `Covers ${formatShares(sharesOf(p))} ${p.underlying} shares · called away at ${formatUSD(reserveOf(p))}` };
+      return { kind: 'naked', badge: 'Naked', text: 'Uncovered — usually needs margin approval' };
+    }
+
+    const optionQuotes = reactive({}); // OCC symbol → quote (+ error)
+    async function fetchOptionQuotes(symbols = openOptionSymbols.value) {
+      await Promise.all(symbols.map(async occ => {
+        try {
+          optionQuotes[occ] = { ...(await fetchQuote(occ)), error: null };
+        } catch (e) {
+          // Keep the last good price; expired contracts eventually stop quoting.
+          optionQuotes[occ] = { ...(optionQuotes[occ] ?? {}), error: e.message };
+        }
+      }));
+    }
+    watch(openOptionSymbols, syms => {
+      const missing = syms.filter(s => !optionQuotes[s]);
+      if (missing.length) fetchOptionQuotes(missing);
+    });
+
+    // Value, G/L, days left, moneyness and breakeven at the current quotes.
+    function optionSummary(occ) {
+      const p = optionPositionFor(occ);
+      if (!p) return null;
+      const q = optionQuotes[occ];
+      const m = p.multiplier ?? MULTIPLIER;
+      const sign = p.side === 'short' ? -1 : 1;
+      const units = p.quantity * m;
+      const days = daysToExpiry(p.expiry);
+      const under = stockQuotes[p.underlying]?.price ?? null;
+      // Once expired, a contract's last trade means nothing — it's worth its
+      // intrinsic value (0 out of the money) until you record the expiry.
+      let price = q?.price ?? null;
+      if (days < 0 && under != null) price = Math.max(0, p.type === 'call' ? under - p.strike : p.strike - under);
+      const basis = units * p.avgCost;     // paid (long) or received (short)
+      const totalCost = sign * basis;      // a short's premium is a credit
+      const value = price != null ? sign * units * price : null;
+      const gain = value != null ? value - totalCost : null;
+      return {
+        ...p, symbol: occ, label: optionLabel(p, { withUnderlying: false }), price, basis, totalCost, value, gain,
+        gainPct: gain != null && basis > 0 ? (gain / basis) * 100 : null,
+        dayGain: q?.change != null ? sign * units * q.change : null,
+        days, expired: days < 0, money: moneyness(p, under), breakeven: breakeven(p, p.avgCost),
+        marketTime: q?.marketTime ?? null, loading: !q, quoteError: price == null && q?.error ? q.error : null,
+        category: 'options', categoryLabel: 'Options',
+      };
+    }
+    const optionTitle = o => `${optionLabel(o)} · ${o.side === 'short' ? 'sold' : 'bought'} at ${formatPrice(o.avgCost)} · breakeven ${formatPrice(o.breakeven)} at expiration`
+      + (o.marketTime ? ` · last trade ${formatRelativeTime(o.marketTime)}` : '');
+
+    // Cash holdings: take money out ('out') or put it in ('in'); undo with reverseCash.
+    function moveCash(updates, src, amount, dir) {
+      const cashPos = positionFor(src.symbol);
+      const shares = amount / src.price;
+      const left = cashPos.quantity + (dir === 'in' ? shares : -shares);
+      updates[src.symbol] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+      return { cash: src.symbol, cashShares: shares, cashDir: dir };
+    }
+    function reverseCash(updates, tx) {
+      if (!tx.cash || !(tx.cashShares > 0)) return;
+      const cashPos = positionFor(tx.cash);
+      if (tx.cashDir === 'out') {
+        // Money it took goes back (re-creating the holding if it's gone).
+        updates[tx.cash] = cashPos ? { ...cashPos, quantity: cashPos.quantity + tx.cashShares } : { quantity: tx.cashShares, avgCost: 1, category: 'cash' };
+      } else if (cashPos) {
+        const left = cashPos.quantity - tx.cashShares;
+        updates[tx.cash] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+      }
+    }
+    const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+    // ── Add an option (any list; signed in) ──
+    const optionForms = reactive({}); // underlying → { side, type, expiry, strike, contracts, premium, date, cash, check, error }
+    const checkTimers = {};
+    function startOption(underlying) {
+      optionForms[underlying] = {
+        side: 'long', type: 'call', expiry: nextMonthlyExpiry() ?? '', strike: nearStrike(stockQuotes[underlying]?.price),
+        contracts: '1', premium: '', premiumTouched: false, date: todayISO(), cash: null, check: null, error: null,
+        covered: true, reserveFrom: null, // selling to open: covered by shares (call) or cash (put)
+      };
+      checkContract(underlying);
+      const missing = Object.keys(props.config.portfolio ?? {}).filter(sym => !stockQuotes[sym]);
+      if (missing.length) fetchStockQuotes(missing);
+    }
+    function cancelOption(underlying) {
+      delete optionForms[underlying];
+    }
+    // Expiration, strike or call/put changed: look the contract up shortly after typing stops.
+    function onContractChange(underlying) {
+      const f = optionForms[underlying];
+      f.error = null;
+      f.check = null;
+      clearTimeout(checkTimers[underlying]);
+      checkTimers[underlying] = setTimeout(() => checkContract(underlying), 400);
+    }
+    async function checkContract(underlying) {
+      const f = optionForms[underlying];
+      if (!f) return;
+      const strike = Number(f.strike);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.expiry) || !(strike > 0)) { f.check = null; return; }
+      const occ = occSymbol({ underlying, expiry: f.expiry, type: f.type, strike });
+      f.check = { state: 'checking', symbol: occ };
+      const current = () => optionForms[underlying]?.check?.symbol === occ;
+      try {
+        const q = await fetchQuote(occ);
+        if (!current()) return;
+        if (q.instrumentType && q.instrumentType !== 'OPTION') throw new Error('Not an option');
+        optionQuotes[occ] = { ...q, error: null };
+        f.check = { state: 'ok', symbol: occ, quote: q };
+        if (!f.premiumTouched && q.price != null) f.premium = String(q.price); // the last price
+      } catch {
+        if (current()) f.check = { state: 'missing', symbol: occ };
+      }
+    }
+    function optionCashFor(underlying) {
+      const f = optionForms[underlying];
+      if (!f) return '';
+      return f.cash ?? cashSources(underlying)[0]?.symbol ?? '';
+    }
+    function reserveFromFor(underlying) {
+      const f = optionForms[underlying];
+      if (!f) return '';
+      return f.reserveFrom ?? cashSources(underlying)[0]?.symbol ?? '';
+    }
+    // What covering this sale needs and whether there's enough — null when not selling to open.
+    function coverPreview(underlying) {
+      const f = optionForms[underlying];
+      if (f?.side !== 'short') return null;
+      const n = Number(f.contracts);
+      const strike = Number(f.strike);
+      const prem = Number(f.premium) || 0;
+      const occ = f.check?.state === 'ok' ? f.check.symbol : null;
+      const existing = occ ? optionPositionFor(occ) : null;
+      // Adding to a contract you're already short keeps how it's covered.
+      const covered = existing?.side === 'short' ? !!existing.covered : f.covered;
+      const ok = n > 0 && strike > 0;
+      if (f.type === 'call') {
+        const held = positionFor(underlying)?.quantity ?? 0;
+        const free = held - sharesCovering(underlying);
+        const need = ok ? n * MULTIPLIER : 0;
+        return { kind: 'shares', covered, locked: !!existing, held, free, need, enough: free >= need - 1e-9, receive: ok ? need * strike : 0 };
+      }
+      const obligation = ok ? n * MULTIPLIER * strike : 0;
+      const symbol = existing?.covered?.symbol ?? reserveFromFor(underlying);
+      const src = cashSources(underlying).find(c => c.symbol === symbol) ?? null;
+      // The premium lands in the same holding first when it's deposited there.
+      const extra = src && optionCashFor(underlying) === src.symbol ? n * MULTIPLIER * prem : 0;
+      const available = src ? src.available + extra : 0;
+      return {
+        kind: 'cash', covered, locked: !!existing, obligation, premium: ok ? n * MULTIPLIER * prem : 0,
+        netCost: ok ? obligation - n * MULTIPLIER * prem : 0, src, available, after: available - obligation, withPremium: extra > 0,
+        enough: !!src && available >= obligation - 0.005,
+      };
+    }
+    function optionPreview(underlying) {
+      const f = optionForms[underlying];
+      const n = Number(f?.contracts);
+      const prem = Number(f?.premium);
+      if (f?.check?.state !== 'ok' || !(n > 0) || !(prem > 0)) return null;
+      const occ = f.check.symbol;
+      const amount = n * MULTIPLIER * prem;
+      const p = optionPositionFor(occ);
+      const conflict = p && p.side !== f.side ? p : null;
+      const same = p && !conflict ? p : null;
+      const quantity = (same?.quantity ?? 0) + n;
+      const avg = same ? (same.quantity * same.avgCost + n * prem) / quantity : prem;
+      const debit = f.side === 'long'; // buying costs money; selling to open brings it in
+      const c = cashSources(underlying).find(x => x.symbol === optionCashFor(underlying)) ?? null;
+      return {
+        occ, amount, debit, quantity, avg, was: same, conflict,
+        breakeven: breakeven({ type: f.type, strike: Number(f.strike) }, avg),
+        cash: c && { symbol: c.symbol, available: c.available, after: c.available + (debit ? -amount : amount) },
+      };
+    }
+    function saveOption(underlying) {
+      const f = optionForms[underlying];
+      if (f.check?.state === 'checking') { f.error = 'Still checking the contract — one moment.'; return; }
+      if (f.check?.state !== 'ok') { f.error = 'Choose an expiration and strike that exist — the contract check has to pass.'; return; }
+      const n = Number(f.contracts);
+      if (!(Number.isInteger(n) && n > 0)) { f.error = 'Enter a whole number of contracts.'; return; }
+      if (!(Number(f.premium) > 0)) { f.error = 'Enter the premium per share (e.g. 5.90).'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the trade date.'; return; }
+      if (f.date > todayISO()) { f.error = "The trade date can't be in the future."; return; }
+      const pv = optionPreview(underlying);
+      if (pv.conflict) {
+        f.error = `You're ${pv.conflict.side} this contract — close it on the Portfolio page rather than opening the other side.`;
+        return;
+      }
+      const cv = coverPreview(underlying);
+      if (cv?.covered && !cv.enough) {
+        f.error = cv.kind === 'shares'
+          ? `Covering ${f.contracts} call${n === 1 ? '' : 's'} takes ${formatShares(cv.need)} ${underlying} shares — you have ${formatShares(Math.max(0, cv.free))} not already covering calls. Sell fewer, or uncheck Covered.`
+          : cv.src
+            ? `Securing this put takes ${formatUSD(cv.obligation)} — ${cv.src.symbol} has ${formatUSD(Math.max(0, cv.available))} available. Sell fewer, pick another holding, or uncheck Covered.`
+            : 'Securing a put needs a Cash holding (e.g. a money-market fund) in your portfolio — or uncheck Covered.';
+        return;
+      }
+      const tx = { id: newId(), type: 'open', date: f.date, quantity: n, price: Number(f.premium) };
+      const updates = {};
+      const c = cashSources(underlying).find(x => x.symbol === optionCashFor(underlying));
+      if (c) {
+        if (pv.debit && pv.amount > c.available + 0.005) {
+          f.error = `Only ${formatUSD(c.available)} in ${c.symbol} — pay from another holding, or choose "Outside the portfolio".`;
+          return;
+        }
+        Object.assign(tx, moveCash(updates, c, pv.amount, pv.debit ? 'out' : 'in'));
+      }
+      const o = parseOcc(pv.occ);
+      const position = {
+        underlying, type: o.type, strike: o.strike, expiry: o.expiry, side: f.side, multiplier: MULTIPLIER,
+        quantity: pv.quantity, avgCost: pv.avg, transactions: [...(pv.was?.transactions ?? []), tx],
+      };
+      if (pv.was?.covered) position.covered = pv.was.covered;
+      else if (cv?.covered) position.covered = cv.kind === 'shares' ? { by: 'shares' } : { by: 'cash', symbol: cv.src.symbol };
+      emit('set-position', { updates, options: { [pv.occ]: position } });
+      delete optionForms[underlying];
+    }
+
+    // ── Close an option (Portfolio page): sell to close (long) or buy to close (short) ──
+    const closeForms = reactive({}); // OCC → { contracts, price, date, cash, expire, error }
+    function intrinsicFor(p) {
+      const u = stockQuotes[p.underlying]?.price;
+      return u == null ? null : Math.max(0, p.type === 'call' ? u - p.strike : p.strike - u);
+    }
+    function startClose(occ, { expire = false } = {}) {
+      const p = optionPositionFor(occ);
+      if (!p) return;
+      const last = optionQuotes[occ]?.price;
+      // Expiring: out of the money it's worth 0; in the money, about its intrinsic value.
+      const price = expire ? (intrinsicFor(p) ?? 0) : last;
+      closeForms[occ] = {
+        contracts: String(p.quantity),
+        price: price != null ? String(Math.round(price * 100) / 100) : '',
+        date: expire && p.expiry < todayISO() ? p.expiry : todayISO(),
+        cash: null, expire, error: null,
+      };
+      optionPanels[occ] = null;
+    }
+    function cancelClose(occ) {
+      delete closeForms[occ];
+    }
+    function closeCashFor(occ) {
+      const f = closeForms[occ];
+      const p = optionPositionFor(occ);
+      if (!f || !p) return '';
+      return f.cash ?? cashSources(p.underlying)[0]?.symbol ?? '';
+    }
+    function closePreview(occ) {
+      const f = closeForms[occ];
+      const p = optionPositionFor(occ);
+      const n = Number(f?.contracts);
+      const price = Number(f?.price);
+      if (!p || !(n > 0) || !(price >= 0) || String(f.price).trim() === '') return null;
+      const m = p.multiplier ?? MULTIPLIER;
+      const amount = n * m * price;
+      const credit = p.side === 'long'; // selling a long brings money in; buying back a short costs it
+      const realized = (p.side === 'long' ? price - p.avgCost : p.avgCost - price) * n * m;
+      let c = amount > 0 ? cashSources(p.underlying).find(x => x.symbol === closeCashFor(occ)) ?? null : null;
+      // Buying back a cash-secured put frees its reserve — that cash can pay for it.
+      if (c && p.covered?.by === 'cash' && p.covered.symbol === c.symbol) c = { ...c, available: c.available + n * m * p.strike };
+      return {
+        amount, credit, realized, realizedPct: p.avgCost > 0 ? (realized / (n * m * p.avgCost)) * 100 : null,
+        remaining: p.quantity - n, tooMany: n > p.quantity, closes: n === p.quantity,
+        cash: c && { symbol: c.symbol, available: c.available, after: c.available + (credit ? amount : -amount) },
+      };
+    }
+    // Everything closed over a contract's life → its Closed positions record.
+    function optionClosedRecord(occ, p, transactions, closedDate) {
+      const m = p.multiplier ?? MULTIPLIER;
+      const closes = transactions.filter(t => t.type === 'close');
+      const n = closes.reduce((sum, t) => sum + t.quantity, 0);
+      const opened = closes.reduce((sum, t) => sum + t.quantity * m * t.avgCost, 0);
+      const closedAt = closes.reduce((sum, t) => sum + t.quantity * m * t.price, 0);
+      const long = p.side === 'long';
+      const opens = transactions.filter(t => t.type === 'open').map(t => t.date).sort();
+      return {
+        id: newId(), kind: 'option', symbol: occ, name: optionLabel(p),
+        option: { underlying: p.underlying, type: p.type, strike: p.strike, expiry: p.expiry, side: p.side, multiplier: m, ...(p.covered ? { covered: p.covered } : {}) },
+        sharesSold: n, avgOpen: n ? opened / (n * m) : 0, avgClose: n ? closedAt / (n * m) : 0,
+        // Paid vs. received, so Realized = proceeds − cost basis for both sides.
+        costBasis: long ? opened : closedAt, proceeds: long ? closedAt : opened, realized: long ? closedAt - opened : opened - closedAt,
+        openedDate: opens[0] ?? null, closedDate, transactions,
+      };
+    }
+    function saveClose(occ) {
+      const f = closeForms[occ];
+      const p = optionPositionFor(occ);
+      if (!p) return;
+      const n = Number(f.contracts);
+      const price = Number(f.price);
+      if (!(Number.isInteger(n) && n > 0)) { f.error = 'Enter a whole number of contracts.'; return; }
+      if (n > p.quantity) { f.error = `You have ${p.quantity} contract${p.quantity === 1 ? '' : 's'} — you can't close more.`; return; }
+      if (!(price >= 0) || String(f.price).trim() === '') { f.error = 'Enter the closing premium per share (0 if it expired worthless).'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the closing date.'; return; }
+      if (f.date > todayISO()) { f.error = "The closing date can't be in the future."; return; }
+      const pv = closePreview(occ);
+      const tx = { id: newId(), type: 'close', date: f.date, quantity: n, price, avgCost: p.avgCost, realized: pv.realized };
+      if (f.expire) tx.expired = true;
+      const updates = {};
+      const c = pv.cash && cashSources(p.underlying).find(x => x.symbol === pv.cash.symbol);
+      if (c) {
+        if (!pv.credit && pv.amount > pv.cash.available + 0.005) {
+          f.error = `Only ${formatUSD(pv.cash.available)} available in ${c.symbol} — pay from another holding, or choose "Outside the portfolio".`;
+          return;
+        }
+        Object.assign(tx, moveCash(updates, c, pv.amount, pv.credit ? 'in' : 'out'));
+      }
+      const transactions = [...(p.transactions ?? []), tx];
+      let closed;
+      const options = {};
+      if (pv.closes) {
+        options[occ] = null;
+        closed = [optionClosedRecord(occ, p, transactions, f.date), ...closedPositions.value];
+      } else {
+        options[occ] = { ...p, quantity: p.quantity - n, transactions };
+      }
+      emit('set-position', closed ? { updates, options, closed } : { updates, options });
+      delete closeForms[occ];
+    }
+
+    // An option row's open panel: 'history' (its transactions) | 'alerts' | null.
+    const optionPanels = reactive({});
+    function toggleOptionPanel(occ, panel) {
+      optionPanels[occ] = optionPanels[occ] === panel ? null : panel;
+      if (optionPanels[occ]) delete closeForms[occ];
+    }
+    function optionTransactions(occ) {
+      return [...(optionPositionFor(occ)?.transactions ?? [])]
+        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+    }
+    function deleteOptionTransaction(occ, tx) {
+      const p = optionPositionFor(occ);
+      if (!p) return;
+      const m = p.multiplier ?? MULTIPLIER;
+      const amount = tx.quantity * m * tx.price;
+      const cashNote = tx.cash ? `\n${formatUSD(amount)} ${tx.cashDir === 'out' ? 'goes back to' : 'comes back out of'} ${tx.cash}.` : '';
+      const what = tx.type === 'close' ? 'closing trade' : 'opening trade';
+      if (!confirm(`Delete this ${what}?\n\n${tx.quantity} × ${optionLabel(p)} at ${formatPrice(tx.price)} on ${tx.date}${cashNote}`)) return;
+      const updates = {};
+      reverseCash(updates, tx);
+      const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
+      let position;
+      if (tx.type === 'close') {
+        position = { ...p, quantity: p.quantity + tx.quantity, transactions: rest };
+      } else {
+        const quantity = p.quantity - tx.quantity;
+        const reversed = quantity > 0 ? (p.quantity * p.avgCost - tx.quantity * tx.price) / quantity : 0;
+        position = quantity > 0 ? { ...p, quantity, avgCost: reversed > 0 ? reversed : p.avgCost, transactions: rest } : null;
+      }
+      emit('set-position', { updates, options: { [occ]: position } });
+    }
+    function removeOption(occ) {
+      const p = optionPositionFor(occ);
+      if (!p || !confirm(`Remove ${optionLabel(p)} from your portfolio?\n\nThis deletes the position and its trades without changing any cash holding — to record a sale or expiry, use Close instead.`)) return;
+      emit('set-position', { options: { [occ]: null } });
+    }
+    // Portfolio page: a contract's summary line opens its stock's Portfolio tab.
+    function openOptionsOf(underlying) {
+      ensureDetail(underlying);
+      if (!details[underlying].open) toggleDetail(underlying);
+      else setDetailTab(underlying, 'portfolio');
     }
 
     // Category: the one chosen on the position, else automatic from Yahoo's
@@ -1275,8 +1732,12 @@ export default {
 
     // Totals across the Portfolio list. Value and G/L wait until every
     // position has a price, so they're never a misleading partial sum.
+    const holdingRows = () => [
+      ...portfolioTickers.value.map(positionSummary).filter(Boolean),
+      ...openOptionSymbols.value.map(optionSummary),
+    ];
     const portfolioTotals = computed(() => {
-      const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
+      const rows = holdingRows();
       if (!rows.length) return null;
       const totalCost = rows.reduce((sum, r) => sum + r.totalCost, 0);
       const priced = rows.every(r => r.value != null);
@@ -1295,9 +1756,10 @@ export default {
     // Slices wait for every price and category (and, by sector, every
     // stock's sector) so a chart never shows a partial picture.
     const categoryOrder = CATEGORIES.map(c => c.id);
+    // Short options are liabilities (negative value), so the charts leave them out.
     function allocationRows() {
-      const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
-      return rows.some(r => r.value == null || !r.category) ? null : rows;
+      const rows = holdingRows();
+      return rows.some(r => r.value == null || !r.category) ? null : rows.filter(r => r.value > 0);
     }
     const allocationByType = computed(() => {
       const rows = allocationRows();
@@ -1324,8 +1786,9 @@ export default {
       return assignSlots(buildSlices(items, [...sectorKeys, 'sector:?', ...categoryOrder]));
     });
     const hasNonStockHoldings = computed(() =>
-      portfolioTickers.value.some(t => categoryFor(t) && categoryFor(t) !== 'stocks')
+      portfolioTickers.value.some(t => categoryFor(t) && categoryFor(t) !== 'stocks') || openOptionSymbols.value.length > 0
     );
+    const hasShortOptions = computed(() => openOptionSymbols.value.some(occ => optionPositions.value[occ].side === 'short'));
 
     // ── 52-week range bar on every card ──
     // Positions (0–100%) along a scale spanning the 52-week low→high. On the
@@ -1441,6 +1904,11 @@ export default {
       cashSources, payFromFor,
       saleForms, startSale, cancelSale, depositToFor, salePreview, saveSale, closedPositions, closedTotals,
       reopenClosed, deleteClosed, realizedFor, closedOpen,
+      optionable, optionsFor, optionSummary, optionTitle, optionQuotes, optionForms, startOption, cancelOption, onContractChange,
+      optionCashFor, optionPreview, saveOption, closeForms, startClose, cancelClose, closeCashFor, closePreview, saveClose,
+      optionPanels, toggleOptionPanel, optionTransactions, deleteOptionTransaction, removeOption, openOptionsOf,
+      optionPositionFor, optionAlertPresets, hasShortOptions, optionLabel, MULTIPLIER,
+      categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
       isPortfolioList, portfolioTotals,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
@@ -1600,6 +2068,7 @@ export default {
           By current market value.
           Asset types come from Yahoo Finance — change one on a stock's Portfolio tab (e.g. a bond fund → Bonds).
           <template v-if="hasNonStockHoldings">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
+          <template v-if="hasShortOptions"> Short options are liabilities, so they're in the totals but not in these charts.</template>
         </p>
       </div>
 
@@ -1650,6 +2119,10 @@ export default {
               {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
             </span>
           </span>
+          <span class="holdings-stat" v-if="totalReserved > 0" title="Cash reserved to secure short puts — still yours, and still in market value">
+            <span class="holdings-stat-label">Reserved cash</span>
+            <span class="holdings-stat-value">{{ formatUSD(totalReserved) }}</span>
+          </span>
         </span>
       </button>
       <div ref="watchlistEl" id="portfolio-holdings" class="watchlist" :class="{ 'is-dragging': draggingTicker }"
@@ -1674,7 +2147,7 @@ export default {
               <span class="text-muted text-sm">{{ stockQuotes[sym]?.shortName }}</span>
             </div>
             <!-- 52-week range: today's price (●); on the Portfolio page also your average cost (│) -->
-            <template v-for="r in [rangeFor(sym, portfolioOnly)]" :key="'r52-' + sym">
+            <template v-for="r in [rangeFor(sym, portfolioOnly && !!positionFor(sym))]" :key="'r52-' + sym">
             <div class="range52" v-if="r" :title="r.tip" role="img" :aria-label="r.tip">
               <!-- top: avg (Portfolio) or "52W" (left), and the 52-week high right-aligned over the high end -->
               <span class="range52-row">
@@ -1735,6 +2208,27 @@ export default {
                   @click.stop="removeTicker(sym)">✕</button>
           <span v-else class="chevron">▶</span>
         </div>
+
+        <!-- Portfolio page: a cash holding's reserve for cash-secured puts -->
+        <p class="cash-reserve-line" v-if="portfolioOnly && user && cashReserved(sym) > 0 && !details[sym]?.open">
+          Reserved {{ formatUSD(cashReserved(sym)) }} for {{ cashSecuring(sym).length }} put{{ cashSecuring(sym).length === 1 ? '' : 's' }}
+          <template v-if="positionSummary(sym)?.value != null"> · {{ formatUSD(positionSummary(sym).value - cashReserved(sym)) }} available</template>
+        </p>
+
+        <!-- Portfolio page: this stock's option contracts, one line each (opens its Portfolio tab) -->
+        <ul class="option-subrows" v-if="portfolioOnly && user && optionsFor(sym).length && !details[sym]?.open">
+          <li v-for="occ in optionsFor(sym)" :key="occ">
+            <button type="button" class="option-subrow" v-for="o in [optionSummary(occ)]" :key="occ + '-sub'" :title="optionTitle(o)" @click="openOptionsOf(sym)">
+              <span class="option-side" :class="o.side">{{ o.side === 'short' ? 'Short' : 'Long' }}</span>
+              <span class="option-name">{{ o.quantity }} × {{ o.label }}<template v-if="coverInfo(o)"> · {{ coverInfo(o).badge }}</template></span>
+              <span class="option-money" :class="o.money" v-if="o.money && !o.expired">{{ o.money.toUpperCase() }}</span>
+              <span class="option-days" :class="{ soon: o.days <= 7, expired: o.expired }">{{ o.expired ? 'Expired' : o.days + 'd' }}</span>
+              <span class="option-sub-num">{{ o.price != null ? formatPrice(o.price) : '…' }}</span>
+              <span class="option-sub-num">{{ o.value != null ? formatUSD(o.value) : '—' }}</span>
+              <span class="option-sub-num" :class="changeClass(o.gain)">{{ o.gain != null ? signedUSD(o.gain) : '—' }}</span>
+            </button>
+          </li>
+        </ul>
 
         <!-- Charts + Documents (SEC filings) — same content that -->
         <!-- used to live on the standalone Documents tab, now nested here. -->
@@ -1957,7 +2451,7 @@ export default {
               <div class="notice error portfolio-error" v-if="purchaseForms[sym].error">{{ purchaseForms[sym].error }}</div>
               <div class="portfolio-actions">
                 <button type="submit" class="primary">Add purchase</button>
-                <button type="button" v-if="positionFor(sym)" @click="cancelPurchase(sym)">Cancel</button>
+                <button type="button" v-if="positionFor(sym) || optionsFor(sym).length" @click="cancelPurchase(sym)">Cancel</button>
                 <button type="button" class="link-button" v-else @click="cancelPurchase(sym); startPositionEdit(sym)">
                   Enter a total position instead
                 </button>
@@ -1983,7 +2477,7 @@ export default {
                   <span>Category</span>
                   <select v-model="positionForms[sym].category">
                     <option value="">Automatic{{ autoCategoryFor(sym) ? ' (' + CATEGORY_LABELS[autoCategoryFor(sym)] + ')' : '' }}</option>
-                    <option v-for="c in CATEGORIES" :key="c.id" :value="c.id">{{ c.label }}</option>
+                    <option v-for="c in CATEGORIES.filter(c => !c.derived)" :key="c.id" :value="c.id">{{ c.label }}</option>
                   </select>
                 </label>
               </div>
@@ -2039,11 +2533,30 @@ export default {
                     {{ positionSummary(sym).dayGain != null ? signedUSD(positionSummary(sym).dayGain) + ' (' + formatPct(positionSummary(sym).dayPct) + ')' : '—' }}
                   </span>
                 </div>
+                <template v-if="cashReserved(sym) > 0">
+                  <div class="portfolio-stat">
+                    <span class="portfolio-label">Reserved for puts</span>
+                    <span class="portfolio-value">{{ formatUSD(cashReserved(sym)) }}</span>
+                  </div>
+                  <div class="portfolio-stat">
+                    <span class="portfolio-label">Available</span>
+                    <span class="portfolio-value" :class="{ negative: positionSummary(sym).value != null && positionSummary(sym).value - cashReserved(sym) < 0 }">
+                      {{ positionSummary(sym).value != null ? formatUSD(positionSummary(sym).value - cashReserved(sym)) : '—' }}
+                    </span>
+                  </div>
+                </template>
+                <div class="portfolio-stat" v-if="sharesCovering(sym) > 0">
+                  <span class="portfolio-label">Covering calls</span>
+                  <span class="portfolio-value">{{ formatShares(sharesCovering(sym)) }} shares</span>
+                </div>
                 <div class="portfolio-stat" v-if="realizedFor(sym) != null">
                   <span class="portfolio-label">Realized G/L</span>
                   <span class="portfolio-value" :class="changeClass(realizedFor(sym))">{{ signedUSD(realizedFor(sym)) }}</span>
                 </div>
               </div>
+              <p class="text-muted text-sm portfolio-note" v-if="cashSecuring(sym).length">
+                Secures {{ cashSecuring(sym).map(occ => optionLabel(occ)).join(', ') }} — reserved cash can't pay for purchases until those puts are closed or expire.
+              </p>
               <p class="text-muted text-sm portfolio-note">
                 Value at a price of {{ positionSummary(sym).price != null ? formatPrice(positionSummary(sym).price) : 'the latest price' }} (delayed quote).
               </p>
@@ -2054,6 +2567,10 @@ export default {
                 <button type="button" class="danger" @click="removePosition(sym)">Remove</button>
               </div>
             </template>
+            <div class="portfolio-actions" v-else-if="user && optionsFor(sym).length">
+              <span class="text-muted text-sm">You hold options on {{ sym }} but no shares.</span>
+              <button type="button" @click="startPurchase(sym)">＋ Add purchase</button>
+            </div>
 
             <!-- Transactions: purchases (+) and sales (−), newest first -->
             <div class="transactions" v-if="user && transactionsFor(sym).length && !positionForms[sym]">
@@ -2082,6 +2599,284 @@ export default {
                 </tbody>
               </table>
             </div>
+
+            <!-- Options on this stock: add (any list), close (Portfolio page), alerts, history -->
+            <section class="options-section" v-if="user && optionable(sym) && categoryFor(sym) !== 'cash'" :aria-label="'Options on ' + sym">
+              <div class="options-head">
+                <span class="transactions-title" style="margin:0">Options on {{ sym }}</span>
+                <button type="button" v-if="!optionForms[sym]" @click="startOption(sym)">＋ Add option</button>
+              </div>
+
+              <form class="portfolio-form option-form" v-if="optionForms[sym]" @submit.prevent="saveOption(sym)" novalidate
+                    @input="optionForms[sym].error = null">
+                <div class="option-toggles">
+                  <div class="range-btn-group" role="group" aria-label="Buy or sell to open">
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'long' }" @click="optionForms[sym].side = 'long'">Buy</button>
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'short' }" @click="optionForms[sym].side = 'short'">Sell</button>
+                  </div>
+                  <div class="range-btn-group" role="group" aria-label="Call or put">
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'call' }" @click="optionForms[sym].type = 'call'; onContractChange(sym)">Call</button>
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'put' }" @click="optionForms[sym].type = 'put'; onContractChange(sym)">Put</button>
+                  </div>
+                  <span class="text-muted text-sm">{{ optionForms[sym].side === 'long' ? 'Buy to open — you pay the premium' : 'Sell to open — you collect the premium' }}</span>
+                </div>
+                <div class="portfolio-fields">
+                  <label>
+                    <span>Expiration</span>
+                    <input type="date" v-model="optionForms[sym].expiry" @input="onContractChange(sym)" />
+                  </label>
+                  <label>
+                    <span>Strike</span>
+                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].strike" @input="onContractChange(sym)" />
+                  </label>
+                  <label>
+                    <span>Contracts</span>
+                    <input type="number" inputmode="numeric" min="1" step="1" v-model="optionForms[sym].contracts" />
+                  </label>
+                  <label>
+                    <span>Premium / share</span>
+                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].premium" @input="optionForms[sym].premiumTouched = true" />
+                  </label>
+                  <label>
+                    <span>Date</span>
+                    <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="optionForms[sym].date" />
+                  </label>
+                  <label>
+                    <span>{{ optionForms[sym].side === 'long' ? 'Pay from' : 'Deposit to' }}</span>
+                    <select :value="optionCashFor(sym)" @change="optionForms[sym].cash = $event.target.value; optionForms[sym].error = null">
+                      <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                      <option value="">Outside the portfolio</option>
+                    </select>
+                  </label>
+                </div>
+                <!-- Selling to open: covered by shares (call) or secured by reserved cash (put) -->
+                <template v-if="coverPreview(sym)">
+                <div class="option-cover" v-for="cv in [coverPreview(sym)]" :key="'cover-' + sym">
+                  <label class="option-cover-check">
+                    <input type="checkbox" :checked="cv.covered" :disabled="cv.locked"
+                           @change="optionForms[sym].covered = $event.target.checked; optionForms[sym].error = null" />
+                    <span>{{ cv.kind === 'shares' ? 'Covered call' : 'Cash-secured put' }}</span>
+                    <span class="text-muted text-sm" v-if="cv.locked">(same as the contracts you already hold)</span>
+                  </label>
+                  <template v-if="cv.covered">
+                    <p class="option-cover-detail" v-if="cv.kind === 'shares'">
+                      Covers {{ formatShares(cv.need) }} of your {{ formatShares(cv.held) }} {{ sym }} shares
+                      <template v-if="cv.held - cv.free > 0"> ({{ formatShares(cv.held - cv.free) }} already cover other calls)</template>
+                      · if called away you receive {{ formatUSD(cv.receive) }}
+                      <span class="negative" v-if="!cv.enough"><br />Not enough uncovered shares — {{ formatShares(Math.max(0, cv.free)) }} available.</span>
+                    </p>
+                    <template v-else>
+                      <p class="option-cover-detail">
+                        Obligation if assigned {{ formatUSD(cv.obligation) }} · premium collected {{ formatUSD(cv.premium) }}
+                        → net cost {{ formatUSD(cv.netCost) }}<template v-if="Number(optionForms[sym].contracts) > 0"> ({{ formatPrice(cv.netCost / (Number(optionForms[sym].contracts) * MULTIPLIER)) }}/share)</template>
+                      </p>
+                      <div class="portfolio-fields option-cover-fields">
+                        <label>
+                          <span>Reserve from</span>
+                          <select :value="cv.src?.symbol ?? ''" :disabled="cv.locked || !cashSources(sym).length"
+                                  @change="optionForms[sym].reserveFrom = $event.target.value; optionForms[sym].error = null">
+                            <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }} available</option>
+                            <option v-if="!cashSources(sym).length" value="">No cash holding</option>
+                          </select>
+                        </label>
+                      </div>
+                      <p class="option-cover-detail" v-if="cv.src">
+                        {{ cv.src.symbol }}: {{ formatUSD(cv.available) }} available{{ cv.withPremium ? ' (with the premium)' : '' }} → {{ formatUSD(cv.after) }} available ({{ formatUSD(cv.obligation) }} reserved)
+                        <span class="negative" v-if="!cv.enough"><br />Not enough available cash to secure this put.</span>
+                      </p>
+                      <p class="option-cover-detail negative" v-else>Securing a put needs a Cash holding in your portfolio.</p>
+                    </template>
+                  </template>
+                  <p class="option-cover-detail warning-text" v-else>
+                    ⚠ Uncovered (naked) — usually needs margin approval; losses on a naked {{ cv.kind === 'shares' ? 'call are unlimited' : 'put can reach the full strike' }}.
+                  </p>
+                </div>
+                </template>
+                <p class="option-check" :class="optionForms[sym].check?.state" aria-live="polite">
+                  <template v-if="!optionForms[sym].check">Most monthly options expire on the third Friday.</template>
+                  <template v-else-if="optionForms[sym].check.state === 'checking'">Checking {{ optionLabel(optionForms[sym].check.symbol) }}…</template>
+                  <template v-else-if="optionForms[sym].check.state === 'ok'">
+                    ✓ {{ optionLabel(optionForms[sym].check.symbol) }} · last {{ formatPrice(optionForms[sym].check.quote.price) }}<template v-if="optionForms[sym].check.quote.marketTime"> ({{ formatRelativeTime(optionForms[sym].check.quote.marketTime) }})</template>
+                  </template>
+                  <template v-else>✗ No such contract: {{ optionLabel(optionForms[sym].check.symbol) }} — check the expiration date and strike.</template>
+                </p>
+                <p class="purchase-preview" v-if="optionPreview(sym)">
+                  <template v-for="pv in [optionPreview(sym)]">
+                    <span class="negative" v-if="pv.conflict">You're {{ pv.conflict.side }} this contract — close it instead.</span>
+                    <template v-else>
+                      {{ pv.debit ? 'Cost' : 'Credit' }} {{ formatUSD(pv.amount) }} ({{ optionForms[sym].contracts }} × 100 × {{ formatPrice(Number(optionForms[sym].premium)) }}) ·
+                      Breakeven {{ formatPrice(pv.breakeven) }} at expiration
+                      <template v-if="pv.was"> · {{ pv.quantity }} contracts at an average of {{ formatPrice(pv.avg) }} (was {{ pv.was.quantity }} at {{ formatPrice(pv.was.avgCost) }})</template>
+                      <br />
+                      <template v-if="pv.cash">{{ pv.cash.symbol }}: {{ formatUSD(pv.cash.available) }} → {{ formatUSD(pv.cash.after) }}<span class="negative" v-if="pv.cash.after < -0.005"> — not enough cash</span></template>
+                      <span class="text-muted" v-else>{{ pv.debit ? 'Paid from outside the portfolio.' : 'Not deposited to a cash holding.' }}</span>
+                    </template>
+                  </template>
+                </p>
+                <div class="notice error portfolio-error" v-if="optionForms[sym].error">{{ optionForms[sym].error }}</div>
+                <div class="portfolio-actions">
+                  <button type="submit" class="primary">Add option</button>
+                  <button type="button" @click="cancelOption(sym)">Cancel</button>
+                </div>
+              </form>
+
+              <ul class="option-list" v-if="optionsFor(sym).length">
+                <li class="option-item" v-for="occ in optionsFor(sym)" :key="occ">
+                  <template v-for="o in [optionSummary(occ)]" :key="occ + '-row'">
+                  <div class="option-row" :title="optionTitle(o)">
+                    <div class="option-id">
+                      <span class="option-side" :class="o.side">{{ o.side === 'short' ? 'Short' : 'Long' }}</span>
+                      <span class="option-name">{{ o.label }}</span>
+                      <span class="option-cover-badge" :class="coverInfo(o).kind" v-if="coverInfo(o)" :title="coverInfo(o).text">{{ coverInfo(o).badge }}</span>
+                      <span class="option-money" :class="o.money" v-if="o.money && !o.expired">{{ o.money.toUpperCase() }}</span>
+                      <span class="option-days" :class="{ soon: o.days <= 7, expired: o.expired }">{{ o.expired ? 'Expired' : o.days === 0 ? 'Expires today' : o.days + 'd left' }}</span>
+                    </div>
+                    <div class="option-nums">
+                      <span class="stock-row-num"><span class="stock-row-label">Contracts</span><span>{{ o.quantity }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">{{ o.side === 'short' ? 'Avg credit' : 'Avg cost' }}</span><span>{{ formatPrice(o.avgCost) }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">Last</span><span>{{ o.price != null ? formatPrice(o.price) : (o.loading ? '…' : '—') }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">Value</span><span>{{ o.value != null ? formatUSD(o.value) : '—' }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">G/L</span>
+                        <span :class="changeClass(o.gain)">{{ o.gain != null ? signedUSD(o.gain) + (o.gainPct != null ? ' (' + formatPct(o.gainPct) + ')' : '') : '—' }}</span>
+                      </span>
+                    </div>
+                    <div class="option-actions">
+                      <template v-if="portfolioOnly">
+                        <button type="button" class="link-button" v-if="o.expired" @click="startClose(occ, { expire: true })">Record expiry</button>
+                        <button type="button" class="link-button" v-else @click="startClose(occ)">Close</button>
+                      </template>
+                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'alerts'" @click="toggleOptionPanel(occ, 'alerts')">
+                        🔔<span class="sr-only"> Alerts</span><template v-if="alertsFor(occ).filter(a => a.active).length"> {{ alertsFor(occ).filter(a => a.active).length }}</template>
+                      </button>
+                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'history'" @click="toggleOptionPanel(occ, 'history')">Trades</button>
+                      <button type="button" class="link-button danger-link" @click="removeOption(occ)">Remove</button>
+                    </div>
+                  </div>
+                  <p class="text-muted text-sm option-sub">
+                    <template v-if="coverInfo(o)">{{ coverInfo(o).text }} · </template>Breakeven {{ formatPrice(o.breakeven) }} · expires {{ formatDate(o.expiry + 'T12:00:00') }}<template v-if="o.marketTime"> · last trade {{ formatRelativeTime(o.marketTime) }}</template><template v-if="o.quoteError"> · no quote</template>
+                  </p>
+
+                  <!-- Close: sell to close (long) / buy to close (short); expiry = close at 0 or intrinsic value -->
+                  <form class="portfolio-form option-close" v-if="closeForms[occ]" @submit.prevent="saveClose(occ)" novalidate
+                        @input="closeForms[occ].error = null">
+                    <p class="text-muted text-sm" style="margin:0 0 8px">
+                      <template v-if="closeForms[occ].expire">
+                        Record that {{ o.label }} expired.
+                        <template v-if="o.money === 'itm'">{{ sym }} is in the money now — the premium is prefilled with its intrinsic value; use 0 if it expired worthless. (Exercise and assignment aren't tracked yet.)</template>
+                        <template v-else>Out of the money, it expired worthless.</template>
+                      </template>
+                      <template v-else>{{ o.side === 'short' ? 'Buy to close' : 'Sell to close' }} {{ o.label }} — you have {{ o.quantity }} contract{{ o.quantity === 1 ? '' : 's' }}.</template>
+                    </p>
+                    <div class="portfolio-fields">
+                      <label>
+                        <span>Contracts</span>
+                        <span class="sale-qty">
+                          <input type="number" inputmode="numeric" min="1" step="1" :max="o.quantity" v-model="closeForms[occ].contracts" />
+                          <button type="button" class="link-button" @click="closeForms[occ].contracts = String(o.quantity)">All</button>
+                        </span>
+                      </label>
+                      <label>
+                        <span>Premium / share</span>
+                        <input type="number" inputmode="decimal" min="0" step="any" v-model="closeForms[occ].price" />
+                      </label>
+                      <label>
+                        <span>Date</span>
+                        <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="closeForms[occ].date" />
+                      </label>
+                      <label v-if="Number(closeForms[occ].price) > 0">
+                        <span>{{ o.side === 'short' ? 'Pay from' : 'Deposit to' }}</span>
+                        <select :value="closeCashFor(occ)" @change="closeForms[occ].cash = $event.target.value; closeForms[occ].error = null">
+                          <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                          <option value="">Outside the portfolio</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p class="purchase-preview" v-if="closePreview(occ)">
+                      <template v-for="cp in [closePreview(occ)]">
+                        {{ cp.credit ? 'Proceeds' : 'Cost to close' }} {{ formatUSD(cp.amount) }} ·
+                        Realized G/L <span :class="changeClass(cp.realized)">{{ signedUSD(cp.realized) }}<template v-if="cp.realizedPct != null"> ({{ formatPct(cp.realizedPct) }})</template></span> ·
+                        <span class="negative" v-if="cp.tooMany">more than you have</span>
+                        <strong v-else-if="cp.closes">closes the position (moves to Closed positions)</strong>
+                        <template v-else>{{ cp.remaining }} contract{{ cp.remaining === 1 ? '' : 's' }} left</template>
+                        <template v-if="cp.cash"><br />{{ cp.cash.symbol }}: {{ formatUSD(cp.cash.available) }} → {{ formatUSD(cp.cash.after) }}</template>
+                      </template>
+                    </p>
+                    <div class="notice error portfolio-error" v-if="closeForms[occ].error">{{ closeForms[occ].error }}</div>
+                    <div class="portfolio-actions">
+                      <button type="submit" class="primary">{{ closeForms[occ].expire ? 'Record expiry' : 'Record close' }}</button>
+                      <button type="button" @click="cancelClose(occ)">Cancel</button>
+                    </div>
+                  </form>
+
+                  <!-- This contract's alerts (premium, gain/loss, days to expiry, in/out of the money) -->
+                  <div class="option-panel" v-else-if="optionPanels[occ] === 'alerts'">
+                    <AlertForm v-if="alertForms[occ]" :symbol="occ" :quote="optionQuotes[occ]" :avg-cost="o.avgCost"
+                               :option="{ ...o, short: o.side === 'short' }" :underlying-price="stockQuotes[sym]?.price ?? null"
+                               :initial="alertForms[occ].initial" :submit-label="alertForms[occ].alertId ? 'Save changes' : 'Create alert'"
+                               :busy="alertForms[occ].busy" :error="alertForms[occ].error"
+                               @save="submitAlert(occ, $event)" @cancel="closeAlertForm(occ)" />
+                    <template v-else>
+                      <div class="alert-presets">
+                        <span class="alert-presets-label">Quick add</span>
+                        <button type="button" class="note-chip" v-for="pr in optionAlertPresets({ short: o.side === 'short', covered: !!o.covered })" :key="pr.label"
+                                @click.stop="openAlertForm(occ, pr)">{{ pr.label }}</button>
+                        <button type="button" class="note-chip alert-custom" @click.stop="openAlertForm(occ, { kind: 'price', params: { direction: 'above', basis: 'percent', percent: 25 } })">＋ Custom</button>
+                      </div>
+                      <ul class="alert-list" v-if="alertsFor(occ).length">
+                        <li v-for="a in alertsFor(occ)" :key="a.id" class="alert-item" :class="{ inactive: !a.active }">
+                          <span class="alert-dot" :class="a.active ? 'on' : 'off'" aria-hidden="true"></span>
+                          <div class="alert-item-body">
+                            <div class="alert-item-title">{{ describeAlert(a) }}</div>
+                            <div class="text-muted text-sm">{{ alertStatus(a) }} · {{ a.repeat === 'daily' ? 'every day' : 'once' }}</div>
+                            <div class="alert-item-note" v-if="a.note">{{ a.note }}</div>
+                            <div class="notice error" v-if="a._error" style="margin:4px 0 0">{{ a._error }}</div>
+                          </div>
+                          <div class="alert-item-actions">
+                            <button type="button" class="link-button" @click.stop="openAlertForm(occ, a, a.id)">Edit</button>
+                            <button type="button" class="link-button" @click.stop="toggleAlert(a)">
+                              {{ a.active ? 'Pause' : (a.repeat === 'once' && a.lastTriggeredAt ? 'Re-arm' : 'Resume') }}
+                            </button>
+                            <button type="button" class="link-button danger-link" @click.stop="deleteAlertConfirm(a)">Delete</button>
+                          </div>
+                        </li>
+                      </ul>
+                      <p class="text-muted text-sm alert-empty" v-else>No alerts on this contract yet — triggered alerts arrive in <strong>Inbox → Alerts</strong>.</p>
+                    </template>
+                  </div>
+
+                  <!-- This contract's trades -->
+                  <div class="transactions option-panel" v-else-if="optionPanels[occ] === 'history'">
+                    <table class="data-table transactions-table">
+                      <thead>
+                        <tr><th>Date</th><th class="num">Contracts</th><th class="num">Premium</th><th class="num tx-amount">Amount</th><th class="num">Realized</th><th><span class="sr-only">Delete</span></th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="tx in optionTransactions(occ)" :key="tx.id">
+                          <td>
+                            {{ formatDate(tx.date + 'T12:00:00') }}
+                            <div class="tx-from">
+                              {{ tx.type === 'close' ? (tx.expired ? 'Expired' : o.side === 'short' ? 'Buy to close' : 'Sell to close') : (o.side === 'short' ? 'Sell to open' : 'Buy to open') }}<template v-if="tx.cash"> · {{ tx.cashDir === 'out' ? 'from' : 'to' }} {{ tx.cash }}</template>
+                            </div>
+                          </td>
+                          <td class="num" :class="tx.type === 'close' ? 'negative' : ''">{{ (tx.type === 'close' ? '−' : '+') + tx.quantity }}</td>
+                          <td class="num">{{ formatPrice(tx.price) }}</td>
+                          <td class="num tx-amount">{{ formatUSD(tx.quantity * (o.multiplier ?? MULTIPLIER) * tx.price) }}</td>
+                          <td class="num" :class="tx.type === 'close' ? changeClass(tx.realized) : ''">{{ tx.type === 'close' ? signedUSD(tx.realized) : '' }}</td>
+                          <td class="num">
+                            <button type="button" class="link-button danger-link" :aria-label="'Delete trade on ' + tx.date" title="Delete this trade"
+                                    @click="deleteOptionTransaction(occ, tx)">✕</button>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  </template>
+                </li>
+              </ul>
+              <p class="text-muted text-sm option-empty" v-else-if="!optionForms[sym]">
+                Track calls and puts you've bought or sold on {{ sym }} — value, G/L, days to expiration and alerts.
+              </p>
+            </section>
           </div>
 
           <!-- Alerts: this stock's alerts + quick presets (checked by the server on each quote refresh) -->
@@ -2238,20 +3033,33 @@ export default {
         <ul class="closed-list" id="closed-positions" v-show="closedOpen">
           <li class="closed-row" v-for="c in closedPositions" :key="c.id">
             <div class="closed-id">
-              <span class="stock-row-ticker">{{ c.symbol }}</span>
-              <span class="text-muted text-sm closed-name">{{ c.name }}</span>
+              <template v-if="c.kind === 'option'">
+                <span class="option-side" :class="c.option.side">{{ c.option.side === 'short' ? 'Short' : 'Long' }}</span>
+                <span class="stock-row-ticker">{{ c.name }}</span>
+              </template>
+              <template v-else>
+                <span class="stock-row-ticker">{{ c.symbol }}</span>
+                <span class="text-muted text-sm closed-name">{{ c.name }}</span>
+              </template>
               <div class="text-muted text-sm">
                 {{ c.openedDate ? formatDate(c.openedDate + 'T12:00:00') + ' – ' : 'Closed ' }}{{ formatDate(c.closedDate + 'T12:00:00') }}
               </div>
             </div>
             <div class="closed-nums">
-              <span class="stock-row-num"><span class="stock-row-label">Shares</span><span>{{ formatShares(c.sharesSold) }}</span></span>
-              <span class="stock-row-num"><span class="stock-row-label">Avg cost</span><span>{{ formatPrice(c.costBasis / c.sharesSold) }}</span></span>
-              <span class="stock-row-num"><span class="stock-row-label">Avg sale</span><span>{{ formatPrice(c.proceeds / c.sharesSold) }}</span></span>
+              <template v-if="c.kind === 'option'">
+                <span class="stock-row-num"><span class="stock-row-label">Contracts</span><span>{{ c.sharesSold }}</span></span>
+                <span class="stock-row-num"><span class="stock-row-label">Avg open</span><span>{{ formatPrice(c.avgOpen) }}</span></span>
+                <span class="stock-row-num"><span class="stock-row-label">Avg close</span><span>{{ formatPrice(c.avgClose) }}</span></span>
+              </template>
+              <template v-else>
+                <span class="stock-row-num"><span class="stock-row-label">Shares</span><span>{{ formatShares(c.sharesSold) }}</span></span>
+                <span class="stock-row-num"><span class="stock-row-label">Avg cost</span><span>{{ formatPrice(c.costBasis / c.sharesSold) }}</span></span>
+                <span class="stock-row-num"><span class="stock-row-label">Avg sale</span><span>{{ formatPrice(c.proceeds / c.sharesSold) }}</span></span>
+              </template>
               <span class="stock-row-num"><span class="stock-row-label">Cost basis</span><span>{{ formatUSD(c.costBasis) }}</span></span>
               <span class="stock-row-num"><span class="stock-row-label">Proceeds</span><span>{{ formatUSD(c.proceeds) }}</span></span>
               <span class="stock-row-num"><span class="stock-row-label">Realized G/L</span>
-                <span :class="changeClass(c.realized)">{{ signedUSD(c.realized) }}<template v-if="c.costBasis > 0"> ({{ formatPct((c.realized / c.costBasis) * 100) }})</template></span>
+                <span :class="changeClass(c.realized)">{{ signedUSD(c.realized) }}<template v-for="base in [c.option?.side === 'short' ? c.proceeds : c.costBasis]"><template v-if="base > 0"> ({{ formatPct((c.realized / base) * 100) }})</template></template></span>
               </span>
             </div>
             <div class="closed-actions">

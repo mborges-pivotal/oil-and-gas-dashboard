@@ -345,6 +345,7 @@ const App = {
     // hold at least one position — or have closed ones to look back at.
     const hasPositions = computed(() => !!user.value && (
       Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
+      || Object.values(config.value?.optionPositions ?? {}).some(p => p?.quantity > 0)
       || (config.value?.closedPositions?.length ?? 0) > 0
     ));
     const tabs = computed(() => [
@@ -454,6 +455,7 @@ const App = {
         ui: { ...updated.ui, theme: config.value.ui?.theme },
         // Portfolio positions are edited on the Stocks tab, not in this panel.
         portfolio: config.value.portfolio,
+        optionPositions: config.value.optionPositions,
         closedPositions: config.value.closedPositions,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
@@ -543,15 +545,20 @@ const App = {
     // Also { updates: { SYMBOL: position | null, … } } — several positions in
     // one save (a purchase paid from a cash holding changes both), so they
     // can't land separately.
-    // `closed` (optional) replaces config.closedPositions — sold-out positions.
-    function onSetPosition({ symbol, position, updates, closed }) {
-      const portfolio = { ...(config.value.portfolio ?? {}) };
-      const changes = updates ?? (symbol ? { [symbol]: position } : {});
-      for (const [sym, pos] of Object.entries(changes)) {
-        if (pos) portfolio[sym] = pos;
-        else delete portfolio[sym];
-      }
-      const next = { ...config.value, portfolio };
+    // `options` (optional) updates config.optionPositions the same way
+    // (OCC symbol → position | null); `closed` replaces config.closedPositions
+    // — sold-out positions. All in one save, so cash moves stay consistent.
+    function onSetPosition({ symbol, position, updates, options, closed }) {
+      const merge = (current, changes) => {
+        const out = { ...(current ?? {}) };
+        for (const [sym, pos] of Object.entries(changes)) {
+          if (pos) out[sym] = pos;
+          else delete out[sym];
+        }
+        return out;
+      };
+      const next = { ...config.value, portfolio: merge(config.value.portfolio, updates ?? (symbol ? { [symbol]: position } : {})) };
+      if (options) next.optionPositions = merge(config.value.optionPositions, options);
       if (closed) next.closedPositions = closed;
       persistConfig(next, 'Portfolio position');
     }

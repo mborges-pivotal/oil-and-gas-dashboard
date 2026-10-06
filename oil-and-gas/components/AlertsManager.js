@@ -2,7 +2,8 @@ const { ref, reactive, computed } = Vue;
 import AlertForm from './AlertForm.js';
 import AlertComposer from './AlertComposer.js';
 import { alertsStore, loadAlerts, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
-import { describeAlert, alertStatus } from '../utils/alerts.js';
+import { describeAlert, alertStatus, alertSubject } from '../utils/alerts.js';
+import { parseOcc } from '../utils/options.js';
 import { fetchQuote } from '../services/yahooFinance.js';
 
 // Status filter chips.
@@ -40,7 +41,7 @@ export default {
       const q = search.value.trim().toUpperCase();
       return alertsStore.alerts.filter(a =>
         (filter.value === 'all' || (filter.value === 'active') === !!a.active)
-        && (!q || a.symbol.includes(q) || (a.note ?? '').toUpperCase().includes(q)));
+        && (!q || alertSubject(a.symbol).toUpperCase().includes(q) || (a.note ?? '').toUpperCase().includes(q)));
     });
     // Grouped by symbol, A→Z; within a stock, newest first.
     const groups = computed(() => {
@@ -58,20 +59,26 @@ export default {
     });
 
     const avgCostFor = sym => {
-      const p = props.config?.portfolio?.[sym];
+      const p = parseOcc(sym) ? props.config?.optionPositions?.[sym] : props.config?.portfolio?.[sym];
       return p?.quantity > 0 ? p.avgCost : null;
+    };
+    // Option contracts: the form's option mode (short = sold to open).
+    const optionFor = sym => {
+      const o = parseOcc(sym);
+      return o && { ...o, short: props.config?.optionPositions?.[sym]?.side === 'short' };
     };
 
     async function startEdit(a) {
       composing.value = false;
       delete rowErrors[a.id];
-      editing.value = { id: a.id, symbol: a.symbol, initial: a, quote: null, busy: false, error: null };
+      editing.value = { id: a.id, symbol: a.symbol, initial: a, quote: null, underlyingPrice: null, busy: false, error: null };
       // The form's "= 172.21" helpers and 52-week prefills use the current
-      // quote; it works without one, so a failed fetch is fine.
-      try {
-        const q = await fetchQuote(a.symbol);
-        if (editing.value?.id === a.id) editing.value.quote = q;
-      } catch { /* no live helpers */ }
+      // quote (and an option's, its stock's); it works without, so failures are fine.
+      const o = parseOcc(a.symbol);
+      await Promise.all([
+        fetchQuote(a.symbol).then(q => { if (editing.value?.id === a.id) editing.value.quote = q; }).catch(() => {}),
+        o && fetchQuote(o.underlying).then(q => { if (editing.value?.id === a.id) editing.value.underlyingPrice = q.price; }).catch(() => {}),
+      ]);
     }
     async function submitEdit(fields) {
       const e = editing.value;
@@ -109,7 +116,7 @@ export default {
 
     return {
       alertsStore, loadAlerts, FILTERS, filter, search, counts, visible, groups, composing, created, editing, rowErrors,
-      avgCostFor, startEdit, submitEdit, toggle, remove, startNew, onCreated, describeAlert, alertStatus,
+      avgCostFor, optionFor, alertSubject, startEdit, submitEdit, toggle, remove, startNew, onCreated, describeAlert, alertStatus,
     };
   },
   template: `
@@ -155,10 +162,11 @@ export default {
         <p class="text-muted text-sm" style="margin:12px 0 0" v-if="!groups.length">No alerts match.</p>
 
         <section class="alerts-group" v-for="g in groups" :key="g.symbol" :aria-label="g.symbol + ' alerts'">
-          <h4 class="alerts-group-title">{{ g.symbol }} <span class="holdings-count">{{ g.alerts.length }}</span></h4>
+          <h4 class="alerts-group-title">{{ alertSubject(g.symbol) }} <span class="holdings-count">{{ g.alerts.length }}</span></h4>
           <ul class="alert-list">
             <li v-for="a in g.alerts" :key="a.id" class="alert-item" :class="{ inactive: !a.active, editing: editing?.id === a.id }">
               <AlertForm v-if="editing?.id === a.id" :symbol="a.symbol" :quote="editing.quote" :avg-cost="avgCostFor(a.symbol)"
+                         :option="optionFor(a.symbol)" :underlying-price="editing.underlyingPrice"
                          :initial="editing.initial" submit-label="Save changes"
                          :busy="editing.busy" :error="editing.error"
                          @save="submitEdit" @cancel="editing = null" />

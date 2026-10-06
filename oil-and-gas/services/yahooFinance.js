@@ -55,8 +55,9 @@ async function fetchWithFallback(url) {
 /**
  * Fetch current quote data for a single symbol.
  * Returns: { symbol, shortName, price, previousClose, change, pctChange, volume, currency,
- *            open, dayHigh, dayLow, fiftyTwoWeekHigh, fiftyTwoWeekLow, instrumentType }
- * instrumentType is Yahoo's EQUITY | ETF | MUTUALFUND | CRYPTOCURRENCY | MONEYMARKET | FUTURE | ...
+ *            open, dayHigh, dayLow, fiftyTwoWeekHigh, fiftyTwoWeekLow, instrumentType, marketTime }
+ * instrumentType is Yahoo's EQUITY | ETF | MUTUALFUND | CRYPTOCURRENCY | MONEYMARKET | FUTURE | OPTION | ...
+ * marketTime: ISO time of the last trade (thinly traded options can be hours or days old).
  */
 export async function fetchQuote(symbol) {
   const url = `${BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=2d`;
@@ -95,6 +96,7 @@ export async function fetchQuote(symbol) {
     fiftyTwoWeekHigh: meta.fiftyTwoWeekHigh ?? null,
     fiftyTwoWeekLow: meta.fiftyTwoWeekLow ?? null,
     instrumentType: meta.instrumentType ?? null,
+    marketTime: meta.regularMarketTime ? new Date(meta.regularMarketTime * 1000).toISOString() : null,
   };
 }
 

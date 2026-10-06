@@ -1,5 +1,6 @@
 const { ref, computed, onMounted, watch } = Vue;
-import { ALERT_KINDS } from '../utils/alerts.js';
+import { ALERT_KINDS, OPTION_ALERT_KINDS } from '../utils/alerts.js';
+import { daysToExpiry, moneyness } from '../utils/options.js';
 import { formatPrice } from '../utils/formatters.js';
 
 /**
@@ -7,7 +8,11 @@ import { formatPrice } from '../utils/formatters.js';
  * existing alert or a preset ({ kind, params, repeat?, note? }); `quote` is
  * the stock's current quote (price, 52-week range) and `avgCost` its
  * Portfolio average cost, if held — both used for prefills and the live
- * "= 172.21" helpers. Emits save({ kind, params, repeat, note }) and cancel.
+ * "= 172.21" helpers. For an option contract, `option` ({ type, strike,
+ * expiry, underlying, short }) switches to the contract's alert types —
+ * premium target / move / gain-loss, days to expiration, in/out of the
+ * money (helpers use `underlyingPrice`). A short option gains as its
+ * premium falls. Emits save({ kind, params, repeat, note }) and cancel.
  */
 export default {
   name: 'AlertForm',
@@ -20,6 +25,8 @@ export default {
     // quote or position to work from; % price targets use each stock's own
     // current price (the server fills it in), gain/loss applies to held ones.
     multi: Boolean,
+    option: { type: Object, default: null },
+    underlyingPrice: { type: Number, default: null },
     submitLabel: { type: String, default: 'Save alert' },
     busy: Boolean,
     error: String,
@@ -48,6 +55,10 @@ export default {
     const percent = ref(String(p0.percent != null && kind.value !== 'price' ? Math.abs(p0.percent) : (kind.value === 'position' ? 20 : 3)));
     const within = ref(String(p0.within ?? 0));
     const multiple = ref(String(p0.multiple ?? 2));
+    const days = ref(String(p0.days ?? 7));
+    const strikeState = ref(p0.state === 'otm' ? 'otm' : 'itm');
+    const kinds = computed(() => (props.option ? OPTION_ALERT_KINDS : ALERT_KINDS));
+    const short = computed(() => !!props.option?.short);
 
     const n = v => (String(v).trim() === '' ? NaN : Number(v));
 
@@ -79,8 +90,21 @@ export default {
           if (!props.avgCost) return '';
           const v = n(percent.value);
           if (!Number.isFinite(v)) return '';
-          const at = props.avgCost * (1 + (posDir.value === 'gain' ? v : -v) / 100);
+          // A short option gains as the premium falls.
+          const up = (posDir.value === 'gain') !== short.value;
+          const at = props.avgCost * (1 + (up ? v : -v) / 100);
+          if (props.option) return `Triggers at a premium of ${formatPrice(at)} (you ${short.value ? 'sold' : 'paid'} ${formatPrice(props.avgCost)} on average)`;
           return `Triggers at ${formatPrice(at)} (your average cost is ${formatPrice(props.avgCost)})`;
+        }
+        case 'expiry': {
+          const left = daysToExpiry(props.option.expiry);
+          return left >= 0 ? `Expires ${props.option.expiry} — ${left} day${left === 1 ? '' : 's'} from today` : 'This contract has expired.';
+        }
+        case 'strike': {
+          const m = moneyness(props.option, props.underlyingPrice);
+          if (!m) return `Strike ${formatPrice(props.option.strike)}`;
+          return `${props.option.underlying} is ${formatPrice(props.underlyingPrice)} vs. the ${formatPrice(props.option.strike)} strike — `
+            + (m === 'itm' ? 'in the money now' : m === 'otm' ? 'out of the money now' : 'at the money now');
         }
         case 'high52':
         case 'low52': {
@@ -119,7 +143,7 @@ export default {
           return { direction: dailyDir.value, percent: v };
         }
         case 'position': {
-          if (!props.avgCost && !props.multi) return fail(`Add your ${props.symbol} position (quantity and average cost) first.`);
+          if (!props.avgCost && !props.multi) return fail(props.option ? 'Add this option to your Portfolio first.' : `Add your ${props.symbol} position (quantity and average cost) first.`);
           const v = n(percent.value);
           if (!(v > 0)) return fail('Enter a percentage above 0.');
           return { direction: posDir.value, percent: v };
@@ -135,6 +159,13 @@ export default {
           if (!(m > 1 && m <= 100)) return fail('Enter a multiple above 1 (e.g. 2 for twice the average).');
           return { multiple: m };
         }
+        case 'expiry': {
+          const d = n(days.value);
+          if (!(Number.isInteger(d) && d >= 0 && d <= 365)) return fail('Enter a whole number of days, 0 to 365.');
+          return { days: d };
+        }
+        case 'strike':
+          return { state: strikeState.value };
       }
       return fail('Choose an alert type.');
     }
@@ -158,7 +189,7 @@ export default {
     onMounted(() => { if (!props.multi) firstInput.value?.focus(); });
 
     return {
-      ALERT_KINDS, kind, repeat, note, localError, firstInput, price,
+      kinds, short, days, strikeState, kind, repeat, note, localError, firstInput, price,
       priceDir, priceMode, priceValue, dailyDir, posDir, percent, within, multiple,
       helper, submit, formatPrice,
     };
@@ -168,7 +199,7 @@ export default {
       <label class="alert-field">
         <span class="alert-field-label">Alert when</span>
         <select v-model="kind">
-          <option v-for="k in ALERT_KINDS" :key="k.id" :value="k.id" :disabled="k.id === 'position' && !avgCost && !multi">
+          <option v-for="k in kinds" :key="k.id" :value="k.id" :disabled="k.id === 'position' && !avgCost && !multi">
             {{ k.label }}{{ k.id === 'position' && !avgCost && !multi ? ' (needs a position)' : '' }}
           </option>
         </select>
@@ -182,7 +213,7 @@ export default {
         </div>
         <div class="alert-amount">
           <input ref="firstInput" type="number" inputmode="decimal" min="0" step="any" v-model="priceValue"
-                 :aria-label="priceMode === 'fixed' ? 'Target price' : 'Percent from current price'" />
+                 :aria-label="priceMode === 'fixed' ? (option ? 'Target premium' : 'Target price') : 'Percent from current price'" />
           <span class="alert-unit" v-if="priceMode === 'percent'">%</span>
         </div>
         <div class="range-btn-group alert-seg" role="group" aria-label="Value type">
@@ -214,7 +245,23 @@ export default {
         </div>
         <div class="alert-amount">
           <input ref="firstInput" type="number" inputmode="decimal" min="0" step="any" v-model="percent" aria-label="Percent gain or loss" />
-          <span class="alert-unit">% vs. avg cost</span>
+          <span class="alert-unit">% vs. {{ option ? 'avg premium' : 'avg cost' }}</span>
+        </div>
+      </div>
+
+      <!-- Option: days to expiration -->
+      <div class="alert-row" v-else-if="kind === 'expiry'">
+        <div class="alert-amount">
+          <input ref="firstInput" type="number" inputmode="numeric" min="0" max="365" step="1" v-model="days" aria-label="Days to expiration" />
+          <span class="alert-unit">days or less to expiration</span>
+        </div>
+      </div>
+
+      <!-- Option: underlying in / out of the money -->
+      <div class="alert-row" v-else-if="kind === 'strike'">
+        <div class="range-btn-group alert-seg" role="group" aria-label="Money state">
+          <button type="button" class="range-btn" :class="{ active: strikeState === 'itm' }" @click="strikeState = 'itm'">In the money</button>
+          <button type="button" class="range-btn" :class="{ active: strikeState === 'otm' }" @click="strikeState = 'otm'">Out of the money</button>
         </div>
       </div>
 

@@ -11,6 +11,7 @@ export const CATEGORIES = [
   { id: 'cash',        label: 'Cash' },
   { id: 'crypto',      label: 'Crypto' },
   { id: 'commodities', label: 'Commodities' },
+  { id: 'options',     label: 'Options', derived: true }, // long option contracts (not a choice for a stock)
   { id: 'other',       label: 'Other' },
 ];
 export const CATEGORY_LABELS = Object.fromEntries(CATEGORIES.map(c => [c.id, c.label]));
@@ -19,7 +20,7 @@ export const CATEGORY_SHORT = Object.fromEntries(CATEGORIES.filter(c => c.short)
 
 // Fixed color slot (--series-N) per category, so a category keeps its color
 // in both charts (by asset type and by sector). "Other" is neutral gray.
-const CATEGORY_SLOTS = { stocks: 1, funds: 2, bonds: 3, cash: 4, crypto: 5, commodities: 6 };
+const CATEGORY_SLOTS = { stocks: 1, funds: 2, bonds: 3, cash: 4, crypto: 5, commodities: 6, options: 7 };
 
 /**
  * Give each slice a color slot: categories their fixed one; anything else

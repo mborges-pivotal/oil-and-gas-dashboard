@@ -5,14 +5,14 @@ import Stocks from './Stocks.js';
 
 // `short` is shown on phones so all four sub-tabs fit without scrolling.
 const SECTIONS = [
+  { id: 'stocks', label: 'Stocks',              short: 'Stocks' },
   { id: 'econ',   label: 'Economic Indicators', short: 'Economy' },
   { id: 'oil',    label: 'Oil Price Indexes',   short: 'Oil' },
   { id: 'gas',    label: 'Retail Gas Prices',   short: 'Gas' },
-  { id: 'stocks', label: 'Stocks',              short: 'Stocks' },
 ];
 
 /**
- * Markets tab — Economic Indicators, Oil & Gas Markets and Stocks under one
+ * Markets tab — Stocks, Economic Indicators and Oil & Gas Markets under one
  * sub-tab bar (on touch screens, swipe the content left/right to switch). Oil and Gas share a single OilGasMarkets instance (it fetches
  * both on mount), so switching between those two doesn't refetch.
  */
@@ -22,7 +22,7 @@ export default {
   props: ['config', 'user'],
   emits: ['set-tickers', 'set-position', 'go-account', 'go-notes'],
   setup() {
-    const activeSection = ref('econ');
+    const activeSection = ref('stocks'); // the first sub-tab
     // Last refresh time reported by each child, shown in the header row.
     const updated = reactive({ econ: null, oilgas: null, stocks: null });
     const lastUpdated = computed(() => {
