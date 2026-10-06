@@ -1,4 +1,4 @@
-const { ref, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
+const { ref, shallowRef, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
 import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, fetchSector } from '../services/yahooFinance.js';
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_SHORT, autoCategory, buildSlices, assignSlots, shortSector } from '../utils/allocation.js';
 import { fetchWatchlists, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/watchlists.js';
@@ -424,10 +424,14 @@ export default {
     const isPortfolioList = computed(() => props.portfolioOnly);
     // Default has no Portfolio tab; your own lists and the Portfolio list do.
 
+    // The Portfolio page's sorted order — a computed defined with the sort
+    // controls further down (watches here read activeTickers right away).
+    const holdingsOrder = shallowRef(null);
+
     // While a remembered custom list is still loading, show nothing rather
     // than flashing the default list's cards.
     const activeTickers = computed(() => {
-      if (isPortfolioList.value) return portfolioTickers.value;
+      if (isPortfolioList.value) return holdingsOrder.value ? holdingsOrder.value.value : portfolioTickers.value;
       if (activeList.value) return activeList.value.tickers;
       if (activeListId.value !== 'default' && listsLoading.value) return [];
       return configTickers.value;
@@ -2249,6 +2253,93 @@ export default {
     });
 
     // ── Options card (Portfolio page): every open contract, grouped by expiration ──
+    // ── Sorting the Portfolio page's Holdings and Options (remembered per browser) ──
+    // A sort is { key, dir }; clicking the active key flips the direction.
+    // Numbers start largest-first, text A→Z; missing values always go last.
+    const HOLDING_SORTS = [
+      { id: 'added',   label: 'Added', text: true },
+      { id: 'symbol',  label: 'Stock', text: true },
+      { id: 'last',    label: 'Last' },
+      { id: 'chg',     label: 'Chg' },
+      { id: 'chgPct',  label: 'Chg %' },
+      { id: 'volume',  label: 'Vol' },
+      { id: 'value',   label: 'Value' },
+      { id: 'gain',    label: 'G/L' },
+      { id: 'gainPct', label: 'G/L %' },
+    ];
+    const OPTION_SORTS = [
+      { id: 'expiry',    label: 'Expiration', text: true },
+      { id: 'symbol',    label: 'Stock', text: true },
+      { id: 'strike',    label: 'Strike' },
+      { id: 'contracts', label: 'Contracts' },
+      { id: 'last',      label: 'Last' },
+      { id: 'value',     label: 'Value' },
+      { id: 'gain',      label: 'G/L' },
+      { id: 'gainPct',   label: 'G/L %' },
+    ];
+    function savedSort(key, list, fallback) {
+      try {
+        const v = JSON.parse(localStorage.getItem(key));
+        if (list.some(o => o.id === v?.key) && (v.dir === 'asc' || v.dir === 'desc')) return v;
+      } catch { /* none saved */ }
+      return fallback;
+    }
+    const holdingSort = ref(savedSort('oilgas_holdings_sort', HOLDING_SORTS, { key: 'added', dir: 'asc' }));
+    const optionSort = ref(savedSort('oilgas_options_sort', OPTION_SORTS, { key: 'expiry', dir: 'asc' }));
+    watch(holdingSort, v => { try { localStorage.setItem('oilgas_holdings_sort', JSON.stringify(v)); } catch { /* per-browser only */ } });
+    watch(optionSort, v => { try { localStorage.setItem('oilgas_options_sort', JSON.stringify(v)); } catch { /* per-browser only */ } });
+    // which: 'holdings' | 'options' (templates unwrap refs, so pass a name).
+    function setSort(name, key) {
+      const which = name === 'options' ? optionSort : holdingSort;
+      const list = name === 'options' ? OPTION_SORTS : HOLDING_SORTS;
+      const cur = which.value;
+      if (cur.key === key) which.value = { key, dir: cur.dir === 'asc' ? 'desc' : 'asc' };
+      else which.value = { key, dir: list.find(o => o.id === key)?.text ? 'asc' : 'desc' };
+    }
+    // Compare two values in a direction; null/undefined last either way.
+    function cmp(a, b, dir) {
+      const na = a == null || (typeof a === 'number' && !Number.isFinite(a));
+      const nb = b == null || (typeof b === 'number' && !Number.isFinite(b));
+      if (na || nb) return na === nb ? 0 : na ? 1 : -1;
+      const c = typeof a === 'string' ? a.localeCompare(b) : a - b;
+      return dir === 'asc' ? c : -c;
+    }
+    const sortedHoldings = computed(() => {
+      const { key, dir } = holdingSort.value;
+      const base = portfolioTickers.value;
+      if (key === 'added') return dir === 'asc' ? base : [...base].reverse();
+      const val = sym => {
+        const q = stockQuotes[sym];
+        switch (key) {
+          case 'symbol': return sym;
+          case 'last': return q?.price;
+          case 'chg': return q?.change;
+          case 'chgPct': return q?.pctChange;
+          case 'volume': return q?.volume;
+          default: return positionSummary(sym)?.[key];
+        }
+      };
+      return [...base].sort((a, b) => cmp(val(a), val(b), dir) || a.localeCompare(b));
+    });
+    holdingsOrder.value = sortedHoldings;
+    // Options: by expiration they're grouped by date; any other sort is one flat list.
+    const sortedOptions = computed(() => {
+      const { key, dir } = optionSort.value;
+      const val = occ => {
+        const o = optionSummary(occ);
+        switch (key) {
+          case 'symbol': return o.underlying;
+          case 'expiry': return o.expiry;
+          case 'contracts': return o.quantity;
+          case 'last': return o.price;
+          default: return o[key];
+        }
+      };
+      return [...openOptionSymbols.value].sort((a, b) => cmp(val(a), val(b), dir)
+        || optionPositions.value[a].expiry.localeCompare(optionPositions.value[b].expiry)
+        || a.localeCompare(b));
+    });
+
     const optionGroups = computed(() => {
       const groups = new Map();
       for (const occ of openOptionSymbols.value) {
@@ -2256,8 +2347,9 @@ export default {
         if (!groups.has(p.expiry)) groups.set(p.expiry, []);
         groups.get(p.expiry).push(occ);
       }
+      const desc = optionSort.value.key === 'expiry' && optionSort.value.dir === 'desc';
       return [...groups.entries()]
-        .sort(([a], [b]) => a.localeCompare(b))
+        .sort(([a], [b]) => (desc ? b.localeCompare(a) : a.localeCompare(b)))
         .map(([expiry, items]) => ({
           expiry, days: daysToExpiry(expiry),
           items: items.sort((a, b) => optionPositions.value[a].underlying.localeCompare(optionPositions.value[b].underlying)
@@ -2462,6 +2554,7 @@ export default {
       categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
       isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
       openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
+      HOLDING_SORTS, OPTION_SORTS, holdingSort, optionSort, setSort, sortedOptions,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
@@ -2700,6 +2793,13 @@ export default {
           </span>
         </span>
       </button>
+      <div class="sort-bar" v-if="portfolioOnly && holdingsOpen && tickers.length > 1" role="group" aria-label="Sort holdings">
+        <span class="sort-bar-label">Sort</span>
+        <button v-for="o in HOLDING_SORTS" :key="o.id" type="button" class="sort-chip" :class="{ active: holdingSort.key === o.id }"
+                :aria-pressed="holdingSort.key === o.id" @click="setSort('holdings', o.id)">
+          {{ o.label }}<span class="sort-dir" v-if="holdingSort.key === o.id" :aria-label="holdingSort.dir === 'asc' ? 'ascending' : 'descending'">{{ holdingSort.dir === 'asc' ? '↑' : '↓' }}</span>
+        </button>
+      </div>
       <div ref="watchlistEl" id="portfolio-holdings" class="watchlist" :class="{ 'is-dragging': draggingTicker, editing: editMode }"
            v-show="!portfolioOnly || holdingsOpen">
       <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
@@ -3359,6 +3459,22 @@ ${OPTION_FORM}
             <span class="negative text-sm" v-if="optionAdd.error">{{ optionAdd.error }}</span>
           </form>
 
+          <div class="sort-bar sort-bar-inset" v-if="openOptionSymbols.length > 1" role="group" aria-label="Sort options">
+            <span class="sort-bar-label">Sort</span>
+            <button v-for="o in OPTION_SORTS" :key="o.id" type="button" class="sort-chip" :class="{ active: optionSort.key === o.id }"
+                    :aria-pressed="optionSort.key === o.id" @click="setSort('options', o.id)">
+              {{ o.label }}<span class="sort-dir" v-if="optionSort.key === o.id" :aria-label="optionSort.dir === 'asc' ? 'ascending' : 'descending'">{{ optionSort.dir === 'asc' ? '↑' : '↓' }}</span>
+            </button>
+          </div>
+
+          <ul class="option-list option-list-flat" v-if="optionSort.key !== 'expiry'">
+            <li class="option-item" v-for="occ in sortedOptions" :key="occ">
+              <template v-for="sym in [optionPositionFor(occ).underlying]" :key="occ + '-sym'">
+                <template v-for="inList in [true]" :key="occ + '-il'">${OPTION_ITEM}</template>
+              </template>
+            </li>
+          </ul>
+          <template v-else>
           <section class="option-group" v-for="g in optionGroups" :key="g.expiry" :aria-label="'Expiring ' + g.expiry">
             <h4 class="option-group-head" :class="{ soon: g.days >= 0 && g.days <= 7, expired: g.days < 0 }">
               {{ formatDate(g.expiry + 'T12:00:00') }}
@@ -3372,6 +3488,7 @@ ${OPTION_FORM}
               </li>
             </ul>
           </section>
+          </template>
           <p class="text-muted text-sm option-empty" v-if="!openOptionSymbols.length && !(optionAdd.ticker && optionForms[optionAdd.ticker])">
             No open options. Add one above, or from a stock's Portfolio tab.
           </p>
