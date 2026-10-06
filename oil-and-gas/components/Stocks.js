@@ -15,6 +15,7 @@ import AllocationChart from './AllocationChart.js';
 import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
+import PortfolioActivity from './PortfolioActivity.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
 import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
@@ -355,7 +356,7 @@ const OPTION_ITEM = `
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
@@ -949,7 +950,7 @@ export default {
     // A mover in the list below: open its card and bring it into view.
     function openMover(sym) {
       if (!tickers.value.includes(sym)) return;
-      if (props.portfolioOnly) holdingsOpen.value = true;
+      if (props.portfolioOnly) { holdingsOpen.value = true; pfTab.value = 'positions'; }
       ensureDetail(sym);
       if (!details[sym].open) toggleDetail(sym);
       nextTick(() => watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"]`)
@@ -2073,6 +2074,23 @@ export default {
             || optionPositions.value[a].strike - optionPositions.value[b].strike),
         }));
     });
+    // Portfolio page sub-tabs (remembered per browser).
+    const PORTFOLIO_TABS = [
+      { id: 'summary',   label: 'Summary' },
+      { id: 'positions', label: 'Positions' },
+      { id: 'activity',  label: 'Activity' },
+    ];
+    const PF_TAB_KEY = 'oilgas_portfolio_tab';
+    const pfTab = ref((() => {
+      try {
+        const saved = localStorage.getItem(PF_TAB_KEY);
+        if (PORTFOLIO_TABS.some(t => t.id === saved)) return saved;
+      } catch { /* none saved */ }
+      return 'summary';
+    })());
+    watch(pfTab, t => { try { localStorage.setItem(PF_TAB_KEY, t); } catch { /* per-browser only */ } });
+    const onPositions = computed(() => !props.portfolioOnly || pfTab.value === 'positions');
+
     const OPTIONS_KEY = 'oilgas_options_open';
     const optionsOpen = ref((() => {
       try { return localStorage.getItem(OPTIONS_KEY) !== '0'; } catch { return true; }
@@ -2251,7 +2269,7 @@ export default {
       optionPositionFor, optionAlertPresets, hasShortOptions, optionLabel, MULTIPLIER,
       categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
       isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
-      openOptionSymbols, tickers,
+      openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
@@ -2269,6 +2287,15 @@ export default {
         <div class="section-header" style="margin-bottom:0">Portfolio</div>
         <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
       </div>
+      <div class="subtab-bar" role="tablist" aria-label="Portfolio sections" v-if="portfolioOnly">
+        <button v-for="t in PORTFOLIO_TABS" :key="t.id" type="button" role="tab" class="subtab-btn"
+                :class="{ active: pfTab === t.id }" :aria-selected="pfTab === t.id" @click="pfTab = t.id">{{ t.label }}</button>
+      </div>
+
+      <!-- Portfolio → Summary: the whole portfolio, when there are options too -->
+      <p class="portfolio-net" v-if="portfolioOnly && pfTab === 'summary' && user && openOptionSymbols.length && netValue">
+        Net value <strong>{{ formatUSD(netValue.total) }}</strong> <span class="text-muted">= holdings {{ formatUSD(netValue.holdings) }} {{ netValue.options < 0 ? '−' : '+' }} options {{ formatUSD(Math.abs(netValue.options)) }}</span>
+      </p>
 
       <template v-if="!portfolioOnly">
       <!-- Major Market Indexes -->
@@ -2392,7 +2419,7 @@ export default {
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
       <!-- Allocation: by asset type and by sector, side by side -->
-      <div class="card allocation-card" v-if="isPortfolioList && (portfolioTotals || openOptionSymbols.length)">
+      <div class="card allocation-card" v-if="isPortfolioList && pfTab === 'summary' && (portfolioTotals || openOptionSymbols.length)">
         <div class="card-title allocation-head">Allocation</div>
         <div class="allocation-pair">
           <section class="allocation-panel" aria-label="Allocation by asset type">
@@ -2417,29 +2444,24 @@ export default {
         </p>
       </div>
 
-      <!-- Top movers (Portfolio page: under the allocation charts) -->
-      <TopMovers v-if="portfolioOnly" :sources="moverSources" v-model:selected-ids="moverSelected"
+      <!-- Top movers (Portfolio → Positions, above Holdings) -->
+      <TopMovers v-if="portfolioOnly && pfTab === 'positions'" :sources="moverSources" v-model:selected-ids="moverSelected"
                  :quotes="stockQuotes" @select="openMover" />
 
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
-      <div class="notice" v-else-if="isPortfolioList && !tickers.length && !openOptionSymbols.length">
-        <template v-if="closedPositions.length">No open positions — your sold positions are under Closed positions below.</template>
+      <div class="notice" v-else-if="isPortfolioList && pfTab !== 'activity' && !tickers.length && !openOptionSymbols.length">
+        <template v-if="closedPositions.length">No open positions — your sold positions are under Positions → Closed positions.</template>
         <template v-else>No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to add a purchase.</template>
       </div>
       <div class="notice" v-else-if="!isPortfolioList && tickers.length === 0">
         This watchlist is empty — search above to add stocks.
       </div>
 
-      <!-- Portfolio page: the whole portfolio, when there are options too -->
-      <p class="portfolio-net" v-if="portfolioOnly && user && openOptionSymbols.length && netValue">
-        Net value <strong>{{ formatUSD(netValue.total) }}</strong> <span class="text-muted">= holdings {{ formatUSD(netValue.holdings) }} {{ netValue.options < 0 ? '−' : '+' }} options {{ formatUSD(Math.abs(netValue.options)) }}</span>
-      </p>
-
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
       <!-- drag a card by its handle to reorder (saved to settings). -->
       <!-- Portfolio page: holdings as one collapsible card — header row, then a
            row per stock (on Markets → Stocks this wrapper adds nothing) -->
-      <div :class="{ 'holdings-card': portfolioOnly && tickers.length, collapsed: portfolioOnly && !holdingsOpen }">
+      <div :class="{ 'holdings-card': portfolioOnly && tickers.length, collapsed: portfolioOnly && !holdingsOpen }" v-show="onPositions">
       <button type="button" class="holdings-toggle" v-if="portfolioOnly && tickers.length"
               :aria-expanded="holdingsOpen" aria-controls="portfolio-holdings" @click="holdingsOpen = !holdingsOpen">
         <span class="holdings-heading">
@@ -3078,7 +3100,7 @@ ${OPTION_FORM}
 
       <!-- Portfolio page: Options — every open contract by expiration; collapsible -->
       <div class="holdings-card options-card" :class="{ collapsed: !optionsOpen }"
-           v-if="portfolioOnly && user && (openOptionSymbols.length || tickers.length)">
+           v-if="portfolioOnly && pfTab === 'positions' && user && (openOptionSymbols.length || tickers.length)">
         <button type="button" class="holdings-toggle" :aria-expanded="optionsOpen" aria-controls="portfolio-options"
                 @click="optionsOpen = !optionsOpen">
           <span class="holdings-heading">
@@ -3143,7 +3165,7 @@ ${OPTION_FORM}
       </div>
 
       <!-- Portfolio page: Closed positions — collapsible, totals at average cost -->
-      <div class="holdings-card closed-card" v-if="portfolioOnly && closedPositions.length">
+      <div class="holdings-card closed-card" v-if="portfolioOnly && pfTab === 'positions' && closedPositions.length">
         <button type="button" class="holdings-toggle" :aria-expanded="closedOpen" aria-controls="closed-positions"
                 @click="closedOpen = !closedOpen">
           <span class="holdings-heading">
@@ -3208,7 +3230,10 @@ ${OPTION_FORM}
         </ul>
       </div>
 
-      <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length">
+      <!-- Portfolio → Activity: the trade history -->
+      <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :config="config" />
+
+      <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length && onPositions">
         Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.
         Ticker news from Yahoo Finance. SEC filings from SEC EDGAR (data.sec.gov), no API key required. Each tab loads the first time you open it. Use the search icon to add stocks and the ☰ menu to edit (remove stocks) and manage lists; drag a card by its ⠿ handle to reorder.
       </div>

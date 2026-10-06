@@ -1683,6 +1683,36 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .option-panel.transactions { padding: 2px 0; }
 }
 
+/* Portfolio → Activity */
+.activity-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.activity-search { flex: 0 1 260px; min-width: 0; }
+.activity-empty { margin: 14px 0 0; }
+.activity-totals { margin: 12px 0 0; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.activity-totals strong { font-weight: 700; }
+.activity-month { margin-top: 14px; }
+.activity-month-head { margin: 0; padding: 6px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); border-bottom: 1px solid var(--border); }
+.activity-list { list-style: none; margin: 0; padding: 0; }
+.activity-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) 120px 110px; align-items: center; gap: 4px 16px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.activity-row:last-child { border-bottom: none; }
+.activity-date { font-size: 13px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.activity-what { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.activity-action { font-size: 11px; font-weight: 700; line-height: 16px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
+.activity-action.in { color: var(--positive); border-color: currentColor; background: transparent; }
+.activity-action.out { color: var(--accent); border-color: currentColor; background: transparent; }
+.activity-action.expired { color: var(--negative); background: var(--negative-bg); border-color: transparent; }
+.activity-title { font-weight: 700; font-size: 14px; }
+.activity-closed { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 999px; padding: 0 6px; }
+.activity-detail { flex-basis: 100%; font-size: 12px; font-variant-numeric: tabular-nums; }
+.activity-num { text-align: right; font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.activity-num > span { display: block; }
+.activity-label { font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.activity-more { margin-top: 12px; width: 100%; }
+@media (max-width: 600px) {
+  .activity-row { grid-template-columns: 1fr auto auto; }
+  .activity-date { grid-column: 1 / -1; font-size: 12px; }
+  .activity-search { flex-basis: 100%; }
+}
+
 /* Profile → Alerts */
 .alerts-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; }
 .alerts-search { flex: 0 1 220px; min-width: 0; }
