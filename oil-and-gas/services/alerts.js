@@ -38,6 +38,11 @@ export async function fetchAlertEvents() {
 }
 
 /** Mark events read — pass ids, or nothing for all. */
+/** Acknowledge (also marks read) or un-acknowledge triggered alerts; no ids + acked = all. */
+export async function ackAlertEvents(ids, acked) {
+  await request('POST', '/api/alerts/events/ack', ids ? { ids, acked } : { acked });
+}
+
 export async function markAlertEventsRead(ids) {
   await request('POST', '/api/alerts/events/read', ids ? { ids } : {});
 }

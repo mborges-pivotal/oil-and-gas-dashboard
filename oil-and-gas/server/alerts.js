@@ -17,6 +17,8 @@
  *   POST   /api/alerts/check           → { events: [newly fired], alerts }
  *   GET    /api/alerts/events          → { events }   (latest 200)
  *   POST   /api/alerts/events/read     { ids? } (omit for all) → 204
+ *   POST   /api/alerts/events/ack      { ids?, acked } → 204   (acknowledge — also marks read — or un-acknowledge;
+ *                                     omit ids with acked: true to acknowledge everything)
  *
  * Kinds and params:
  *   price     { direction: above|below, target, basis: fixed|percent, percent?, basePrice? }
@@ -468,6 +470,21 @@ async function markRead(req, res) {
   sendJson(res, 204);
 }
 
+async function ack(req, res) {
+  const userId = requireUser(req);
+  const body = await readJsonBody(req);
+  if (typeof body.acked !== 'boolean') throw new HttpError(400, 'acked must be true or false');
+  let ids = null;
+  if (body.ids !== undefined) {
+    if (!Array.isArray(body.ids) || body.ids.length > 500) throw new HttpError(400, 'ids must be an array');
+    ids = body.ids.map(i => parseId(i));
+  } else if (!body.acked) {
+    throw new HttpError(400, 'Pick the alerts to un-acknowledge');
+  }
+  db.ackAlertEvents(userId, ids, body.acked);
+  sendJson(res, 204);
+}
+
 async function handleAlertsApi(req, res, reqUrl) {
   const path = reqUrl.pathname.replace(/\/+$/, '');
   let handler = null;
@@ -483,6 +500,8 @@ async function handleAlertsApi(req, res, reqUrl) {
     if (req.method === 'GET') handler = listEvents;
   } else if (path === '/api/alerts/events/read') {
     if (req.method === 'POST') handler = markRead;
+  } else if (path === '/api/alerts/events/ack') {
+    if (req.method === 'POST') handler = ack;
   } else if ((m = path.match(/^\/api\/alerts\/([^/]+)$/))) {
     if (req.method === 'PUT') handler = (rq, rs) => update(rq, rs, parseId(m[1]));
     else if (req.method === 'DELETE') handler = (rq, rs) => remove(rq, rs, parseId(m[1]));

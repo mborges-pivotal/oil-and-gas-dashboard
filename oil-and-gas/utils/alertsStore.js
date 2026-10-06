@@ -11,7 +11,7 @@ const { reactive } = Vue;
 
 export const alertsStore = reactive({ alerts: [], loaded: false, error: null });
 
-const toInboxItem = e => ({ id: e.id, title: e.title, body: e.body, createdAt: e.createdAt, read: e.read, symbol: e.symbol });
+const toInboxItem = e => ({ id: e.id, title: e.title, body: e.body, createdAt: e.createdAt, read: e.read, symbol: e.symbol, ackedAt: e.ackedAt ?? null });
 
 export async function loadAlerts() {
   alertsStore.error = null;
@@ -83,6 +83,29 @@ export async function setAlertActive(alert, active) {
 export async function removeAlert(id) {
   await api.deleteAlert(id);
   alertsStore.alerts = alertsStore.alerts.filter(a => a.id !== id);
+}
+
+/**
+ * Acknowledge triggered alerts (Inbox → Alerts) — they move to the
+ * Acknowledged group and count as read — or un-acknowledge them (back to the
+ * list, still read). `items` omitted with acked = every unacknowledged one.
+ * Updates the list right away; puts it back if the save fails.
+ */
+export async function ackAlertItems(items, acked) {
+  const targets = items ?? inboxStore.alerts.filter(a => !a.ackedAt);
+  if (!targets.length) return;
+  const before = targets.map(a => ({ a, ackedAt: a.ackedAt, read: a.read }));
+  const now = new Date().toISOString();
+  for (const a of targets) {
+    a.ackedAt = acked ? (a.ackedAt ?? now) : null;
+    if (acked) a.read = true;
+  }
+  try {
+    await api.ackAlertEvents(items ? targets.map(a => a.id) : undefined, acked);
+  } catch (e) {
+    for (const b of before) Object.assign(b.a, { ackedAt: b.ackedAt, read: b.read });
+    throw e;
+  }
 }
 
 /** Persist read state for Inbox → Alerts items (ids, or all when omitted). */

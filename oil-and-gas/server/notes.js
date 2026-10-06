@@ -8,8 +8,8 @@
  *   POST   /api/notes                 news:   { symbol, title, link, source?, pubDate?, image?, note?, labels? }
  *                                     manual: { kind: 'manual', note, symbols?, link?, labels? }
  *                                     → 201 { note, labels }   (labels: the user's full label list)
- *   PUT    /api/notes/:id             { note?, labels? } — plus { symbols?, link? } for manual notes
- *                                     → { note, labels }
+ *   PUT    /api/notes/:id             { note?, labels?, archived? } — plus { symbols?, link? } for manual notes
+ *                                     → { note, labels }   (archived: true archives, false restores)
  *   DELETE /api/notes/:id             → 204
  *   POST   /api/notes/labels          { name, description?, color? } → 201 { label, labels }
  *   PUT    /api/notes/labels/:id      { name?, description?, color? } → { labels }   (applies to every note)
@@ -151,8 +151,10 @@ async function update(req, res, id) {
   const labels = validateLabels(body.labels);
   const symbols = validateSymbols(body.symbols);
   const link = 'link' in body ? httpUrl(body.link, 'Link') : undefined;
+  if ('archived' in body && typeof body.archived !== 'boolean') throw new HttpError(400, 'archived must be true or false');
+  const archived = body.archived;
   if (labels) checkLabelBudget(userId, labels);
-  db.updateNote(userId, id, { note, labels, symbols, link });
+  db.updateNote(userId, id, { note, labels, symbols, link, archived });
   sendJson(res, 200, { note: db.getNote(userId, id), labels: db.listLabels(userId) });
 }
 

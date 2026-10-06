@@ -199,6 +199,20 @@ function migrateLabelColumns() {
 }
 migrateLabelColumns();
 
+// One-time migration: notes can be archived (NULL = active).
+function migrateNoteArchive() {
+  const cols = db.prepare('PRAGMA table_info(notes)').all().map(c => c.name);
+  if (!cols.includes('archived_at')) db.exec('ALTER TABLE notes ADD COLUMN archived_at TEXT');
+}
+migrateNoteArchive();
+
+// One-time migration: triggered alerts can be acknowledged (NULL = not yet).
+function migrateAlertEventAck() {
+  const cols = db.prepare('PRAGMA table_info(alert_events)').all().map(c => c.name);
+  if (!cols.includes('acked_at')) db.exec('ALTER TABLE alert_events ADD COLUMN acked_at TEXT');
+}
+migrateAlertEventAck();
+
 const stmts = {
   // Alerts — scoped by user_id like everything else.
   alerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? ORDER BY symbol, created_at, id'),
@@ -219,6 +233,10 @@ const stmts = {
   alertEvent: db.prepare('SELECT * FROM alert_events WHERE id = ? AND user_id = ?'),
   markEventRead: db.prepare('UPDATE alert_events SET read = 1 WHERE id = ? AND user_id = ?'),
   markAllEventsRead: db.prepare('UPDATE alert_events SET read = 1 WHERE user_id = ? AND read = 0'),
+  // Acknowledging also marks it read; un-acknowledging leaves it read.
+  ackEvent: db.prepare(`UPDATE alert_events SET acked_at = CASE WHEN ?1 THEN COALESCE(acked_at, datetime('now')) END,
+    read = CASE WHEN ?1 THEN 1 ELSE read END WHERE id = ?2 AND user_id = ?3`),
+  ackAllEvents: db.prepare(`UPDATE alert_events SET acked_at = datetime('now'), read = 1 WHERE user_id = ? AND acked_at IS NULL`),
   pruneAlertEvents: db.prepare(`
     DELETE FROM alert_events WHERE user_id = ? AND id NOT IN
       (SELECT id FROM alert_events WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT 500)
@@ -279,6 +297,8 @@ const stmts = {
   updateNoteBody: db.prepare(`UPDATE notes SET body = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
   touchNote: db.prepare(`UPDATE notes SET updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
   deleteNote: db.prepare('DELETE FROM notes WHERE id = ? AND user_id = ?'),
+  // Archiving doesn't touch updated_at — it's not an edit.
+  setNoteArchived: db.prepare(`UPDATE notes SET archived_at = CASE WHEN ? THEN COALESCE(archived_at, datetime('now')) END WHERE id = ? AND user_id = ?`),
   labels: db.prepare('SELECT id, name, description, color FROM note_labels WHERE user_id = ? ORDER BY name COLLATE NOCASE'),
   labelById: db.prepare('SELECT id, name, description, color FROM note_labels WHERE id = ? AND user_id = ?'),
   labelByName: db.prepare('SELECT id, name, description, color FROM note_labels WHERE user_id = ? AND name = ? COLLATE NOCASE'),
@@ -348,6 +368,7 @@ function toNote(row, labelsByNote, symbolsByNote) {
     image: row.image,
     note: row.body,
     labels: labelsByNote.get(row.id) ?? [],
+    archivedAt: row.archived_at ? toIso(row.archived_at) : null,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -430,6 +451,7 @@ function toAlertEvent(row) {
     title: row.title,
     body: row.body,
     read: !!row.read,
+    ackedAt: row.acked_at ? toIso(row.acked_at) : null,
     createdAt: toIso(row.created_at),
   };
 }
@@ -477,7 +499,8 @@ module.exports = {
     setNoteLabels(userId, id, labelNames);
     return id;
   }),
-  updateNote: (userId, id, { note, labels, symbols, link }) => inTransaction(() => {
+  updateNote: (userId, id, { note, labels, symbols, link, archived }) => inTransaction(() => {
+    if (archived !== undefined) stmts.setNoteArchived.run(archived ? 1 : 0, id, userId);
     if (note !== undefined) stmts.updateNoteBody.run(note, id, userId);
     if (link !== undefined) stmts.updateNoteLink.run(link, id, userId);
     if (symbols !== undefined) {
@@ -516,6 +539,12 @@ module.exports = {
     return toAlertEvent(stmts.alertEvent.get(id, userId));
   }),
   listAlertEvents: (userId) => stmts.alertEvents.all(userId).map(toAlertEvent),
+  ackAlertEvents: (userId, ids, acked) => inTransaction(() => {
+    if (!ids) return acked ? stmts.ackAllEvents.run(userId).changes : 0;
+    let n = 0;
+    for (const id of ids) n += stmts.ackEvent.run(acked ? 1 : 0, id, userId).changes;
+    return n;
+  }),
   markAlertEventsRead: (userId, ids) => {
     if (!ids) return stmts.markAllEventsRead.run(userId).changes;
     let n = 0;
