@@ -354,6 +354,38 @@ const OPTION_ITEM = `
                   </template>
 `;
 
+// The list picker for copying / moving stocks between watchlists (edit mode).
+const TRANSFER_PICKER = `
+        <div class="wl-transfer-backdrop" @click.stop="closeTransfer" @pointerdown.stop></div>
+        <div class="wl-transfer" role="dialog" aria-label="Copy or move to another watchlist"
+             @click.stop @pointerdown.stop @keydown.esc="closeTransfer">
+          <div class="wl-transfer-head">
+            <strong>{{ transfer.symbols.length === 1 ? transfer.symbols[0] : transfer.symbols.length + ' stocks' }}</strong>
+            <button type="button" class="link-button" aria-label="Close" @click="closeTransfer">✕</button>
+          </div>
+          <template v-for="mode in (transfer.mode ? [transfer.mode] : ['copy', 'move'])" :key="mode">
+            <div class="wl-transfer-label">{{ mode === 'copy' ? 'Copy to' : 'Move to' }}</div>
+            <button v-for="l in transferTargets(transfer.symbols)" :key="mode + '-' + l.id" type="button" class="wl-transfer-item"
+                    :disabled="transfer.busy || !l.fits || (mode === 'copy' && l.all)" @click="doTransfer(l.id, mode)">
+              <span class="wl-transfer-name">{{ l.name }}</span>
+              <span class="wl-transfer-note">{{ l.all ? '✓ already' : !l.fits ? 'full' : l.have ? l.have + ' already' : l.tickers.length + ' stock' + (l.tickers.length === 1 ? '' : 's') }}</span>
+            </button>
+          </template>
+          <div class="wl-transfer-new">
+            <button type="button" class="link-button" v-if="!transfer.creating" :disabled="transfer.busy" @click="transfer.creating = true">＋ New list…</button>
+            <form v-else @submit.prevent="createAndTransfer(transfer.mode || 'copy')" novalidate>
+              <input v-model="transfer.newName" maxlength="40" placeholder="New list name" aria-label="New list name"
+                     @input="transfer.error = null" />
+              <div class="wl-transfer-new-actions">
+                <button type="submit" class="primary" :disabled="transfer.busy">{{ (transfer.mode || 'copy') === 'move' ? 'Create & move' : 'Create & copy' }}</button>
+                <button type="button" v-if="!transfer.mode" :disabled="transfer.busy" @click="createAndTransfer('move')">Create & move</button>
+              </div>
+            </form>
+          </div>
+          <div class="notice error wl-transfer-error" v-if="transfer.error">{{ transfer.error }}</div>
+        </div>
+`;
+
 export default {
   name: 'Stocks',
   components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity },
@@ -563,10 +595,168 @@ export default {
       searchVisible.value = false;
     }
 
-    // Edit mode: a remove button on each card.
+    // Edit mode: a remove button on each card; signed in, also ⇄ copy/move
+    // and checkboxes for doing several stocks at once.
     const editMode = ref(false);
     function removeTicker(sym) {
       saveTickers(activeTickers.value.filter(t => t !== sym));
+    }
+
+    // ── Copy / move stocks to another watchlist (edit mode, signed in) ──
+    // Destinations are Default (settings) and your lists (DB). Stocks land
+    // at the end of the destination; a move removes them from this list.
+    // Notes, alerts and positions belong to the stock, so they're untouched.
+    const selected = ref([]); // checked stocks, in list order
+    watch([editMode, activeListId], () => { selected.value = []; closeTransfer(); });
+    watch(activeTickers, list => { selected.value = selected.value.filter(s => list.includes(s)); });
+    const isSelected = sym => selected.value.includes(sym);
+    function toggleSelected(sym) {
+      selected.value = isSelected(sym) ? selected.value.filter(s => s !== sym) : activeTickers.value.filter(t => t === sym || isSelected(t));
+    }
+    const allSelected = computed(() => tickers.value.length > 0 && selected.value.length === tickers.value.length);
+    function selectAll() { selected.value = [...activeTickers.value]; }
+    function clearSelected() { selected.value = []; }
+    function removeSelected() {
+      const syms = selected.value;
+      if (!syms.length) return;
+      const before = [...activeTickers.value];
+      const listId = activeListId.value;
+      saveTickers(activeTickers.value.filter(t => !syms.includes(t)));
+      selected.value = [];
+      showTransferToast(`Removed ${syms.join(', ')}`, async () => {
+        const current = listTickers(listId) ?? [];
+        await setListTickers(listId, restoreOrder(before, current, syms));
+      });
+    }
+
+    const allLists = computed(() => [
+      { id: 'default', name: 'Default', tickers: configTickers.value },
+      ...customLists.value.map(l => ({ id: String(l.id), name: l.name, tickers: l.tickers, limited: true })),
+    ]);
+    const listTickers = id => allLists.value.find(l => l.id === String(id))?.tickers ?? null;
+    // Any list's tickers (not just the one showing); throws if the save fails.
+    async function setListTickers(id, list) {
+      if (String(id) === 'default') {
+        emit('set-tickers', list);
+        return;
+      }
+      const target = customLists.value.find(l => String(l.id) === String(id));
+      if (!target) throw new Error('That watchlist no longer exists');
+      const previous = target.tickers;
+      target.tickers = list;
+      try {
+        target.tickers = (await updateWatchlist(target.id, { tickers: list })).tickers;
+      } catch (e) {
+        target.tickers = previous;
+        throw e;
+      }
+    }
+    // Put moved-away stocks back where they were, keeping any other changes since.
+    function restoreOrder(before, current, syms) {
+      const back = before.filter(t => current.includes(t) || syms.includes(t));
+      return [...back, ...current.filter(t => !before.includes(t))];
+    }
+
+    // The list picker: per card (Copy to / Move to) or for the selection (one mode).
+    const transfer = ref(null); // { symbols, mode: null | 'copy' | 'move', anchor, newName, creating, busy, error }
+    function openTransfer(symbols, mode, anchor) {
+      if (!symbols.length) return;
+      transfer.value = { symbols: [...symbols], mode, anchor, newName: '', creating: false, busy: false, error: null };
+    }
+    function closeTransfer() { transfer.value = null; }
+    // Each other list, with how many of these stocks it already has and its room left.
+    function transferTargets(symbols) {
+      return allLists.value.filter(l => l.id !== String(activeListId.value)).map(l => {
+        const have = symbols.filter(s => l.tickers.includes(s)).length;
+        const room = l.limited ? MAX_LIST_TICKERS - l.tickers.length : Infinity;
+        return { ...l, have, room, all: have === symbols.length, fits: symbols.length - have <= room };
+      });
+    }
+
+    async function doTransfer(destId, mode, { name } = {}) {
+      const t = transfer.value;
+      if (!t || t.busy) return;
+      const symbols = t.symbols;
+      const srcId = String(activeListId.value);
+      t.busy = true;
+      t.error = null;
+      let destName = name;
+      let added = [];
+      let createdId = null;
+      try {
+        if (destId === 'new') {
+          const created = await createWatchlist(name, symbols);
+          customLists.value.push(created);
+          destId = String(created.id);
+          createdId = created.id;
+          destName = created.name;
+          added = [...symbols];
+        } else {
+          const dest = allLists.value.find(l => l.id === String(destId));
+          destName = dest.name;
+          added = symbols.filter(s => !dest.tickers.includes(s));
+          if (dest.limited && dest.tickers.length + added.length > MAX_LIST_TICKERS) {
+            throw new Error(`${dest.name} has room for ${Math.max(0, MAX_LIST_TICKERS - dest.tickers.length)} more (${MAX_LIST_TICKERS} max)`);
+          }
+          if (added.length) await setListTickers(destId, [...dest.tickers, ...added]);
+        }
+      } catch (e) {
+        t.error = e.message;
+        t.busy = false;
+        return;
+      }
+      const before = [...(listTickers(srcId) ?? [])];
+      if (mode === 'move') {
+        try {
+          await setListTickers(srcId, before.filter(s => !symbols.includes(s)));
+        } catch (e) {
+          // The copy went through — nothing is lost, it's just in both lists.
+          listsError.value = `Copied to ${destName}, but couldn't remove from this list: ${e.message}`;
+          transfer.value = null;
+          return;
+        }
+      }
+      transfer.value = null;
+      selected.value = [];
+      const skipped = symbols.length - added.length;
+      const verb = mode === 'move' ? 'Moved' : 'Copied';
+      const msg = `${verb} ${symbols.join(', ')} to ${destName}` + (skipped && destId !== 'new' ? ` (${skipped} already there)` : '');
+      showTransferToast(msg, async () => {
+        const destNow = listTickers(destId);
+        if (createdId != null) {
+          await deleteWatchlist(createdId); // undoing "＋ New list" removes that list
+          customLists.value = customLists.value.filter(l => l.id !== createdId);
+        } else if (destNow) await setListTickers(destId, destNow.filter(s => !added.includes(s)));
+        if (mode === 'move') await setListTickers(srcId, restoreOrder(before, listTickers(srcId) ?? [], symbols));
+      });
+    }
+    function createAndTransfer(mode) {
+      const t = transfer.value;
+      const name = t.newName.trim();
+      if (!name) { t.error = 'Name the new list.'; return; }
+      doTransfer('new', mode, { name });
+    }
+
+    // "Moved XOM to Refiners · Undo" — for a few seconds after each change.
+    const transferToast = ref(null); // { message, undo, busy, error }
+    let toastTimer = null;
+    function showTransferToast(message, undo) {
+      clearTimeout(toastTimer);
+      transferToast.value = { message, undo, busy: false, error: null };
+      toastTimer = setTimeout(() => { transferToast.value = null; }, 10000);
+    }
+    async function undoTransfer() {
+      const t = transferToast.value;
+      if (!t || t.busy) return;
+      t.busy = true;
+      clearTimeout(toastTimer);
+      try {
+        await t.undo();
+        transferToast.value = null;
+      } catch (e) {
+        t.busy = false;
+        t.error = `Couldn't undo: ${e.message}`;
+      }
     }
 
     // ── Stock search (adds to the watchlist that's showing) ──
@@ -2249,6 +2439,8 @@ export default {
       customLists, listsLoading, listsError, activeListId, activeList, selectList,
       listForm, listNameInput, openListForm, submitListForm, deleteActiveList,
       editMode, removeTicker, MAX_LIST_TICKERS, listFull,
+      selected, isSelected, toggleSelected, allSelected, selectAll, clearSelected, removeSelected,
+      transfer, openTransfer, closeTransfer, transferTargets, doTransfer, createAndTransfer, transferToast, undoTransfer,
       searchQuery, searchResults, searchLoading, searchError, searchOpen, searchIndex,
       justAdded, inActiveList, addTicker, onSearchKeydown, onSearchBlur,
       wlMenuOpen, wlMenuRoot, wlMenuButton, wlMenu, onWlMenuButtonKeydown, onWlMenuKeydown, menuAction,
@@ -2387,6 +2579,21 @@ export default {
         <div class="notice error watchlist-form-error" v-if="listForm.error">{{ listForm.error }}</div>
       </form>
 
+      <!-- Edit mode (signed in): act on several stocks at once -->
+      <div class="wl-bulk-bar" v-if="editMode && user && !isPortfolioList && tickers.length">
+        <label class="wl-bulk-all">
+          <input type="checkbox" :checked="allSelected" :indeterminate.prop="selected.length > 0 && !allSelected"
+                 @change="$event.target.checked ? selectAll() : clearSelected()" aria-label="Select all stocks" />
+          <span>{{ selected.length ? selected.length + ' selected' : 'Select stocks' }}</span>
+        </label>
+        <div class="wl-bulk-actions">
+          <button type="button" :disabled="!selected.length" @click="openTransfer(selected, 'copy', 'bulk')">Copy to ▾</button>
+          <button type="button" :disabled="!selected.length" @click="openTransfer(selected, 'move', 'bulk')">Move to ▾</button>
+          <button type="button" class="danger" :disabled="!selected.length" @click="removeSelected">Remove</button>
+        </div>
+        <template v-if="transfer && transfer.anchor === 'bulk'">${TRANSFER_PICKER}</template>
+      </div>
+
       <!-- Search stocks to add to the list that's showing (opened with the
            search icon; always shown for an empty list) -->
       <div class="watchlist-search" id="watchlist-search" v-if="searchShown">
@@ -2493,12 +2700,14 @@ export default {
           </span>
         </span>
       </button>
-      <div ref="watchlistEl" id="portfolio-holdings" class="watchlist" :class="{ 'is-dragging': draggingTicker }"
+      <div ref="watchlistEl" id="portfolio-holdings" class="watchlist" :class="{ 'is-dragging': draggingTicker, editing: editMode }"
            v-show="!portfolioOnly || holdingsOpen">
       <div class="accordion-item watchlist-item" v-for="sym in tickers" :key="sym" :data-ticker="sym"
-           :class="{ dragging: draggingTicker === sym, 'just-added': justAdded === sym }">
-        <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open }" @click="toggleDetail(sym)"
+           :class="{ dragging: draggingTicker === sym, 'just-added': justAdded === sym, 'transfer-open': transfer?.anchor === 'card:' + sym }">
+        <div class="accordion-header stock-row-header" :class="{ open: details[sym]?.open, selected: editMode && isSelected(sym) }" @click="toggleDetail(sym)"
              @pointerdown="onCardPointerDown($event, sym)" @contextmenu="onCardContextMenu">
+          <input type="checkbox" class="wl-select" v-if="editMode && user && !isPortfolioList" :checked="isSelected(sym)"
+                 :aria-label="'Select ' + sym" @click.stop @pointerdown.stop @change="toggleSelected(sym)" />
           <button
             v-if="tickers.length > 1 && !isPortfolioList"
             type="button"
@@ -2571,10 +2780,15 @@ export default {
               <span class="stock-row-sparkline" v-else></span>
             </div>
           </div>
+          <button v-if="editMode && user && !isPortfolioList" type="button" class="watchlist-transfer"
+                  :aria-label="'Copy or move ' + sym + ' to another watchlist'" :title="'Copy or move ' + sym"
+                  :aria-expanded="transfer?.anchor === 'card:' + sym" @pointerdown.stop
+                  @click.stop="transfer?.anchor === 'card:' + sym ? closeTransfer() : openTransfer([sym], null, 'card:' + sym)">⇄</button>
           <button v-if="editMode" type="button" class="watchlist-remove"
                   :aria-label="'Remove ' + sym + ' from this watchlist'" :title="'Remove ' + sym"
                   @click.stop="removeTicker(sym)">✕</button>
           <span v-else class="chevron">▶</span>
+          <template v-if="transfer && transfer.anchor === 'card:' + sym">${TRANSFER_PICKER}</template>
         </div>
 
         <!-- Portfolio page: a cash holding's reserve for cash-secured puts -->
@@ -3232,6 +3446,13 @@ ${OPTION_FORM}
 
       <!-- Portfolio → Activity: the trade history -->
       <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :config="config" />
+
+      <!-- After a copy / move / remove in edit mode: what happened, with Undo -->
+      <div class="wl-toast" v-if="transferToast" role="status">
+        <span>{{ transferToast.error || transferToast.message }}</span>
+        <button type="button" class="link-button" :disabled="transferToast.busy" @click="undoTransfer">{{ transferToast.busy ? 'Undoing…' : 'Undo' }}</button>
+        <button type="button" class="link-button" aria-label="Dismiss" @click="transferToast = null">✕</button>
+      </div>
 
       <div class="notice text-sm" style="margin-top:12px" v-if="tickers.length && onPositions">
         Quotes/sparklines and historical chart prices from Yahoo Finance (unofficial API), delayed 15–20 minutes.

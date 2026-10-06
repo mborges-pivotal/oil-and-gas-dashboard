@@ -956,6 +956,68 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   line-height: 1.2;
 }
 .watchlist-remove:hover { background: var(--negative); border-color: var(--negative); color: #fff; }
+/* Edit mode: copy / move to another watchlist */
+.watchlist-item { position: relative; }
+.watchlist-item.transfer-open { overflow: visible; z-index: 30; }
+.wl-select { flex: none; width: 18px; height: 18px; margin: 0 10px 0 0; cursor: pointer; }
+.stock-row-header.selected { background: var(--surface-2); }
+.watchlist-transfer {
+  flex: none; margin-left: 12px; padding: 4px 9px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); color: var(--text); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.watchlist-transfer:hover, .watchlist-transfer[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
+.watchlist-transfer + .watchlist-remove { margin-left: 6px; }
+.wl-bulk-bar {
+  position: sticky; top: 60px; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px 12px; margin-bottom: 10px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+}
+.wl-bulk-all { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.wl-bulk-all input { width: 18px; height: 18px; margin: 0; }
+.wl-bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.wl-bulk-actions button { padding: 5px 12px; }
+.wl-transfer-backdrop { position: fixed; inset: 0; z-index: 40; cursor: default; }
+.wl-transfer {
+  position: absolute; right: 12px; top: calc(100% - 6px); z-index: 41; width: 270px; max-height: 60vh; overflow-y: auto;
+  padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .18); cursor: default; text-align: left;
+}
+.stock-row-header .wl-transfer { top: 48px; }
+.wl-transfer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; font-size: 13px; }
+.wl-transfer-head .link-button { padding: 0 4px; }
+.wl-transfer-label { margin: 8px 0 2px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--text-muted); }
+.wl-transfer-item {
+  display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 8px;
+  border: none; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.wl-transfer-item:hover:not(:disabled) { background: var(--surface-2); }
+.wl-transfer-item:disabled { color: var(--text-muted); cursor: default; }
+.wl-transfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-transfer-note { flex: none; font-size: 11px; color: var(--text-muted); }
+.wl-transfer-new { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.wl-transfer-new .link-button { padding: 0; font-size: 13px; }
+.wl-transfer-new input { width: 100%; }
+.wl-transfer-new-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.wl-transfer-new-actions button { padding: 4px 10px; font-size: 12px; }
+.wl-transfer-error { margin: 8px 0 0; }
+.wl-toast {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 12px;
+  max-width: calc(100vw - 32px); padding: 10px 14px; border-radius: var(--radius); background: var(--text); color: var(--bg);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .25); font-size: 13px;
+}
+.wl-toast .link-button { padding: 0; color: var(--bg); font-weight: 700; text-decoration: underline; }
+@media (max-width: 600px) {
+  /* The picker becomes a sheet from the bottom of the screen */
+  .wl-transfer, .stock-row-header .wl-transfer {
+    position: fixed; left: 0; right: 0; top: auto; bottom: 0; width: auto; max-height: 70vh;
+    border-radius: 14px 14px 0 0; padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+  }
+  .wl-transfer-backdrop { background: rgba(0, 0, 0, .35); }
+  .wl-transfer-item { padding: 11px 8px; font-size: 15px; }
+  .wl-bulk-bar { top: 56px; }
+  /* Editing on a phone: checkbox, ⇄ and ✕ need the room the sparkline used */
+  .watchlist.editing .stock-row-sparkline { display: none; }
+  .watchlist.editing .stock-row-metrics { grid-template-columns: max-content repeat(2, minmax(0, 1fr)); }
+}
 .watchlist-item.just-added { border-color: var(--accent); transition: border-color 0.6s; }
 
 /* Watchlist reordering — drag handle + the card being dragged */
