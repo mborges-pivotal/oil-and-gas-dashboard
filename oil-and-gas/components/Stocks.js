@@ -81,6 +81,278 @@ function buildSparklineSVG(closes, { previousClose = null, price = null } = {}, 
 // charts), so switching ranges doesn't re-hit the API.
 const CHART_FETCH_RANGE = '5y';
 
+
+// Shared by a stock's Portfolio tab ("Options on XOM") and the Portfolio
+// page's Options card. Expect `sym` (the stock) in scope; the row also
+// `occ` and `inList` (true in the Options card: shows the stock and an Open link).
+const OPTION_FORM = `
+              <form class="portfolio-form option-form" v-if="optionForms[sym]" @submit.prevent="saveOption(sym)" novalidate
+                    @input="optionForms[sym].error = null">
+                <div class="option-toggles">
+                  <div class="range-btn-group" role="group" aria-label="Buy or sell to open">
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'long' }" @click="optionForms[sym].side = 'long'">Buy</button>
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'short' }" @click="optionForms[sym].side = 'short'">Sell</button>
+                  </div>
+                  <div class="range-btn-group" role="group" aria-label="Call or put">
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'call' }" @click="optionForms[sym].type = 'call'; onContractChange(sym)">Call</button>
+                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'put' }" @click="optionForms[sym].type = 'put'; onContractChange(sym)">Put</button>
+                  </div>
+                  <span class="text-muted text-sm">{{ optionForms[sym].side === 'long' ? 'Buy to open — you pay the premium' : 'Sell to open — you collect the premium' }}</span>
+                </div>
+                <div class="portfolio-fields">
+                  <label>
+                    <span>Expiration</span>
+                    <input type="date" v-model="optionForms[sym].expiry" @input="onContractChange(sym)" />
+                  </label>
+                  <label>
+                    <span>Strike</span>
+                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].strike" @input="onContractChange(sym)" />
+                  </label>
+                  <label>
+                    <span>Contracts</span>
+                    <input type="number" inputmode="numeric" min="1" step="1" v-model="optionForms[sym].contracts" />
+                  </label>
+                  <label>
+                    <span>Premium / share</span>
+                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].premium" @input="optionForms[sym].premiumTouched = true" />
+                  </label>
+                  <label>
+                    <span>Date</span>
+                    <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="optionForms[sym].date" />
+                  </label>
+                  <label>
+                    <span>{{ optionForms[sym].side === 'long' ? 'Pay from' : 'Deposit to' }}</span>
+                    <select :value="optionCashFor(sym)" @change="optionForms[sym].cash = $event.target.value; optionForms[sym].error = null">
+                      <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                      <option value="">Outside the portfolio</option>
+                    </select>
+                  </label>
+                </div>
+                <!-- Selling to open: covered by shares (call) or secured by reserved cash (put) -->
+                <template v-if="coverPreview(sym)">
+                <div class="option-cover" v-for="cv in [coverPreview(sym)]" :key="'cover-' + sym">
+                  <label class="option-cover-check">
+                    <input type="checkbox" :checked="cv.covered" :disabled="cv.locked"
+                           @change="optionForms[sym].covered = $event.target.checked; optionForms[sym].error = null" />
+                    <span>{{ cv.kind === 'shares' ? 'Covered call' : 'Cash-secured put' }}</span>
+                    <span class="text-muted text-sm" v-if="cv.locked">(same as the contracts you already hold)</span>
+                  </label>
+                  <template v-if="cv.covered">
+                    <p class="option-cover-detail" v-if="cv.kind === 'shares'">
+                      Covers {{ formatShares(cv.need) }} of your {{ formatShares(cv.held) }} {{ sym }} shares
+                      <template v-if="cv.held - cv.free > 0"> ({{ formatShares(cv.held - cv.free) }} already cover other calls)</template>
+                      · if called away you receive {{ formatUSD(cv.receive) }}
+                      <span class="negative" v-if="!cv.enough"><br />Not enough uncovered shares — {{ formatShares(Math.max(0, cv.free)) }} available.</span>
+                    </p>
+                    <template v-else>
+                      <p class="option-cover-detail">
+                        Obligation if assigned {{ formatUSD(cv.obligation) }} · premium collected {{ formatUSD(cv.premium) }}
+                        → net cost {{ formatUSD(cv.netCost) }}<template v-if="Number(optionForms[sym].contracts) > 0"> ({{ formatPrice(cv.netCost / (Number(optionForms[sym].contracts) * MULTIPLIER)) }}/share)</template>
+                      </p>
+                      <div class="portfolio-fields option-cover-fields">
+                        <label>
+                          <span>Reserve from</span>
+                          <select :value="cv.src?.symbol ?? ''" :disabled="cv.locked || !cashSources(sym).length"
+                                  @change="optionForms[sym].reserveFrom = $event.target.value; optionForms[sym].error = null">
+                            <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }} available</option>
+                            <option v-if="!cashSources(sym).length" value="">No cash holding</option>
+                          </select>
+                        </label>
+                      </div>
+                      <p class="option-cover-detail" v-if="cv.src">
+                        {{ cv.src.symbol }}: {{ formatUSD(cv.available) }} available{{ cv.withPremium ? ' (with the premium)' : '' }} → {{ formatUSD(cv.after) }} available ({{ formatUSD(cv.obligation) }} reserved)
+                        <span class="negative" v-if="!cv.enough"><br />Not enough available cash to secure this put.</span>
+                      </p>
+                      <p class="option-cover-detail negative" v-else>Securing a put needs a Cash holding in your portfolio.</p>
+                    </template>
+                  </template>
+                  <p class="option-cover-detail warning-text" v-else>
+                    ⚠ Uncovered (naked) — usually needs margin approval; losses on a naked {{ cv.kind === 'shares' ? 'call are unlimited' : 'put can reach the full strike' }}.
+                  </p>
+                </div>
+                </template>
+                <p class="option-check" :class="optionForms[sym].check?.state" aria-live="polite">
+                  <template v-if="!optionForms[sym].check">Most monthly options expire on the third Friday.</template>
+                  <template v-else-if="optionForms[sym].check.state === 'checking'">Checking {{ optionLabel(optionForms[sym].check.symbol) }}…</template>
+                  <template v-else-if="optionForms[sym].check.state === 'ok'">
+                    ✓ {{ optionLabel(optionForms[sym].check.symbol) }} · last {{ formatPrice(optionForms[sym].check.quote.price) }}<template v-if="optionForms[sym].check.quote.marketTime"> ({{ formatRelativeTime(optionForms[sym].check.quote.marketTime) }})</template>
+                  </template>
+                  <template v-else>✗ No such contract: {{ optionLabel(optionForms[sym].check.symbol) }} — check the expiration date and strike.</template>
+                </p>
+                <p class="purchase-preview" v-if="optionPreview(sym)">
+                  <template v-for="pv in [optionPreview(sym)]">
+                    <span class="negative" v-if="pv.conflict">You're {{ pv.conflict.side }} this contract — close it instead.</span>
+                    <template v-else>
+                      {{ pv.debit ? 'Cost' : 'Credit' }} {{ formatUSD(pv.amount) }} ({{ optionForms[sym].contracts }} × 100 × {{ formatPrice(Number(optionForms[sym].premium)) }}) ·
+                      Breakeven {{ formatPrice(pv.breakeven) }} at expiration
+                      <template v-if="pv.was"> · {{ pv.quantity }} contracts at an average of {{ formatPrice(pv.avg) }} (was {{ pv.was.quantity }} at {{ formatPrice(pv.was.avgCost) }})</template>
+                      <br />
+                      <template v-if="pv.cash">{{ pv.cash.symbol }}: {{ formatUSD(pv.cash.available) }} → {{ formatUSD(pv.cash.after) }}<span class="negative" v-if="pv.cash.after < -0.005"> — not enough cash</span></template>
+                      <span class="text-muted" v-else>{{ pv.debit ? 'Paid from outside the portfolio.' : 'Not deposited to a cash holding.' }}</span>
+                    </template>
+                  </template>
+                </p>
+                <div class="notice error portfolio-error" v-if="optionForms[sym].error">{{ optionForms[sym].error }}</div>
+                <div class="portfolio-actions">
+                  <button type="submit" class="primary">Add option</button>
+                  <button type="button" @click="cancelOption(sym)">Cancel</button>
+                </div>
+              </form>
+`;
+const OPTION_ITEM = `
+                  <template v-for="o in [optionSummary(occ)]" :key="occ + '-row'">
+                  <div class="option-row" :title="optionTitle(o)">
+                    <div class="option-id">
+                      <span class="option-side" :class="o.side">{{ o.side === 'short' ? 'Short' : 'Long' }}</span>
+                      <span class="option-underlying" v-if="inList">{{ o.underlying }}</span>
+                      <span class="option-name">{{ o.label }}</span>
+                      <span class="option-cover-badge" :class="coverInfo(o).kind" v-if="coverInfo(o)" :title="coverInfo(o).text">{{ coverInfo(o).badge }}</span>
+                      <span class="option-money" :class="o.money" v-if="o.money && !o.expired">{{ o.money.toUpperCase() }}</span>
+                      <span class="option-days" :class="{ soon: o.days <= 7, expired: o.expired }">{{ o.expired ? 'Expired' : o.days === 0 ? 'Expires today' : o.days + 'd left' }}</span>
+                    </div>
+                    <div class="option-nums">
+                      <span class="stock-row-num"><span class="stock-row-label">Contracts</span><span>{{ o.quantity }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">{{ o.side === 'short' ? 'Avg credit' : 'Avg cost' }}</span><span>{{ formatPrice(o.avgCost) }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">Last</span><span>{{ o.price != null ? formatPrice(o.price) : (o.loading ? '…' : '—') }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">Value</span><span>{{ o.value != null ? formatUSD(o.value) : '—' }}</span></span>
+                      <span class="stock-row-num"><span class="stock-row-label">G/L</span>
+                        <span :class="changeClass(o.gain)">{{ o.gain != null ? signedUSD(o.gain) + (o.gainPct != null ? ' (' + formatPct(o.gainPct) + ')' : '') : '—' }}</span>
+                      </span>
+                    </div>
+                    <div class="option-actions">
+                      <template v-if="portfolioOnly">
+                        <button type="button" class="link-button" v-if="o.expired" @click="startClose(occ, { expire: true })">Record expiry</button>
+                        <button type="button" class="link-button" v-else @click="startClose(occ)">Close</button>
+                      </template>
+                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'alerts'" @click="toggleOptionPanel(occ, 'alerts')">
+                        🔔<span class="sr-only"> Alerts</span><template v-if="alertsFor(occ).filter(a => a.active).length"> {{ alertsFor(occ).filter(a => a.active).length }}</template>
+                      </button>
+                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'history'" @click="toggleOptionPanel(occ, 'history')">Trades</button>
+                      <button type="button" class="link-button" v-if="inList && tickers.includes(o.underlying)" @click="openOptionsOf(o.underlying)">Open {{ o.underlying }}</button>
+                      <button type="button" class="link-button danger-link" @click="removeOption(occ)">Remove</button>
+                    </div>
+                  </div>
+                  <p class="text-muted text-sm option-sub">
+                    <template v-if="coverInfo(o)">{{ coverInfo(o).text }} · </template>Breakeven {{ formatPrice(o.breakeven) }} · expires {{ formatDate(o.expiry + 'T12:00:00') }}<template v-if="o.marketTime"> · last trade {{ formatRelativeTime(o.marketTime) }}</template><template v-if="o.quoteError"> · no quote</template>
+                  </p>
+
+                  <!-- Close: sell to close (long) / buy to close (short); expiry = close at 0 or intrinsic value -->
+                  <form class="portfolio-form option-close" v-if="closeForms[occ]" @submit.prevent="saveClose(occ)" novalidate
+                        @input="closeForms[occ].error = null">
+                    <p class="text-muted text-sm" style="margin:0 0 8px">
+                      <template v-if="closeForms[occ].expire">
+                        Record that {{ o.label }} expired.
+                        <template v-if="o.money === 'itm'">{{ sym }} is in the money now — the premium is prefilled with its intrinsic value; use 0 if it expired worthless. (Exercise and assignment aren't tracked yet.)</template>
+                        <template v-else>Out of the money, it expired worthless.</template>
+                      </template>
+                      <template v-else>{{ o.side === 'short' ? 'Buy to close' : 'Sell to close' }} {{ o.label }} — you have {{ o.quantity }} contract{{ o.quantity === 1 ? '' : 's' }}.</template>
+                    </p>
+                    <div class="portfolio-fields">
+                      <label>
+                        <span>Contracts</span>
+                        <span class="sale-qty">
+                          <input type="number" inputmode="numeric" min="1" step="1" :max="o.quantity" v-model="closeForms[occ].contracts" />
+                          <button type="button" class="link-button" @click="closeForms[occ].contracts = String(o.quantity)">All</button>
+                        </span>
+                      </label>
+                      <label>
+                        <span>Premium / share</span>
+                        <input type="number" inputmode="decimal" min="0" step="any" v-model="closeForms[occ].price" />
+                      </label>
+                      <label>
+                        <span>Date</span>
+                        <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="closeForms[occ].date" />
+                      </label>
+                      <label v-if="Number(closeForms[occ].price) > 0">
+                        <span>{{ o.side === 'short' ? 'Pay from' : 'Deposit to' }}</span>
+                        <select :value="closeCashFor(occ)" @change="closeForms[occ].cash = $event.target.value; closeForms[occ].error = null">
+                          <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                          <option value="">Outside the portfolio</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p class="purchase-preview" v-if="closePreview(occ)">
+                      <template v-for="cp in [closePreview(occ)]">
+                        {{ cp.credit ? 'Proceeds' : 'Cost to close' }} {{ formatUSD(cp.amount) }} ·
+                        Realized G/L <span :class="changeClass(cp.realized)">{{ signedUSD(cp.realized) }}<template v-if="cp.realizedPct != null"> ({{ formatPct(cp.realizedPct) }})</template></span> ·
+                        <span class="negative" v-if="cp.tooMany">more than you have</span>
+                        <strong v-else-if="cp.closes">closes the position (moves to Closed positions)</strong>
+                        <template v-else>{{ cp.remaining }} contract{{ cp.remaining === 1 ? '' : 's' }} left</template>
+                        <template v-if="cp.cash"><br />{{ cp.cash.symbol }}: {{ formatUSD(cp.cash.available) }} → {{ formatUSD(cp.cash.after) }}</template>
+                      </template>
+                    </p>
+                    <div class="notice error portfolio-error" v-if="closeForms[occ].error">{{ closeForms[occ].error }}</div>
+                    <div class="portfolio-actions">
+                      <button type="submit" class="primary">{{ closeForms[occ].expire ? 'Record expiry' : 'Record close' }}</button>
+                      <button type="button" @click="cancelClose(occ)">Cancel</button>
+                    </div>
+                  </form>
+
+                  <!-- This contract's alerts (premium, gain/loss, days to expiry, in/out of the money) -->
+                  <div class="option-panel" v-else-if="optionPanels[occ] === 'alerts'">
+                    <AlertForm v-if="alertForms[occ]" :symbol="occ" :quote="optionQuotes[occ]" :avg-cost="o.avgCost"
+                               :option="{ ...o, short: o.side === 'short' }" :underlying-price="stockQuotes[sym]?.price ?? null"
+                               :initial="alertForms[occ].initial" :submit-label="alertForms[occ].alertId ? 'Save changes' : 'Create alert'"
+                               :busy="alertForms[occ].busy" :error="alertForms[occ].error"
+                               @save="submitAlert(occ, $event)" @cancel="closeAlertForm(occ)" />
+                    <template v-else>
+                      <div class="alert-presets">
+                        <span class="alert-presets-label">Quick add</span>
+                        <button type="button" class="note-chip" v-for="pr in optionAlertPresets({ short: o.side === 'short', covered: !!o.covered })" :key="pr.label"
+                                @click.stop="openAlertForm(occ, pr)">{{ pr.label }}</button>
+                        <button type="button" class="note-chip alert-custom" @click.stop="openAlertForm(occ, { kind: 'price', params: { direction: 'above', basis: 'percent', percent: 25 } })">＋ Custom</button>
+                      </div>
+                      <ul class="alert-list" v-if="alertsFor(occ).length">
+                        <li v-for="a in alertsFor(occ)" :key="a.id" class="alert-item" :class="{ inactive: !a.active }">
+                          <span class="alert-dot" :class="a.active ? 'on' : 'off'" aria-hidden="true"></span>
+                          <div class="alert-item-body">
+                            <div class="alert-item-title">{{ describeAlert(a) }}</div>
+                            <div class="text-muted text-sm">{{ alertStatus(a) }} · {{ a.repeat === 'daily' ? 'every day' : 'once' }}</div>
+                            <div class="alert-item-note" v-if="a.note">{{ a.note }}</div>
+                            <div class="notice error" v-if="a._error" style="margin:4px 0 0">{{ a._error }}</div>
+                          </div>
+                          <div class="alert-item-actions">
+                            <button type="button" class="link-button" @click.stop="openAlertForm(occ, a, a.id)">Edit</button>
+                            <button type="button" class="link-button" @click.stop="toggleAlert(a)">
+                              {{ a.active ? 'Pause' : (a.repeat === 'once' && a.lastTriggeredAt ? 'Re-arm' : 'Resume') }}
+                            </button>
+                            <button type="button" class="link-button danger-link" @click.stop="deleteAlertConfirm(a)">Delete</button>
+                          </div>
+                        </li>
+                      </ul>
+                      <p class="text-muted text-sm alert-empty" v-else>No alerts on this contract yet — triggered alerts arrive in <strong>Inbox → Alerts</strong>.</p>
+                    </template>
+                  </div>
+
+                  <!-- This contract's trades -->
+                  <div class="transactions option-panel" v-else-if="optionPanels[occ] === 'history'">
+                    <table class="data-table transactions-table">
+                      <thead>
+                        <tr><th>Date</th><th class="num">Contracts</th><th class="num">Premium</th><th class="num tx-amount">Amount</th><th class="num">Realized</th><th><span class="sr-only">Delete</span></th></tr>
+                      </thead>
+                      <tbody>
+                        <tr v-for="tx in optionTransactions(occ)" :key="tx.id">
+                          <td>
+                            {{ formatDate(tx.date + 'T12:00:00') }}
+                            <div class="tx-from">
+                              {{ tx.type === 'close' ? (tx.expired ? 'Expired' : o.side === 'short' ? 'Buy to close' : 'Sell to close') : (o.side === 'short' ? 'Sell to open' : 'Buy to open') }}<template v-if="tx.cash"> · {{ tx.cashDir === 'out' ? 'from' : 'to' }} {{ tx.cash }}</template>
+                            </div>
+                          </td>
+                          <td class="num" :class="tx.type === 'close' ? 'negative' : ''">{{ (tx.type === 'close' ? '−' : '+') + tx.quantity }}</td>
+                          <td class="num">{{ formatPrice(tx.price) }}</td>
+                          <td class="num tx-amount">{{ formatUSD(tx.quantity * (o.multiplier ?? MULTIPLIER) * tx.price) }}</td>
+                          <td class="num" :class="tx.type === 'close' ? changeClass(tx.realized) : ''">{{ tx.type === 'close' ? signedUSD(tx.realized) : '' }}</td>
+                          <td class="num">
+                            <button type="button" class="link-button danger-link" :aria-label="'Delete trade on ' + tx.date" title="Delete this trade"
+                                    @click="deleteOptionTransaction(occ, tx)">✕</button>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  </template>
+`;
+
 export default {
   name: 'Stocks',
   components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers },
@@ -110,16 +382,12 @@ export default {
     );
     // The Portfolio page (portfolioOnly) is a virtual, read-only list: every
     // ticker with a saved position (config.portfolio), in the order added.
-    // Stocks you hold only options on are listed too (their contracts show under them).
-    const portfolioTickers = computed(() => {
-      const held = Object.entries(props.config.portfolio ?? {})
+    // Option contracts have their own Options card (and each stock's Portfolio tab).
+    const portfolioTickers = computed(() =>
+      Object.entries(props.config.portfolio ?? {})
         .filter(([, p]) => p?.quantity > 0)
-        .map(([sym]) => sym);
-      const underlyings = Object.values(props.config.optionPositions ?? {})
-        .filter(p => p?.quantity > 0)
-        .map(p => p.underlying);
-      return [...new Set([...held, ...underlyings])];
-    });
+        .map(([sym]) => sym)
+    );
     const isPortfolioList = computed(() => props.portfolioOnly);
     // Default has no Portfolio tab; your own lists and the Portfolio list do.
 
@@ -690,7 +958,8 @@ export default {
 
     async function refreshAll() {
       // The list shown plus whatever Top movers ranks (they can differ).
-      const symbols = [...new Set([...tickers.value, ...moverSymbols.value])];
+      // …and the stocks behind open options (moneyness, intrinsic value).
+      const symbols = [...new Set([...tickers.value, ...moverSymbols.value, ...optionUnderlyings.value])];
       await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), props.portfolioOnly ? null : fetchIndexes()]);
     }
 
@@ -1366,6 +1635,11 @@ export default {
       const missing = syms.filter(s => !optionQuotes[s]);
       if (missing.length) fetchOptionQuotes(missing);
     });
+    const optionUnderlyings = computed(() => [...new Set(openOptionSymbols.value.map(occ => optionPositions.value[occ].underlying))]);
+    watch(optionUnderlyings, syms => {
+      const missing = syms.filter(s => !stockQuotes[s]);
+      if (missing.length) fetchStockQuotes(missing);
+    }, { immediate: true });
 
     // Value, G/L, days left, moneyness and breakeven at the current quotes.
     function optionSummary(occ) {
@@ -1703,11 +1977,14 @@ export default {
       if (!p || !confirm(`Remove ${optionLabel(p)} from your portfolio?\n\nThis deletes the position and its trades without changing any cash holding — to record a sale or expiry, use Close instead.`)) return;
       emit('set-position', { options: { [occ]: null } });
     }
-    // Portfolio page: a contract's summary line opens its stock's Portfolio tab.
+    // Options card: "Open XOM" — the stock's card in Holdings, on its Portfolio tab.
     function openOptionsOf(underlying) {
+      holdingsOpen.value = true;
       ensureDetail(underlying);
       if (!details[underlying].open) toggleDetail(underlying);
       else setDetailTab(underlying, 'portfolio');
+      nextTick(() => watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(underlying)}"]`)
+        ?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
     }
 
     // Category: the one chosen on the position, else automatic from Yahoo's
@@ -1736,8 +2013,7 @@ export default {
       ...portfolioTickers.value.map(positionSummary).filter(Boolean),
       ...openOptionSymbols.value.map(optionSummary),
     ];
-    const portfolioTotals = computed(() => {
-      const rows = holdingRows();
+    function totalsOf(rows) {
       if (!rows.length) return null;
       const totalCost = rows.reduce((sum, r) => sum + r.totalCost, 0);
       const priced = rows.every(r => r.value != null);
@@ -1750,7 +2026,72 @@ export default {
       // Today's % is relative to yesterday's value (today's value − today's G/L).
       const dayPct = dayGain != null && value != null && value - dayGain > 0 ? (dayGain / (value - dayGain)) * 100 : null;
       return { count: rows.length, totalCost, value, gain, gainPct, dayGain, dayPct };
+    }
+    // Holdings card: stocks, funds, cash…
+    const portfolioTotals = computed(() => totalsOf(portfolioTickers.value.map(positionSummary).filter(Boolean)));
+    // Options card: value nets long (+) and short (−) contracts; G/L % is vs. premium paid + received.
+    const optionsTotals = computed(() => {
+      const rows = openOptionSymbols.value.map(optionSummary);
+      const t = totalsOf(rows);
+      if (!t) return null;
+      const basis = rows.reduce((sum, r) => sum + r.basis, 0);
+      return { ...t, gainPct: t.gain != null && basis > 0 ? (t.gain / basis) * 100 : null, dayPct: null };
     });
+    // Whole portfolio: holdings + options.
+    const netValue = computed(() => {
+      const h = portfolioTotals.value?.value ?? 0;
+      const o = optionsTotals.value?.value;
+      if (o == null || (portfolioTotals.value && portfolioTotals.value.value == null)) return null;
+      return { holdings: h, options: o, total: h + o };
+    });
+    // Under the allocation charts: what short options (left out of them) amount to.
+    const shortSummary = computed(() => {
+      const shorts = openOptionSymbols.value.map(optionSummary).filter(o => o.side === 'short');
+      if (!shorts.length) return null;
+      const priced = shorts.every(o => o.value != null);
+      return {
+        count: shorts.length,
+        value: priced ? shorts.reduce((sum, o) => sum + o.value, 0) : null,
+        reserved: totalReserved.value,
+        shares: optionUnderlyings.value.reduce((sum, u) => sum + sharesCovering(u), 0),
+      };
+    });
+
+    // ── Options card (Portfolio page): every open contract, grouped by expiration ──
+    const optionGroups = computed(() => {
+      const groups = new Map();
+      for (const occ of openOptionSymbols.value) {
+        const p = optionPositions.value[occ];
+        if (!groups.has(p.expiry)) groups.set(p.expiry, []);
+        groups.get(p.expiry).push(occ);
+      }
+      return [...groups.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([expiry, items]) => ({
+          expiry, days: daysToExpiry(expiry),
+          items: items.sort((a, b) => optionPositions.value[a].underlying.localeCompare(optionPositions.value[b].underlying)
+            || optionPositions.value[a].strike - optionPositions.value[b].strike),
+        }));
+    });
+    const OPTIONS_KEY = 'oilgas_options_open';
+    const optionsOpen = ref((() => {
+      try { return localStorage.getItem(OPTIONS_KEY) !== '0'; } catch { return true; }
+    })());
+    watch(optionsOpen, open => { try { localStorage.setItem(OPTIONS_KEY, open ? '1' : '0'); } catch { /* per-browser only */ } });
+    // ＋ Add option from the card: type a ticker, then the usual option form.
+    const optionAdd = reactive({ input: '', ticker: '', busy: false, error: null });
+    async function startOptionAdd() {
+      const t = optionAdd.input.trim().toUpperCase();
+      optionAdd.error = null;
+      if (!optionable(t)) { optionAdd.error = 'Enter a US stock ticker, like XOM.'; return; }
+      optionAdd.busy = true;
+      if (stockQuotes[t]?.price == null) await fetchStockQuotes([t]);
+      optionAdd.busy = false;
+      if (stockQuotes[t]?.price == null) { optionAdd.error = `Couldn't find a quote for ${t}.`; return; }
+      optionAdd.ticker = t;
+      optionAdd.input = '';
+      startOption(t);
+    }
 
     // ── Allocation charts (Portfolio page), shown side by side ──
     // Slices wait for every price and category (and, by sector, every
@@ -1909,7 +2250,8 @@ export default {
       optionPanels, toggleOptionPanel, optionTransactions, deleteOptionTransaction, removeOption, openOptionsOf,
       optionPositionFor, optionAlertPresets, hasShortOptions, optionLabel, MULTIPLIER,
       categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
-      isPortfolioList, portfolioTotals,
+      isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
+      openOptionSymbols, tickers,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
@@ -2050,7 +2392,7 @@ export default {
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
       <!-- Allocation: by asset type and by sector, side by side -->
-      <div class="card allocation-card" v-if="isPortfolioList && portfolioTotals">
+      <div class="card allocation-card" v-if="isPortfolioList && (portfolioTotals || openOptionSymbols.length)">
         <div class="card-title allocation-head">Allocation</div>
         <div class="allocation-pair">
           <section class="allocation-panel" aria-label="Allocation by asset type">
@@ -2068,7 +2410,10 @@ export default {
           By current market value.
           Asset types come from Yahoo Finance — change one on a stock's Portfolio tab (e.g. a bond fund → Bonds).
           <template v-if="hasNonStockHoldings">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
-          <template v-if="hasShortOptions"> Short options are liabilities, so they're in the totals but not in these charts.</template>
+        </p>
+        <p class="text-muted text-sm allocation-note" v-if="shortSummary">
+          <strong>Short options</strong> are liabilities, so they're not in the charts:
+          {{ shortSummary.value != null ? formatUSD(shortSummary.value) + ' value' : 'value pending' }}<template v-if="shortSummary.reserved > 0"> · {{ formatUSD(shortSummary.reserved) }} cash reserved</template><template v-if="shortSummary.shares > 0"> · {{ formatShares(shortSummary.shares) }} shares covering calls</template>.
         </p>
       </div>
 
@@ -2077,13 +2422,18 @@ export default {
                  :quotes="stockQuotes" @select="openMover" />
 
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
-      <div class="notice" v-else-if="isPortfolioList && !tickers.length">
+      <div class="notice" v-else-if="isPortfolioList && !tickers.length && !openOptionSymbols.length">
         <template v-if="closedPositions.length">No open positions — your sold positions are under Closed positions below.</template>
         <template v-else>No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to add a purchase.</template>
       </div>
-      <div class="notice" v-else-if="tickers.length === 0">
+      <div class="notice" v-else-if="!isPortfolioList && tickers.length === 0">
         This watchlist is empty — search above to add stocks.
       </div>
+
+      <!-- Portfolio page: the whole portfolio, when there are options too -->
+      <p class="portfolio-net" v-if="portfolioOnly && user && openOptionSymbols.length && netValue">
+        Net value <strong>{{ formatUSD(netValue.total) }}</strong> <span class="text-muted">= holdings {{ formatUSD(netValue.holdings) }} {{ netValue.options < 0 ? '−' : '+' }} options {{ formatUSD(Math.abs(netValue.options)) }}</span>
+      </p>
 
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
       <!-- drag a card by its handle to reorder (saved to settings). -->
@@ -2118,10 +2468,6 @@ export default {
             <span class="holdings-stat-value" :class="changeClass(portfolioTotals.dayGain)">
               {{ portfolioTotals.dayGain != null ? signedUSD(portfolioTotals.dayGain) + (portfolioTotals.dayPct != null ? ' (' + formatPct(portfolioTotals.dayPct) + ')' : '') : '—' }}
             </span>
-          </span>
-          <span class="holdings-stat" v-if="totalReserved > 0" title="Cash reserved to secure short puts — still yours, and still in market value">
-            <span class="holdings-stat-label">Reserved cash</span>
-            <span class="holdings-stat-value">{{ formatUSD(totalReserved) }}</span>
           </span>
         </span>
       </button>
@@ -2215,20 +2561,6 @@ export default {
           <template v-if="positionSummary(sym)?.value != null"> · {{ formatUSD(positionSummary(sym).value - cashReserved(sym)) }} available</template>
         </p>
 
-        <!-- Portfolio page: this stock's option contracts, one line each (opens its Portfolio tab) -->
-        <ul class="option-subrows" v-if="portfolioOnly && user && optionsFor(sym).length && !details[sym]?.open">
-          <li v-for="occ in optionsFor(sym)" :key="occ">
-            <button type="button" class="option-subrow" v-for="o in [optionSummary(occ)]" :key="occ + '-sub'" :title="optionTitle(o)" @click="openOptionsOf(sym)">
-              <span class="option-side" :class="o.side">{{ o.side === 'short' ? 'Short' : 'Long' }}</span>
-              <span class="option-name">{{ o.quantity }} × {{ o.label }}<template v-if="coverInfo(o)"> · {{ coverInfo(o).badge }}</template></span>
-              <span class="option-money" :class="o.money" v-if="o.money && !o.expired">{{ o.money.toUpperCase() }}</span>
-              <span class="option-days" :class="{ soon: o.days <= 7, expired: o.expired }">{{ o.expired ? 'Expired' : o.days + 'd' }}</span>
-              <span class="option-sub-num">{{ o.price != null ? formatPrice(o.price) : '…' }}</span>
-              <span class="option-sub-num">{{ o.value != null ? formatUSD(o.value) : '—' }}</span>
-              <span class="option-sub-num" :class="changeClass(o.gain)">{{ o.gain != null ? signedUSD(o.gain) : '—' }}</span>
-            </button>
-          </li>
-        </ul>
 
         <!-- Charts + Documents (SEC filings) — same content that -->
         <!-- used to live on the standalone Documents tab, now nested here. -->
@@ -2607,270 +2939,10 @@ export default {
                 <button type="button" v-if="!optionForms[sym]" @click="startOption(sym)">＋ Add option</button>
               </div>
 
-              <form class="portfolio-form option-form" v-if="optionForms[sym]" @submit.prevent="saveOption(sym)" novalidate
-                    @input="optionForms[sym].error = null">
-                <div class="option-toggles">
-                  <div class="range-btn-group" role="group" aria-label="Buy or sell to open">
-                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'long' }" @click="optionForms[sym].side = 'long'">Buy</button>
-                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].side === 'short' }" @click="optionForms[sym].side = 'short'">Sell</button>
-                  </div>
-                  <div class="range-btn-group" role="group" aria-label="Call or put">
-                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'call' }" @click="optionForms[sym].type = 'call'; onContractChange(sym)">Call</button>
-                    <button type="button" class="range-btn" :class="{ active: optionForms[sym].type === 'put' }" @click="optionForms[sym].type = 'put'; onContractChange(sym)">Put</button>
-                  </div>
-                  <span class="text-muted text-sm">{{ optionForms[sym].side === 'long' ? 'Buy to open — you pay the premium' : 'Sell to open — you collect the premium' }}</span>
-                </div>
-                <div class="portfolio-fields">
-                  <label>
-                    <span>Expiration</span>
-                    <input type="date" v-model="optionForms[sym].expiry" @input="onContractChange(sym)" />
-                  </label>
-                  <label>
-                    <span>Strike</span>
-                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].strike" @input="onContractChange(sym)" />
-                  </label>
-                  <label>
-                    <span>Contracts</span>
-                    <input type="number" inputmode="numeric" min="1" step="1" v-model="optionForms[sym].contracts" />
-                  </label>
-                  <label>
-                    <span>Premium / share</span>
-                    <input type="number" inputmode="decimal" min="0" step="any" v-model="optionForms[sym].premium" @input="optionForms[sym].premiumTouched = true" />
-                  </label>
-                  <label>
-                    <span>Date</span>
-                    <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="optionForms[sym].date" />
-                  </label>
-                  <label>
-                    <span>{{ optionForms[sym].side === 'long' ? 'Pay from' : 'Deposit to' }}</span>
-                    <select :value="optionCashFor(sym)" @change="optionForms[sym].cash = $event.target.value; optionForms[sym].error = null">
-                      <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
-                      <option value="">Outside the portfolio</option>
-                    </select>
-                  </label>
-                </div>
-                <!-- Selling to open: covered by shares (call) or secured by reserved cash (put) -->
-                <template v-if="coverPreview(sym)">
-                <div class="option-cover" v-for="cv in [coverPreview(sym)]" :key="'cover-' + sym">
-                  <label class="option-cover-check">
-                    <input type="checkbox" :checked="cv.covered" :disabled="cv.locked"
-                           @change="optionForms[sym].covered = $event.target.checked; optionForms[sym].error = null" />
-                    <span>{{ cv.kind === 'shares' ? 'Covered call' : 'Cash-secured put' }}</span>
-                    <span class="text-muted text-sm" v-if="cv.locked">(same as the contracts you already hold)</span>
-                  </label>
-                  <template v-if="cv.covered">
-                    <p class="option-cover-detail" v-if="cv.kind === 'shares'">
-                      Covers {{ formatShares(cv.need) }} of your {{ formatShares(cv.held) }} {{ sym }} shares
-                      <template v-if="cv.held - cv.free > 0"> ({{ formatShares(cv.held - cv.free) }} already cover other calls)</template>
-                      · if called away you receive {{ formatUSD(cv.receive) }}
-                      <span class="negative" v-if="!cv.enough"><br />Not enough uncovered shares — {{ formatShares(Math.max(0, cv.free)) }} available.</span>
-                    </p>
-                    <template v-else>
-                      <p class="option-cover-detail">
-                        Obligation if assigned {{ formatUSD(cv.obligation) }} · premium collected {{ formatUSD(cv.premium) }}
-                        → net cost {{ formatUSD(cv.netCost) }}<template v-if="Number(optionForms[sym].contracts) > 0"> ({{ formatPrice(cv.netCost / (Number(optionForms[sym].contracts) * MULTIPLIER)) }}/share)</template>
-                      </p>
-                      <div class="portfolio-fields option-cover-fields">
-                        <label>
-                          <span>Reserve from</span>
-                          <select :value="cv.src?.symbol ?? ''" :disabled="cv.locked || !cashSources(sym).length"
-                                  @change="optionForms[sym].reserveFrom = $event.target.value; optionForms[sym].error = null">
-                            <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }} available</option>
-                            <option v-if="!cashSources(sym).length" value="">No cash holding</option>
-                          </select>
-                        </label>
-                      </div>
-                      <p class="option-cover-detail" v-if="cv.src">
-                        {{ cv.src.symbol }}: {{ formatUSD(cv.available) }} available{{ cv.withPremium ? ' (with the premium)' : '' }} → {{ formatUSD(cv.after) }} available ({{ formatUSD(cv.obligation) }} reserved)
-                        <span class="negative" v-if="!cv.enough"><br />Not enough available cash to secure this put.</span>
-                      </p>
-                      <p class="option-cover-detail negative" v-else>Securing a put needs a Cash holding in your portfolio.</p>
-                    </template>
-                  </template>
-                  <p class="option-cover-detail warning-text" v-else>
-                    ⚠ Uncovered (naked) — usually needs margin approval; losses on a naked {{ cv.kind === 'shares' ? 'call are unlimited' : 'put can reach the full strike' }}.
-                  </p>
-                </div>
-                </template>
-                <p class="option-check" :class="optionForms[sym].check?.state" aria-live="polite">
-                  <template v-if="!optionForms[sym].check">Most monthly options expire on the third Friday.</template>
-                  <template v-else-if="optionForms[sym].check.state === 'checking'">Checking {{ optionLabel(optionForms[sym].check.symbol) }}…</template>
-                  <template v-else-if="optionForms[sym].check.state === 'ok'">
-                    ✓ {{ optionLabel(optionForms[sym].check.symbol) }} · last {{ formatPrice(optionForms[sym].check.quote.price) }}<template v-if="optionForms[sym].check.quote.marketTime"> ({{ formatRelativeTime(optionForms[sym].check.quote.marketTime) }})</template>
-                  </template>
-                  <template v-else>✗ No such contract: {{ optionLabel(optionForms[sym].check.symbol) }} — check the expiration date and strike.</template>
-                </p>
-                <p class="purchase-preview" v-if="optionPreview(sym)">
-                  <template v-for="pv in [optionPreview(sym)]">
-                    <span class="negative" v-if="pv.conflict">You're {{ pv.conflict.side }} this contract — close it instead.</span>
-                    <template v-else>
-                      {{ pv.debit ? 'Cost' : 'Credit' }} {{ formatUSD(pv.amount) }} ({{ optionForms[sym].contracts }} × 100 × {{ formatPrice(Number(optionForms[sym].premium)) }}) ·
-                      Breakeven {{ formatPrice(pv.breakeven) }} at expiration
-                      <template v-if="pv.was"> · {{ pv.quantity }} contracts at an average of {{ formatPrice(pv.avg) }} (was {{ pv.was.quantity }} at {{ formatPrice(pv.was.avgCost) }})</template>
-                      <br />
-                      <template v-if="pv.cash">{{ pv.cash.symbol }}: {{ formatUSD(pv.cash.available) }} → {{ formatUSD(pv.cash.after) }}<span class="negative" v-if="pv.cash.after < -0.005"> — not enough cash</span></template>
-                      <span class="text-muted" v-else>{{ pv.debit ? 'Paid from outside the portfolio.' : 'Not deposited to a cash holding.' }}</span>
-                    </template>
-                  </template>
-                </p>
-                <div class="notice error portfolio-error" v-if="optionForms[sym].error">{{ optionForms[sym].error }}</div>
-                <div class="portfolio-actions">
-                  <button type="submit" class="primary">Add option</button>
-                  <button type="button" @click="cancelOption(sym)">Cancel</button>
-                </div>
-              </form>
-
+${OPTION_FORM}
               <ul class="option-list" v-if="optionsFor(sym).length">
                 <li class="option-item" v-for="occ in optionsFor(sym)" :key="occ">
-                  <template v-for="o in [optionSummary(occ)]" :key="occ + '-row'">
-                  <div class="option-row" :title="optionTitle(o)">
-                    <div class="option-id">
-                      <span class="option-side" :class="o.side">{{ o.side === 'short' ? 'Short' : 'Long' }}</span>
-                      <span class="option-name">{{ o.label }}</span>
-                      <span class="option-cover-badge" :class="coverInfo(o).kind" v-if="coverInfo(o)" :title="coverInfo(o).text">{{ coverInfo(o).badge }}</span>
-                      <span class="option-money" :class="o.money" v-if="o.money && !o.expired">{{ o.money.toUpperCase() }}</span>
-                      <span class="option-days" :class="{ soon: o.days <= 7, expired: o.expired }">{{ o.expired ? 'Expired' : o.days === 0 ? 'Expires today' : o.days + 'd left' }}</span>
-                    </div>
-                    <div class="option-nums">
-                      <span class="stock-row-num"><span class="stock-row-label">Contracts</span><span>{{ o.quantity }}</span></span>
-                      <span class="stock-row-num"><span class="stock-row-label">{{ o.side === 'short' ? 'Avg credit' : 'Avg cost' }}</span><span>{{ formatPrice(o.avgCost) }}</span></span>
-                      <span class="stock-row-num"><span class="stock-row-label">Last</span><span>{{ o.price != null ? formatPrice(o.price) : (o.loading ? '…' : '—') }}</span></span>
-                      <span class="stock-row-num"><span class="stock-row-label">Value</span><span>{{ o.value != null ? formatUSD(o.value) : '—' }}</span></span>
-                      <span class="stock-row-num"><span class="stock-row-label">G/L</span>
-                        <span :class="changeClass(o.gain)">{{ o.gain != null ? signedUSD(o.gain) + (o.gainPct != null ? ' (' + formatPct(o.gainPct) + ')' : '') : '—' }}</span>
-                      </span>
-                    </div>
-                    <div class="option-actions">
-                      <template v-if="portfolioOnly">
-                        <button type="button" class="link-button" v-if="o.expired" @click="startClose(occ, { expire: true })">Record expiry</button>
-                        <button type="button" class="link-button" v-else @click="startClose(occ)">Close</button>
-                      </template>
-                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'alerts'" @click="toggleOptionPanel(occ, 'alerts')">
-                        🔔<span class="sr-only"> Alerts</span><template v-if="alertsFor(occ).filter(a => a.active).length"> {{ alertsFor(occ).filter(a => a.active).length }}</template>
-                      </button>
-                      <button type="button" class="link-button" :aria-expanded="optionPanels[occ] === 'history'" @click="toggleOptionPanel(occ, 'history')">Trades</button>
-                      <button type="button" class="link-button danger-link" @click="removeOption(occ)">Remove</button>
-                    </div>
-                  </div>
-                  <p class="text-muted text-sm option-sub">
-                    <template v-if="coverInfo(o)">{{ coverInfo(o).text }} · </template>Breakeven {{ formatPrice(o.breakeven) }} · expires {{ formatDate(o.expiry + 'T12:00:00') }}<template v-if="o.marketTime"> · last trade {{ formatRelativeTime(o.marketTime) }}</template><template v-if="o.quoteError"> · no quote</template>
-                  </p>
-
-                  <!-- Close: sell to close (long) / buy to close (short); expiry = close at 0 or intrinsic value -->
-                  <form class="portfolio-form option-close" v-if="closeForms[occ]" @submit.prevent="saveClose(occ)" novalidate
-                        @input="closeForms[occ].error = null">
-                    <p class="text-muted text-sm" style="margin:0 0 8px">
-                      <template v-if="closeForms[occ].expire">
-                        Record that {{ o.label }} expired.
-                        <template v-if="o.money === 'itm'">{{ sym }} is in the money now — the premium is prefilled with its intrinsic value; use 0 if it expired worthless. (Exercise and assignment aren't tracked yet.)</template>
-                        <template v-else>Out of the money, it expired worthless.</template>
-                      </template>
-                      <template v-else>{{ o.side === 'short' ? 'Buy to close' : 'Sell to close' }} {{ o.label }} — you have {{ o.quantity }} contract{{ o.quantity === 1 ? '' : 's' }}.</template>
-                    </p>
-                    <div class="portfolio-fields">
-                      <label>
-                        <span>Contracts</span>
-                        <span class="sale-qty">
-                          <input type="number" inputmode="numeric" min="1" step="1" :max="o.quantity" v-model="closeForms[occ].contracts" />
-                          <button type="button" class="link-button" @click="closeForms[occ].contracts = String(o.quantity)">All</button>
-                        </span>
-                      </label>
-                      <label>
-                        <span>Premium / share</span>
-                        <input type="number" inputmode="decimal" min="0" step="any" v-model="closeForms[occ].price" />
-                      </label>
-                      <label>
-                        <span>Date</span>
-                        <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="closeForms[occ].date" />
-                      </label>
-                      <label v-if="Number(closeForms[occ].price) > 0">
-                        <span>{{ o.side === 'short' ? 'Pay from' : 'Deposit to' }}</span>
-                        <select :value="closeCashFor(occ)" @change="closeForms[occ].cash = $event.target.value; closeForms[occ].error = null">
-                          <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
-                          <option value="">Outside the portfolio</option>
-                        </select>
-                      </label>
-                    </div>
-                    <p class="purchase-preview" v-if="closePreview(occ)">
-                      <template v-for="cp in [closePreview(occ)]">
-                        {{ cp.credit ? 'Proceeds' : 'Cost to close' }} {{ formatUSD(cp.amount) }} ·
-                        Realized G/L <span :class="changeClass(cp.realized)">{{ signedUSD(cp.realized) }}<template v-if="cp.realizedPct != null"> ({{ formatPct(cp.realizedPct) }})</template></span> ·
-                        <span class="negative" v-if="cp.tooMany">more than you have</span>
-                        <strong v-else-if="cp.closes">closes the position (moves to Closed positions)</strong>
-                        <template v-else>{{ cp.remaining }} contract{{ cp.remaining === 1 ? '' : 's' }} left</template>
-                        <template v-if="cp.cash"><br />{{ cp.cash.symbol }}: {{ formatUSD(cp.cash.available) }} → {{ formatUSD(cp.cash.after) }}</template>
-                      </template>
-                    </p>
-                    <div class="notice error portfolio-error" v-if="closeForms[occ].error">{{ closeForms[occ].error }}</div>
-                    <div class="portfolio-actions">
-                      <button type="submit" class="primary">{{ closeForms[occ].expire ? 'Record expiry' : 'Record close' }}</button>
-                      <button type="button" @click="cancelClose(occ)">Cancel</button>
-                    </div>
-                  </form>
-
-                  <!-- This contract's alerts (premium, gain/loss, days to expiry, in/out of the money) -->
-                  <div class="option-panel" v-else-if="optionPanels[occ] === 'alerts'">
-                    <AlertForm v-if="alertForms[occ]" :symbol="occ" :quote="optionQuotes[occ]" :avg-cost="o.avgCost"
-                               :option="{ ...o, short: o.side === 'short' }" :underlying-price="stockQuotes[sym]?.price ?? null"
-                               :initial="alertForms[occ].initial" :submit-label="alertForms[occ].alertId ? 'Save changes' : 'Create alert'"
-                               :busy="alertForms[occ].busy" :error="alertForms[occ].error"
-                               @save="submitAlert(occ, $event)" @cancel="closeAlertForm(occ)" />
-                    <template v-else>
-                      <div class="alert-presets">
-                        <span class="alert-presets-label">Quick add</span>
-                        <button type="button" class="note-chip" v-for="pr in optionAlertPresets({ short: o.side === 'short', covered: !!o.covered })" :key="pr.label"
-                                @click.stop="openAlertForm(occ, pr)">{{ pr.label }}</button>
-                        <button type="button" class="note-chip alert-custom" @click.stop="openAlertForm(occ, { kind: 'price', params: { direction: 'above', basis: 'percent', percent: 25 } })">＋ Custom</button>
-                      </div>
-                      <ul class="alert-list" v-if="alertsFor(occ).length">
-                        <li v-for="a in alertsFor(occ)" :key="a.id" class="alert-item" :class="{ inactive: !a.active }">
-                          <span class="alert-dot" :class="a.active ? 'on' : 'off'" aria-hidden="true"></span>
-                          <div class="alert-item-body">
-                            <div class="alert-item-title">{{ describeAlert(a) }}</div>
-                            <div class="text-muted text-sm">{{ alertStatus(a) }} · {{ a.repeat === 'daily' ? 'every day' : 'once' }}</div>
-                            <div class="alert-item-note" v-if="a.note">{{ a.note }}</div>
-                            <div class="notice error" v-if="a._error" style="margin:4px 0 0">{{ a._error }}</div>
-                          </div>
-                          <div class="alert-item-actions">
-                            <button type="button" class="link-button" @click.stop="openAlertForm(occ, a, a.id)">Edit</button>
-                            <button type="button" class="link-button" @click.stop="toggleAlert(a)">
-                              {{ a.active ? 'Pause' : (a.repeat === 'once' && a.lastTriggeredAt ? 'Re-arm' : 'Resume') }}
-                            </button>
-                            <button type="button" class="link-button danger-link" @click.stop="deleteAlertConfirm(a)">Delete</button>
-                          </div>
-                        </li>
-                      </ul>
-                      <p class="text-muted text-sm alert-empty" v-else>No alerts on this contract yet — triggered alerts arrive in <strong>Inbox → Alerts</strong>.</p>
-                    </template>
-                  </div>
-
-                  <!-- This contract's trades -->
-                  <div class="transactions option-panel" v-else-if="optionPanels[occ] === 'history'">
-                    <table class="data-table transactions-table">
-                      <thead>
-                        <tr><th>Date</th><th class="num">Contracts</th><th class="num">Premium</th><th class="num tx-amount">Amount</th><th class="num">Realized</th><th><span class="sr-only">Delete</span></th></tr>
-                      </thead>
-                      <tbody>
-                        <tr v-for="tx in optionTransactions(occ)" :key="tx.id">
-                          <td>
-                            {{ formatDate(tx.date + 'T12:00:00') }}
-                            <div class="tx-from">
-                              {{ tx.type === 'close' ? (tx.expired ? 'Expired' : o.side === 'short' ? 'Buy to close' : 'Sell to close') : (o.side === 'short' ? 'Sell to open' : 'Buy to open') }}<template v-if="tx.cash"> · {{ tx.cashDir === 'out' ? 'from' : 'to' }} {{ tx.cash }}</template>
-                            </div>
-                          </td>
-                          <td class="num" :class="tx.type === 'close' ? 'negative' : ''">{{ (tx.type === 'close' ? '−' : '+') + tx.quantity }}</td>
-                          <td class="num">{{ formatPrice(tx.price) }}</td>
-                          <td class="num tx-amount">{{ formatUSD(tx.quantity * (o.multiplier ?? MULTIPLIER) * tx.price) }}</td>
-                          <td class="num" :class="tx.type === 'close' ? changeClass(tx.realized) : ''">{{ tx.type === 'close' ? signedUSD(tx.realized) : '' }}</td>
-                          <td class="num">
-                            <button type="button" class="link-button danger-link" :aria-label="'Delete trade on ' + tx.date" title="Delete this trade"
-                                    @click="deleteOptionTransaction(occ, tx)">✕</button>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  </template>
+                  <template v-for="inList in [false]" :key="occ + '-il'">${OPTION_ITEM}</template>
                 </li>
               </ul>
               <p class="text-muted text-sm option-empty" v-else-if="!optionForms[sym]">
@@ -3002,6 +3074,72 @@ export default {
       </div>
 
       </div>
+      </div>
+
+      <!-- Portfolio page: Options — every open contract by expiration; collapsible -->
+      <div class="holdings-card options-card" :class="{ collapsed: !optionsOpen }"
+           v-if="portfolioOnly && user && (openOptionSymbols.length || tickers.length)">
+        <button type="button" class="holdings-toggle" :aria-expanded="optionsOpen" aria-controls="portfolio-options"
+                @click="optionsOpen = !optionsOpen">
+          <span class="holdings-heading">
+            <span class="holdings-chevron" aria-hidden="true">▶</span>
+            <span class="holdings-title">Options</span>
+            <span class="holdings-count">{{ openOptionSymbols.length }}</span>
+          </span>
+          <span class="holdings-stats" v-if="optionsTotals">
+            <span class="holdings-stat" title="Long contracts count positive, short ones negative">
+              <span class="holdings-stat-label">Net value</span>
+              <span class="holdings-stat-value">{{ optionsTotals.value != null ? formatUSD(optionsTotals.value) : '—' }}</span>
+            </span>
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">Net premium</span>
+              <span class="holdings-stat-value">{{ formatUSD(Math.abs(optionsTotals.totalCost)) }} {{ optionsTotals.totalCost < 0 ? 'received' : 'paid' }}</span>
+            </span>
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">G/L</span>
+              <span class="holdings-stat-value" :class="changeClass(optionsTotals.gain)">
+                {{ optionsTotals.gain != null ? signedUSD(optionsTotals.gain) + (optionsTotals.gainPct != null ? ' (' + formatPct(optionsTotals.gainPct) + ')' : '') : '—' }}
+              </span>
+            </span>
+            <span class="holdings-stat">
+              <span class="holdings-stat-label">Today's G/L</span>
+              <span class="holdings-stat-value" :class="changeClass(optionsTotals.dayGain)">{{ optionsTotals.dayGain != null ? signedUSD(optionsTotals.dayGain) : '—' }}</span>
+            </span>
+            <span class="holdings-stat" v-if="totalReserved > 0" title="Cash reserved to secure short puts — still yours, and still counted in Holdings">
+              <span class="holdings-stat-label">Reserved cash</span>
+              <span class="holdings-stat-value">{{ formatUSD(totalReserved) }}</span>
+            </span>
+          </span>
+        </button>
+        <div id="portfolio-options" class="options-body" v-show="optionsOpen">
+          <template v-if="optionAdd.ticker && optionForms[optionAdd.ticker]">
+            <div class="options-add-title">New option on {{ optionAdd.ticker }}</div>
+            <template v-for="sym in [optionAdd.ticker]" :key="'add-' + sym">${OPTION_FORM}</template>
+          </template>
+          <form class="options-add-bar" v-else @submit.prevent="startOptionAdd" novalidate>
+            <input v-model="optionAdd.input" placeholder="Ticker, e.g. XOM" aria-label="Stock ticker for a new option"
+                   autocomplete="off" autocapitalize="characters" maxlength="6" @input="optionAdd.error = null" />
+            <button type="submit" :disabled="optionAdd.busy">{{ optionAdd.busy ? 'Looking up…' : '＋ Add option' }}</button>
+            <span class="negative text-sm" v-if="optionAdd.error">{{ optionAdd.error }}</span>
+          </form>
+
+          <section class="option-group" v-for="g in optionGroups" :key="g.expiry" :aria-label="'Expiring ' + g.expiry">
+            <h4 class="option-group-head" :class="{ soon: g.days >= 0 && g.days <= 7, expired: g.days < 0 }">
+              {{ formatDate(g.expiry + 'T12:00:00') }}
+              <span>· {{ g.days < 0 ? 'expired' : g.days === 0 ? 'expires today' : g.days + ' day' + (g.days === 1 ? '' : 's') + ' left' }}</span>
+            </h4>
+            <ul class="option-list">
+              <li class="option-item" v-for="occ in g.items" :key="occ">
+                <template v-for="sym in [optionPositionFor(occ).underlying]" :key="occ + '-sym'">
+                  <template v-for="inList in [true]" :key="occ + '-il'">${OPTION_ITEM}</template>
+                </template>
+              </li>
+            </ul>
+          </section>
+          <p class="text-muted text-sm option-empty" v-if="!openOptionSymbols.length && !(optionAdd.ticker && optionForms[optionAdd.ticker])">
+            No open options. Add one above, or from a stock's Portfolio tab.
+          </p>
+        </div>
       </div>
 
       <!-- Portfolio page: Closed positions — collapsible, totals at average cost -->

@@ -1656,16 +1656,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .option-cover-badge.naked { color: var(--warning); background: var(--warning-bg); }
 .cash-reserve-line { margin: -4px 16px 10px; font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 
-/* Portfolio page: contract lines under a holding's header */
-.option-subrows { list-style: none; margin: 0; padding: 0 16px 10px; }
-.option-subrow {
-  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto 70px 90px 90px; align-items: center; gap: 8px;
-  width: 100%; padding: 5px 8px; border: none; border-radius: 6px; background: var(--surface-2);
-  color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; margin-top: 4px;
-}
-.option-subrow:hover { background: var(--border); }
-.option-subrow .option-name { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.option-sub-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+/* Portfolio page: net value line and the Options card */
+.portfolio-net { margin: 0 0 10px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.options-card { margin-top: 12px; }
+.options-body { padding: 4px 16px 12px; border-top: 1px solid var(--border); }
+.options-add-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.options-add-bar input { width: 150px; text-transform: uppercase; }
+.options-add-bar button { padding: 5px 12px; }
+.options-add-title { font-weight: 600; font-size: 13px; margin: 12px 0 8px; }
+.option-group { margin-top: 12px; }
+.option-group-head { margin: 0 0 2px; padding: 6px 0; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; border-bottom: 1px solid var(--border); }
+.option-group-head span { font-weight: 600; color: var(--text-muted); text-transform: none; letter-spacing: 0; }
+.option-group-head.soon span { color: var(--warning); }
+.option-group-head.expired span { color: var(--negative); }
+.option-underlying { font-weight: 800; font-size: 14px; }
 @media (max-width: 900px) {
   .option-row { grid-template-columns: 1fr auto; }
   .option-nums { grid-column: 1 / -1; grid-row: 2; grid-template-columns: repeat(5, auto); justify-content: start; }
@@ -1677,9 +1681,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .option-actions { flex-wrap: wrap; }
   .option-close, .option-panel { padding: 10px 8px; }
   .option-panel.transactions { padding: 2px 0; }
-  .option-subrow { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-  .option-subrow .option-sub-num:nth-last-child(3), .option-subrow .option-sub-num:nth-last-child(2) { display: none; }
-  .option-subrow .option-money { display: none; }
 }
 
 /* Profile → Alerts */
