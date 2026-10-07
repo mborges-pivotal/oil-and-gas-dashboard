@@ -26,6 +26,7 @@ export default {
     // current price (the server fills it in), gain/loss applies to held ones.
     multi: Boolean,
     option: { type: Object, default: null },
+    earnings: { type: Object, default: null }, // the stock's next earnings date, for the helper
     underlyingPrice: { type: Number, default: null },
     submitLabel: { type: String, default: 'Save alert' },
     busy: Boolean,
@@ -96,6 +97,13 @@ export default {
           if (props.option) return `Triggers at a premium of ${formatPrice(at)} (you ${short.value ? 'sold' : 'paid'} ${formatPrice(props.avgCost)} on average)`;
           return `Triggers at ${formatPrice(at)} (your average cost is ${formatPrice(props.avgCost)})`;
         }
+        case 'earnings': {
+          const e = props.earnings;
+          if (props.multi) return "Uses each stock's next earnings date (Nasdaq / Zacks).";
+          if (!e?.date) return 'No upcoming earnings date found yet — the alert fires once one is known.';
+          const left = daysToExpiry(e.date);
+          return `Next earnings ${e.date} (${left} day${left === 1 ? '' : 's'} away)${e.confirmed ? '' : ' — estimated date'}`;
+        }
         case 'expiry': {
           const left = daysToExpiry(props.option.expiry);
           return left >= 0 ? `Expires ${props.option.expiry} — ${left} day${left === 1 ? '' : 's'} from today` : 'This contract has expired.';
@@ -159,6 +167,7 @@ export default {
           if (!(m > 1 && m <= 100)) return fail('Enter a multiple above 1 (e.g. 2 for twice the average).');
           return { multiple: m };
         }
+        case 'earnings':
         case 'expiry': {
           const d = n(days.value);
           if (!(Number.isInteger(d) && d >= 0 && d <= 365)) return fail('Enter a whole number of days, 0 to 365.');
@@ -246,6 +255,14 @@ export default {
         <div class="alert-amount">
           <input ref="firstInput" type="number" inputmode="decimal" min="0" step="any" v-model="percent" aria-label="Percent gain or loss" />
           <span class="alert-unit">% vs. {{ option ? 'avg premium' : 'avg cost' }}</span>
+        </div>
+      </div>
+
+      <!-- Earnings coming up -->
+      <div class="alert-row" v-else-if="kind === 'earnings'">
+        <div class="alert-amount">
+          <input ref="firstInput" type="number" inputmode="numeric" min="0" max="365" step="1" v-model="days" aria-label="Days before earnings" />
+          <span class="alert-unit">days or less before earnings</span>
         </div>
       </div>
 

@@ -292,3 +292,42 @@ export function fetchSector(symbol) {
   }
   return profileCache.get(symbol);
 }
+
+/**
+ * Ten years (plus a margin) of daily closes for the Summary tab's
+ * performance table → { dates: ['YYYY-MM-DD'], close: [], adjClose: [],
+ * dividends: [{ date, amount }] } (dividends ascending, for the estimate of the next one).
+ * `adjClose` is Yahoo's dividend- and split-adjusted close, for total return.
+ * Kept for the session (30 minutes), so the S&P 500 is fetched once.
+ */
+const historyCache = new Map(); // symbol → { at, promise }
+export function fetchPriceHistory(symbol) {
+  const hit = historyCache.get(symbol);
+  if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit.promise;
+  const now = Math.floor(Date.now() / 1000);
+  const from = now - Math.ceil(10 * 365.25 + 15) * DAY_S;
+  const url = `${BASE}/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&period1=${from}&period2=${now}&events=div`;
+  const promise = fetchWithFallback(url).then(data => {
+    const r = data?.chart?.result?.[0];
+    if (!r?.timestamp?.length) throw new Error(`No price history for ${symbol}`);
+    const tz = r.meta?.exchangeTimezoneName || 'America/New_York';
+    const closes = r.indicators?.quote?.[0]?.close ?? [];
+    const adj = r.indicators?.adjclose?.[0]?.adjclose ?? closes;
+    const out = { dates: [], close: [], adjClose: [] };
+    out.dividends = Object.values(r.events?.dividends ?? {})
+      .map(d => ({ date: new Date(d.date * 1000).toLocaleDateString('en-CA', { timeZone: tz }), amount: d.amount }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    r.timestamp.forEach((ts, i) => {
+      if (closes[i] == null) return;
+      out.dates.push(new Date(ts * 1000).toLocaleDateString('en-CA', { timeZone: tz }));
+      out.close.push(closes[i]);
+      out.adjClose.push(adj[i] ?? closes[i]);
+    });
+    return out;
+  }).catch(err => {
+    historyCache.delete(symbol);
+    throw err;
+  });
+  historyCache.set(symbol, { at: Date.now(), promise });
+  return promise;
+}

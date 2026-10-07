@@ -53,6 +53,7 @@ const { handleFrameCheck } = require('./server/frameCheck');
 const { handleWatchlistsApi } = require('./server/watchlists');
 const { handleNotesApi } = require('./server/notes');
 const { handleAlertsApi } = require('./server/alerts');
+const { handleEventsApi } = require('./server/events');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_HOSTS = new Set([
@@ -224,6 +225,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/alerts' || reqUrl.pathname.startsWith('/api/alerts/')) {
     handleAlertsApi(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname.startsWith('/api/events/')) {
+    handleEventsApi(req, res, reqUrl);
     return;
   }
 

@@ -1,5 +1,9 @@
 const { ref, shallowRef, reactive, onMounted, onUnmounted, computed, nextTick, watch } = Vue;
-import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, fetchSector } from '../services/yahooFinance.js';
+import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, fetchSector, fetchPriceHistory } from '../services/yahooFinance.js';
+import { fetchCompanyProfile } from '../services/companyProfile.js';
+import { fetchEarnings } from '../services/events.js';
+import { estimateNextDividend } from '../utils/dividends.js';
+import { PERIODS, computePerformance } from '../utils/performance.js';
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_SHORT, autoCategory, buildSlices, assignSlots, shortSector } from '../utils/allocation.js';
 import { fetchWatchlists, createWatchlist, updateWatchlist, deleteWatchlist } from '../services/watchlists.js';
 import { resolveCIK, fetchFilings, extractFilings, buildFilingUrl, buildIndexUrl, getTranscriptLinks } from '../services/edgar.js';
@@ -1155,7 +1159,7 @@ export default {
       // The list shown plus whatever Top movers ranks (they can differ).
       // …and the stocks behind open options (moneyness, intrinsic value).
       const symbols = [...new Set([...tickers.value, ...moverSymbols.value, ...optionUnderlyings.value])];
-      await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), props.portfolioOnly ? null : fetchIndexes()]);
+      await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), props.portfolioOnly ? null : fetchIndexes(), loadEarnings(tickers.value)]);
     }
 
     // Switching lists or adding a ticker: fetch whatever has no quote yet.
@@ -1179,13 +1183,14 @@ export default {
     // first switched to — rather than eagerly for the whole watchlist on
     // every visit, since SEC EDGAR is rate-limited and Yahoo chart history
     // is one more request per ticker either way.
-    const details = reactive({}); // ticker → { open, tab: 'chart'|'documents', chart: {...}, docs: {...} }
+    const details = reactive({}); // ticker → { open, tab: 'summary'|'chart'|'news'|'documents'|'portfolio'|'alerts', … }
 
     function ensureDetail(ticker) {
       if (!details[ticker]) {
         details[ticker] = {
           open: false,
-          tab: 'chart',
+          tab: 'summary',
+          summary: { loading: false, loaded: false, profile: null, profileError: null, perf: null, spx: null, perfError: null, dividend: null },
           chart: { loading: false, loaded: false, error: null, series: [], range: '1Y' },
           stats: { loading: false, loaded: false, data: null },
           news: { loading: false, loaded: false, error: null, items: [] },
@@ -1257,6 +1262,85 @@ export default {
       ];
     }
 
+    // ── Upcoming earnings (Nasdaq / Zacks via the server): card badge + Summary ──
+    const earnings = reactive({}); // symbol → { date, time, confirmed, … } | null
+    async function loadEarnings(symbols) {
+      const want = symbols.filter(s => !s.startsWith('^') && !s.includes('='));
+      if (!want.length) return;
+      try { Object.assign(earnings, await fetchEarnings(want)); } catch { /* best-effort: no badge */ }
+    }
+    watch(() => tickers.value, syms => loadEarnings(syms.filter(s => !(s in earnings))));
+    const todayIso = () => new Date().toLocaleDateString('en-CA');
+    const daysUntil = iso => daysToExpiry(iso);
+    // The badge: earnings within a week.
+    function earningsSoon(sym) {
+      const e = earnings[sym];
+      if (!e?.date) return null;
+      const days = daysUntil(e.date);
+      return days >= 0 && days <= 7 ? { ...e, days } : null;
+    }
+    const earningsWhen = e => (e.time === 'before-open' ? 'before the open' : e.time === 'after-close' ? 'after the close' : '');
+    function earningsTitle(sym) {
+      const e = earnings[sym];
+      if (!e?.date) return '';
+      return `Earnings ${formatDate(e.date + 'T12:00:00')}${earningsWhen(e) ? ' ' + earningsWhen(e) : ''}`
+        + (e.confirmed ? ' (confirmed)' : ' (estimated date)') + (e.epsForecast != null ? ` · consensus EPS ${formatPrice(e.epsForecast)}` : '');
+    }
+    // Summary tab: earnings, the estimated next dividend, and your option expirations — soonest first.
+    function upcomingEvents(sym) {
+      const out = [];
+      const e = earnings[sym];
+      if (e?.date && e.date >= todayIso()) {
+        out.push({
+          key: 'earnings', date: e.date, kind: 'earnings', title: 'Earnings' + (e.quarter ? ` · quarter ending ${e.quarter}` : ''),
+          detail: [earningsWhen(e), e.epsForecast != null ? `consensus EPS ${formatPrice(e.epsForecast)}` : '', e.epsLastYear != null ? `a year ago ${formatPrice(e.epsLastYear)}` : ''].filter(Boolean).join(' · '),
+          tag: e.confirmed ? 'Confirmed' : 'Estimated', estimated: !e.confirmed,
+        });
+      }
+      const div = details[sym]?.summary?.dividend;
+      if (div) {
+        out.push({
+          key: 'dividend', date: div.date, kind: 'dividend', approx: true, title: 'Ex-dividend',
+          detail: `~${formatPrice(div.amount)} per share · ${div.frequency}, last ${formatDate(div.lastDate + 'T12:00:00')}`,
+          tag: 'Estimated from history', estimated: true,
+        });
+      }
+      const byExpiry = new Map();
+      for (const occ of optionsFor(sym)) {
+        const o = optionPositions.value[occ];
+        if (daysUntil(o.expiry) < 0) continue;
+        if (!byExpiry.has(o.expiry)) byExpiry.set(o.expiry, []);
+        byExpiry.get(o.expiry).push(`${o.quantity} × ${optionLabel(o, { withUnderlying: false }).replace(/^\w+ \d+ '\d+ /, '')}${o.side === 'short' ? ' (short)' : ''}`);
+      }
+      for (const [date, items] of byExpiry) {
+        out.push({ key: 'exp-' + date, date, kind: 'options', title: 'Your options expire', detail: items.join(', '), tag: 'Your portfolio' });
+      }
+      return out.sort((a, b) => a.date.localeCompare(b.date)).map(ev => ({ ...ev, days: daysUntil(ev.date) }));
+    }
+
+    // ── Summary tab: company profile + performance vs. the S&P 500 ──
+    async function loadSummary(ticker) {
+      const d = details[ticker].summary;
+      if (d.loading || d.loaded) return;
+      d.loading = true;
+      const [profile, history, spx] = await Promise.allSettled([
+        fetchCompanyProfile(ticker), fetchPriceHistory(ticker), fetchPriceHistory('^GSPC'),
+      ]);
+      if (profile.status === 'fulfilled') d.profile = profile.value;
+      else d.profileError = profile.reason?.message ?? 'Unavailable';
+      if (history.status === 'fulfilled') {
+        d.perf = computePerformance(history.value);
+        d.dividend = estimateNextDividend(history.value.dividends);
+      } else d.perfError = history.reason?.message ?? 'Unavailable';
+      if (!(ticker in earnings)) loadEarnings([ticker]);
+      if (spx.status === 'fulfilled') d.spx = computePerformance(spx.value);
+      d.loading = false;
+      d.loaded = true;
+    }
+    const perfDiff = (a, b) => (a != null && b != null ? a - b : null);
+    // The latest close the table measures to (kept on the computed periods).
+    const lastCloseDate = d => (d.perf?.latest ? d.perf.latest + 'T12:00:00' : null);
+
     async function loadNews(ticker) {
       const d = details[ticker].news;
       if (d.loaded || d.loading) return;
@@ -1298,7 +1382,8 @@ export default {
 
     function loadActiveTab(ticker) {
       const tab = details[ticker].tab;
-      if (tab === 'chart') {
+      if (tab === 'summary') loadSummary(ticker);
+      else if (tab === 'chart') {
         loadChart(ticker);
         loadStats(ticker);
       } else if (tab === 'news') loadNews(ticker);
@@ -2563,6 +2648,7 @@ export default {
       allocationByType, allocationBySector, hasNonStockHoldings, startPositionEdit, cancelPositionEdit, savePosition, removePosition,
       buildFilingUrl, buildIndexUrl, getTranscriptLinks,
       formatUSD, formatPrice, formatNumber, formatPct, formatVolume, formatDate, formatRelativeTime, changeClass,
+      PERIODS, perfDiff, lastCloseDate, earnings, earningsSoon, earningsTitle, upcomingEvents,
       safeArticleUrl, onArticleClick,
     };
   },
@@ -2821,6 +2907,9 @@ export default {
           <div class="stock-row-main">
             <div class="stock-row-id">
               <span class="stock-row-ticker">{{ sym }}</span>
+              <span class="earnings-badge" v-if="earningsSoon(sym)" :class="{ estimated: !earningsSoon(sym).confirmed }" :title="earningsTitle(sym)">
+                {{ earningsSoon(sym).days === 0 ? 'Earnings today' : 'Earnings in ' + earningsSoon(sym).days + 'd' }}
+              </span>
               <span class="text-muted text-sm">{{ stockQuotes[sym]?.shortName }}</span>
             </div>
             <!-- 52-week range: today's price (●); on the Portfolio page also your average cost (│) -->
@@ -2902,6 +2991,7 @@ export default {
         <!-- used to live on the standalone Documents tab, now nested here. -->
         <div class="accordion-body" v-if="details[sym]?.open">
           <div class="filing-tabs">
+            <button class="filing-tab" :class="{ active: details[sym]?.tab === 'summary' }" @click.stop="setDetailTab(sym, 'summary')">Summary</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'chart' }" @click.stop="setDetailTab(sym, 'chart')">Charts</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'news' }" @click.stop="setDetailTab(sym, 'news')">News</button>
             <button class="filing-tab" :class="{ active: details[sym]?.tab === 'documents' }" @click.stop="setDetailTab(sym, 'documents')"><span class="label-full">Documents</span><span class="label-short" aria-hidden="true">Docs</span></button>
@@ -2917,8 +3007,91 @@ export default {
             </button>
           </div>
 
+          <!-- Summary: company profile (Wikipedia + SEC + Yahoo) and performance vs. the S&P 500 -->
+          <div class="summary-panel" v-if="details[sym]?.tab === 'summary'">
+            <template v-for="d in [details[sym].summary]" :key="sym + '-summary'">
+              <template v-if="d.loading || !d.loaded">
+                <div class="skeleton" style="height:70px;margin-bottom:12px"></div>
+                <div class="skeleton" style="height:180px"></div>
+              </template>
+              <template v-else>
+                <section class="company-profile" aria-label="Company summary">
+                  <template v-if="d.profile">
+                    <h4 class="company-name">{{ d.profile.summary?.title || d.profile.facts.name || stockQuotes[sym]?.shortName || sym }}</h4>
+                    <p class="company-summary" v-if="d.profile.summary">{{ d.profile.summary.text }}</p>
+                    <p class="text-muted text-sm company-summary" v-else>No description available for {{ sym }} — funds and some foreign listings aren't linked to a Wikipedia article.</p>
+                    <dl class="company-facts">
+                      <div v-if="d.profile.facts.sector"><dt>Sector</dt><dd>{{ d.profile.facts.sector }}</dd></div>
+                      <div v-if="d.profile.facts.industry"><dt>Industry</dt><dd>{{ d.profile.facts.industry }}</dd></div>
+                      <div v-if="d.profile.facts.headquarters"><dt>Headquarters</dt><dd>{{ d.profile.facts.headquarters }}</dd></div>
+                      <div v-if="d.profile.facts.fiscalYearEnd"><dt>Fiscal year end</dt><dd>{{ d.profile.facts.fiscalYearEnd }}</dd></div>
+                      <div v-if="d.profile.facts.secIndustry"><dt>SEC industry</dt><dd>{{ d.profile.facts.secIndustry }}</dd></div>
+                      <div v-if="d.profile.facts.name"><dt>Registered name</dt><dd>{{ d.profile.facts.name }}</dd></div>
+                    </dl>
+                    <p class="text-muted text-sm company-sources">
+                      <template v-if="d.profile.summary">Description: <a :href="d.profile.summary.url" target="_blank" rel="noopener">Wikipedia</a> (CC BY-SA). </template>
+                      <template v-if="d.profile.facts.cik">Company facts: SEC EDGAR</template><template v-if="d.profile.facts.cik && d.profile.facts.sector"> · </template><template v-if="d.profile.facts.sector">sector: Yahoo Finance</template>.
+                    </p>
+                  </template>
+                  <div class="notice" v-else>Couldn't load the company profile: {{ d.profileError }}</div>
+                </section>
+
+                <section class="events-section" aria-label="Upcoming events">
+                  <h4 class="perf-title">Upcoming events</h4>
+                  <ul class="events-list" v-if="upcomingEvents(sym).length">
+                    <li v-for="ev in upcomingEvents(sym)" :key="ev.key" class="event-row" :class="ev.kind">
+                      <span class="event-date">{{ ev.approx ? '~' : '' }}{{ formatDate(ev.date + 'T12:00:00') }}</span>
+                      <span class="event-what">
+                        <span class="event-title">{{ ev.title }}</span>
+                        <span class="event-detail text-muted" v-if="ev.detail">{{ ev.detail }}</span>
+                      </span>
+                      <span class="event-tag" :class="{ estimated: ev.estimated }">{{ ev.tag }}</span>
+                      <span class="event-days" :class="{ soon: ev.days <= 7 }">{{ ev.days === 0 ? 'today' : ev.days === 1 ? 'tomorrow' : ev.days + ' days' }}</span>
+                    </li>
+                  </ul>
+                  <p class="text-muted text-sm" style="margin:0" v-else>
+                    {{ sym in earnings ? 'No upcoming events found.' : 'Looking up events…' }}
+                  </p>
+                  <p class="text-muted text-sm events-note">
+                    Earnings dates: Nasdaq / Zacks Investment Research (confirmed when the company has announced it). Dividend dates are estimated from past payments.
+                  </p>
+                </section>
+
+                <section class="perf-section" aria-label="Performance">
+                  <h4 class="perf-title">Performance</h4>
+                  <div class="notice error" v-if="d.perfError">Couldn't load price history: {{ d.perfError }}</div>
+                  <table class="data-table perf-table" v-else>
+                    <thead>
+                      <tr>
+                        <th>Period</th>
+                        <th class="num" title="Change in the closing price">Price</th>
+                        <th class="num" title="Price change plus reinvested dividends (Yahoo's adjusted close)"><span class="perf-long">Total return</span><span class="perf-short" aria-hidden="true">Total</span></th>
+                        <th class="num" title="S&P 500 price change over the same period">S&P 500</th>
+                        <th class="num" title="Price change minus the S&P 500's, in percentage points">vs S&P</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="p in PERIODS" :key="p.id" :title="d.perf?.[p.id] ? 'From the ' + formatDate(d.perf[p.id].from + 'T12:00:00') + ' close' : 'Not enough price history'">
+                        <td><span class="perf-long">{{ p.label }}</span><span class="perf-short" aria-hidden="true">{{ p.id }}</span></td>
+                        <td class="num" :class="changeClass(d.perf?.[p.id]?.price)">{{ d.perf?.[p.id] ? formatPct(d.perf[p.id].price) : '—' }}</td>
+                        <td class="num" :class="changeClass(d.perf?.[p.id]?.total)">{{ d.perf?.[p.id] ? formatPct(d.perf[p.id].total) : '—' }}</td>
+                        <td class="num" :class="changeClass(d.spx?.[p.id]?.price)">{{ d.spx?.[p.id] ? formatPct(d.spx[p.id].price) : '—' }}</td>
+                        <td class="num" :class="changeClass(perfDiff(d.perf?.[p.id]?.price, d.spx?.[p.id]?.price))">
+                          <template v-for="x in [perfDiff(d.perf?.[p.id]?.price, d.spx?.[p.id]?.price)]">{{ x != null ? (x > 0 ? '+' : '') + x.toFixed(2) + ' pp' : '—' }}</template>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p class="text-muted text-sm perf-note" v-if="!d.perfError">
+                    To the latest close<template v-if="d.perf?.['5D']"> ({{ formatDate(lastCloseDate(d)) }})</template>. Total return reinvests dividends; the S&P 500 is its price index, so compare it with Price. pp = percentage points.
+                  </p>
+                </section>
+              </template>
+            </template>
+          </div>
+
           <!-- Charts (price history) -->
-          <template v-if="details[sym]?.tab === 'chart'">
+          <template v-else-if="details[sym]?.tab === 'chart'">
             <div class="chart-filters" style="padding:12px 16px 0">
               <div class="range-btn-group">
                 <button
@@ -3295,7 +3468,7 @@ ${OPTION_FORM}
               <a href="#" @click.prevent="$emit('go-account')">Sign in</a> to create alerts.
             </div>
             <template v-else>
-              <AlertForm v-if="alertForms[sym]" :symbol="sym" :quote="stockQuotes[sym]" :avg-cost="positionFor(sym)?.avgCost ?? null"
+              <AlertForm v-if="alertForms[sym]" :symbol="sym" :quote="stockQuotes[sym]" :avg-cost="positionFor(sym)?.avgCost ?? null" :earnings="earnings[sym] ?? null"
                          :initial="alertForms[sym].initial" :submit-label="alertForms[sym].alertId ? 'Save changes' : 'Create alert'"
                          :busy="alertForms[sym].busy" :error="alertForms[sym].error"
                          @save="submitAlert(sym, $event)" @cancel="closeAlertForm(sym)" />

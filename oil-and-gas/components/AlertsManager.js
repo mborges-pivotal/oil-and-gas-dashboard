@@ -5,6 +5,7 @@ import { alertsStore, loadAlerts, saveAlert, setAlertActive, removeAlert } from 
 import { describeAlert, alertStatus, alertSubject } from '../utils/alerts.js';
 import { parseOcc } from '../utils/options.js';
 import { fetchQuote } from '../services/yahooFinance.js';
+import { fetchEarnings } from '../services/events.js';
 
 // Status filter chips.
 const FILTERS = [
@@ -71,13 +72,14 @@ export default {
     async function startEdit(a) {
       composing.value = false;
       delete rowErrors[a.id];
-      editing.value = { id: a.id, symbol: a.symbol, initial: a, quote: null, underlyingPrice: null, busy: false, error: null };
+      editing.value = { id: a.id, symbol: a.symbol, initial: a, quote: null, underlyingPrice: null, earnings: null, busy: false, error: null };
       // The form's "= 172.21" helpers and 52-week prefills use the current
       // quote (and an option's, its stock's); it works without, so failures are fine.
       const o = parseOcc(a.symbol);
       await Promise.all([
         fetchQuote(a.symbol).then(q => { if (editing.value?.id === a.id) editing.value.quote = q; }).catch(() => {}),
         o && fetchQuote(o.underlying).then(q => { if (editing.value?.id === a.id) editing.value.underlyingPrice = q.price; }).catch(() => {}),
+        !o && fetchEarnings([a.symbol]).then(e => { if (editing.value?.id === a.id) editing.value.earnings = e[a.symbol] ?? null; }).catch(() => {}),
       ]);
     }
     async function submitEdit(fields) {
@@ -166,7 +168,7 @@ export default {
           <ul class="alert-list">
             <li v-for="a in g.alerts" :key="a.id" class="alert-item" :class="{ inactive: !a.active, editing: editing?.id === a.id }">
               <AlertForm v-if="editing?.id === a.id" :symbol="a.symbol" :quote="editing.quote" :avg-cost="avgCostFor(a.symbol)"
-                         :option="optionFor(a.symbol)" :underlying-price="editing.underlyingPrice"
+                         :option="optionFor(a.symbol)" :underlying-price="editing.underlyingPrice" :earnings="editing.earnings"
                          :initial="editing.initial" submit-label="Save changes"
                          :busy="editing.busy" :error="editing.error"
                          @save="submitEdit" @cancel="editing = null" />

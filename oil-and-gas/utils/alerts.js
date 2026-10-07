@@ -15,6 +15,7 @@ export const ALERT_KINDS = [
   { id: 'high52',   label: '52-week high' },
   { id: 'low52',    label: '52-week low' },
   { id: 'volume',   label: 'Volume spike' },
+  { id: 'earnings', label: 'Earnings coming up' },
 ];
 
 // Option contracts: the premium's price/daily/position alerts, plus expiry and moneyness.
@@ -50,6 +51,8 @@ export function describeAlert(a) {
       return `Volume ${p.multiple}× the 3-month average`;
     case 'expiry':
       return p.days ? `${p.days} day${p.days === 1 ? '' : 's'} or less to expiration` : 'On expiration day';
+    case 'earnings':
+      return p.days ? `Earnings within ${p.days} day${p.days === 1 ? '' : 's'}` : 'On earnings day';
     case 'strike':
       return `Goes ${p.state === 'itm' ? 'in' : 'out of'} the money`;
     default:
@@ -74,6 +77,7 @@ export function alertPresets({ hasPosition }) {
     ] : []),
     { label: '52-wk high',    kind: 'high52', params: { within: 0 } },
     { label: 'Volume 2×',     kind: 'volume', params: { multiple: 2 }, repeat: 'daily' },
+    { label: 'Earnings in 7d', kind: 'earnings', params: { days: 7 } },
   ];
 }
 

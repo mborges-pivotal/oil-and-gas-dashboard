@@ -28,6 +28,7 @@
  *   high52    { within }   price at/within X% of the 52-week high (0 = at it)
  *   low52     { within }   … of the 52-week low
  *   volume    { multiple } today's volume ≥ N × 3-month average
+ *   earnings  { days }     the next earnings report is N or fewer days away (Nasdaq/Zacks)
  * Option contracts (symbol = OCC, e.g. XOM261218C00170000) take price, daily
  * and position (premium; a short position gains as the premium falls) plus:
  *   expiry    { days }                    N or fewer days to expiration
@@ -37,13 +38,14 @@
 
 const db = require('./db');
 const { dispatch, requireUser, readJsonBody, sendJson, HttpError } = require('./auth');
+const { getEarnings } = require('./events');
 
 const MAX_ALERTS = 200;
 const MAX_BULK = 50;
 const MAX_NOTE_LENGTH = 500;
 const TICKER_RE = /^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$/; // matches server/watchlists.js
-const KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume', 'expiry', 'strike'];
-const STOCK_KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume'];
+const KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume', 'earnings', 'expiry', 'strike'];
+const STOCK_KINDS = ['price', 'daily', 'position', 'high52', 'low52', 'volume', 'earnings'];
 const OPTION_KINDS = ['price', 'daily', 'position', 'expiry', 'strike'];
 const NEAR_TOLERANCE_PCT = 0.1;   // "at" a 52-week high/low allows 0.1%
 const CHECK_MIN_INTERVAL_MS = 15 * 1000;
@@ -120,6 +122,7 @@ function validateParams(kind, p) {
       return { within: num(p.within ?? 0, 'Within', { min: 0, max: 50 }) };
     case 'volume':
       return { multiple: num(p.multiple, 'Multiple', { gt: 1, max: 100 }) };
+    case 'earnings':
     case 'expiry': {
       const days = num(p.days, 'Days', { min: 0, max: 365 });
       if (!Number.isInteger(days)) throw new HttpError(400, 'Days must be a whole number');
@@ -181,6 +184,8 @@ function describe(a) {
       return `Volume ${p.multiple}× the 3-month average`;
     case 'expiry':
       return p.days ? `${p.days} day${p.days === 1 ? '' : 's'} or less to expiration` : 'Expiration day';
+    case 'earnings':
+      return p.days ? `Earnings within ${p.days} day${p.days === 1 ? '' : 's'}` : 'Earnings day';
     case 'strike':
       return `Goes ${p.state === 'itm' ? 'in' : 'out of'} the money`;
     default:
@@ -261,6 +266,17 @@ function evaluate(alert, q, avgCost, ctx = {}) {
     if (days < 0 || days > p.days) return null;
     return { title: days === 0 ? `${s} expires today` : `${s} expires in ${days} day${days === 1 ? '' : 's'}`, detail: `Expiration ${o.expiry}` };
   }
+  if (alert.kind === 'earnings') {
+    const e = ctx.earnings;
+    if (!e?.date) return null;
+    const days = daysBetween(q.day, e.date);
+    if (days < 0 || days > p.days) return null;
+    const when = e.time === 'before-open' ? ' before the open' : e.time === 'after-close' ? ' after the close' : '';
+    return {
+      title: days === 0 ? `${s} reports earnings today${when}` : `${s} reports earnings in ${days} day${days === 1 ? '' : 's'}`,
+      detail: `Earnings ${e.date}${when}${e.confirmed ? '' : ' (estimated date)'}` + (e.epsForecast != null ? ` · consensus EPS ${usd(e.epsForecast)}` : ''),
+    };
+  }
   if (alert.kind === 'strike') {
     const u = ctx.underlying?.price;
     if (!o || !(u > 0)) return null;
@@ -330,13 +346,16 @@ async function runCheck(userId, onlyIds = null) {
   for (const alert of active) {
     const option = parseOcc(alert.symbol);
     let q = quotes.get(alert.symbol);
-    // An expiration countdown doesn't need the contract's quote (an expired
-    // or untraded contract may have none) — only today's date in New York.
-    if (!q && alert.kind === 'expiry') q = { day: dayIn('America/New_York', Math.floor(Date.now() / 1000)), price: null };
+    // Date countdowns don't need a quote (an expired or untraded contract may
+    // have none) — only today's date in New York.
+    if (!q && (alert.kind === 'expiry' || alert.kind === 'earnings')) q = { day: dayIn('America/New_York', Math.floor(Date.now() / 1000)), price: null };
     if (!q) continue;
     if (alert.repeat === 'daily' && alert.lastTriggeredDay === q.day) continue;
     const pos = option ? options[alert.symbol] : portfolio[alert.symbol];
     const ctx = option ? { short: pos?.side === 'short', underlying: quotes.get(option.underlying) } : {};
+    if (alert.kind === 'earnings') {
+      try { ctx.earnings = await getEarnings(alert.symbol); } catch { continue; } // try again next round
+    }
     const hit = evaluate(alert, q, Number(pos?.avgCost), ctx);
     if (!hit) continue;
     const body = [hit.detail, `Alert: ${describe(alert)}${alert.repeat === 'daily' ? ' (daily)' : ''}`, alert.note].filter(Boolean).join('\n');
