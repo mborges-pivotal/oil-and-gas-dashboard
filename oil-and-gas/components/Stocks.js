@@ -2348,7 +2348,7 @@ export default {
       { id: 'chg',     label: 'Chg' },
       { id: 'chgPct',  label: 'Chg %' },
       { id: 'volume',  label: 'Vol' },
-      { id: 'value',   label: 'Value' },
+      { id: 'value',   label: 'Weight' }, // = market value
       { id: 'gain',    label: 'G/L' },
       { id: 'gainPct', label: 'G/L %' },
     ];
@@ -2407,6 +2407,14 @@ export default {
       return [...base].sort((a, b) => cmp(val(a), val(b), dir) || a.localeCompare(b));
     });
     holdingsOrder.value = sortedHoldings;
+    // Each holding's share of the Holdings' total market value (options have
+    // their own card). Waits for every price, like the totals.
+    function holdingWeight(sym) {
+      const total = portfolioTotals.value?.value;
+      const value = positionSummary(sym)?.value;
+      if (!(total > 0) || value == null) return null;
+      return { pct: (value / total) * 100, value, total };
+    }
     // Options: by expiration they're grouped by date; any other sort is one flat list.
     const sortedOptions = computed(() => {
       const { key, dir } = optionSort.value;
@@ -2639,7 +2647,7 @@ export default {
       categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
       isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
       openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
-      HOLDING_SORTS, OPTION_SORTS, holdingSort, optionSort, setSort, sortedOptions,
+      HOLDING_SORTS, OPTION_SORTS, holdingSort, optionSort, setSort, sortedOptions, holdingWeight,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
       notesStore, findNote, noteForms, noteKey, openNoteForm, closeNoteForm, saveNewNote,
@@ -2905,12 +2913,21 @@ export default {
             @keydown="onHandleKeydown($event, sym)"
           >⠿</button>
           <div class="stock-row-main">
-            <div class="stock-row-id">
+            <div class="stock-row-id" :class="{ 'has-weight': portfolioOnly && holdingWeight(sym) }">
               <span class="stock-row-ticker">{{ sym }}</span>
               <span class="earnings-badge" v-if="earningsSoon(sym)" :class="{ estimated: !earningsSoon(sym).confirmed }" :title="earningsTitle(sym)">
                 {{ earningsSoon(sym).days === 0 ? 'Earnings today' : 'Earnings in ' + earningsSoon(sym).days + 'd' }}
               </span>
               <span class="text-muted text-sm">{{ stockQuotes[sym]?.shortName }}</span>
+              <!-- Portfolio page: this holding's share of the Holdings' market value -->
+              <template v-if="portfolioOnly && holdingWeight(sym)">
+              <span class="holding-weight" v-for="w in [holdingWeight(sym)]" :key="'w-' + sym"
+                    :title="sym + ' is ' + w.pct.toFixed(1) + '% of your holdings (' + formatUSD(w.value) + ' of ' + formatUSD(w.total) + ')'">
+                <span class="holding-weight-bar" aria-hidden="true"><span :style="{ width: Math.max(2, w.pct) + '%' }"></span></span>
+                <span class="holding-weight-pct">{{ w.pct < 0.1 ? '<0.1' : w.pct.toFixed(1) }}%</span>
+                <span class="holding-weight-value">{{ formatUSD(w.value) }}</span>
+              </span>
+              </template>
             </div>
             <!-- 52-week range: today's price (●); on the Portfolio page also your average cost (│) -->
             <template v-for="r in [rangeFor(sym, portfolioOnly && !!positionFor(sym))]" :key="'r52-' + sym">

@@ -553,6 +553,13 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .stock-row-id { display: flex; align-items: baseline; gap: 8px; min-width: 0; overflow: hidden; }
 .stock-row-id > .text-muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .stock-row-ticker { font-weight: 700; flex: none; }
+/* Portfolio holdings: % of the Holdings' market value */
+.stock-row-id.has-weight { flex-wrap: wrap; row-gap: 4px; }
+.holding-weight { flex-basis: 100%; display: flex; align-items: center; gap: 8px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.holding-weight-bar { flex: none; width: 90px; height: 6px; border-radius: 3px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+.holding-weight-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+.holding-weight-pct { font-weight: 700; min-width: 42px; }
+.holding-weight-value { color: var(--text-muted); }
 .stock-row-metrics {
   display: grid;
   grid-template-columns: 76px 76px 64px 64px 80px;
