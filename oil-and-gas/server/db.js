@@ -116,6 +116,21 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS alerts_user_id ON alerts(user_id);
 
+  -- External bank accounts (Profile → Bank accounts), the source of deposits
+  -- into the account's cash. Only the last 4 digits of the number are kept.
+  -- Nothing is verified yet: status is set by the user.
+  CREATE TABLE IF NOT EXISTS bank_accounts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    bank       TEXT NOT NULL,
+    last4      TEXT NOT NULL,
+    type       TEXT NOT NULL DEFAULT 'checking',
+    status     TEXT NOT NULL DEFAULT 'connected',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS bank_accounts_user_id ON bank_accounts(user_id);
+
   -- Triggered alerts — what Inbox → Alerts lists. Kept if the alert is deleted.
   CREATE TABLE IF NOT EXISTS alert_events (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,6 +229,12 @@ function migrateAlertEventAck() {
 migrateAlertEventAck();
 
 const stmts = {
+  bankAccounts: db.prepare('SELECT * FROM bank_accounts WHERE user_id = ? ORDER BY created_at, id'),
+  bankAccount: db.prepare('SELECT * FROM bank_accounts WHERE id = ? AND user_id = ?'),
+  countBankAccounts: db.prepare('SELECT COUNT(*) AS n FROM bank_accounts WHERE user_id = ?'),
+  insertBankAccount: db.prepare('INSERT INTO bank_accounts (user_id, bank, last4, type, status) VALUES (?, ?, ?, ?, ?)'),
+  updateBankAccount: db.prepare(`UPDATE bank_accounts SET bank = ?, type = ?, status = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?`),
+  deleteBankAccount: db.prepare('DELETE FROM bank_accounts WHERE id = ? AND user_id = ?'),
   // Alerts — scoped by user_id like everything else.
   alerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? ORDER BY symbol, created_at, id'),
   activeAlerts: db.prepare('SELECT * FROM alerts WHERE user_id = ? AND active = 1'),
@@ -427,6 +448,17 @@ function inTransaction(fn) {
   }
 }
 
+function toBankAccount(row) {
+  return row && {
+    id: row.id,
+    bank: row.bank,
+    last4: row.last4,
+    type: row.type,
+    status: row.status,
+    createdAt: toIso(row.created_at),
+  };
+}
+
 function toAlert(row) {
   return row && {
     id: row.id,
@@ -457,6 +489,13 @@ function toAlertEvent(row) {
 }
 
 module.exports = {
+  listBankAccounts: userId => stmts.bankAccounts.all(userId).map(toBankAccount),
+  getBankAccount: (userId, id) => toBankAccount(stmts.bankAccount.get(id, userId)),
+  countBankAccounts: userId => stmts.countBankAccounts.get(userId).n,
+  createBankAccount: (userId, { bank, last4, type, status }) =>
+    Number(stmts.insertBankAccount.run(userId, bank, last4, type, status).lastInsertRowid),
+  updateBankAccount: (userId, id, { bank, type, status }) => stmts.updateBankAccount.run(bank, type, status, id, userId).changes > 0,
+  deleteBankAccount: (userId, id) => stmts.deleteBankAccount.run(id, userId).changes > 0,
   DB_PATH,
   createUser,
   getProfile,

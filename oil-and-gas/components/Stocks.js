@@ -2,6 +2,7 @@ const { ref, shallowRef, reactive, onMounted, onUnmounted, computed, nextTick, w
 import { fetchQuote, fetchChart, fetchKeyStats, fetchTickerNews, searchSymbols, fetchSector, fetchPriceHistory } from '../services/yahooFinance.js';
 import { fetchCompanyProfile } from '../services/companyProfile.js';
 import { fetchEarnings } from '../services/events.js';
+import { fetchBankAccounts, BANK_TYPES } from '../services/bankAccounts.js';
 import { estimateNextDividend } from '../utils/dividends.js';
 import { PERIODS, computePerformance } from '../utils/performance.js';
 import { CATEGORIES, CATEGORY_LABELS, CATEGORY_SHORT, autoCategory, buildSlices, assignSlots, shortSector } from '../utils/allocation.js';
@@ -20,8 +21,10 @@ import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
 import PortfolioActivity from './PortfolioActivity.js';
+import PortfolioChart from './PortfolioChart.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
+import { portfolioList, mergePortfolios, emptyPortfolio, newPortfolioId, summarizePortfolio, DEFAULT_PORTFOLIO_NAME } from '../utils/portfolios.js';
 import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
@@ -128,7 +131,7 @@ const OPTION_FORM = `
                   <label>
                     <span>{{ optionForms[sym].side === 'long' ? 'Pay from' : 'Deposit to' }}</span>
                     <select :value="optionCashFor(sym)" @change="optionForms[sym].cash = $event.target.value; optionForms[sym].error = null">
-                      <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                      <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.label }} — {{ formatUSD(c.available) }}</option>
                       <option value="">Outside the portfolio</option>
                     </select>
                   </label>
@@ -159,13 +162,13 @@ const OPTION_FORM = `
                           <span>Reserve from</span>
                           <select :value="cv.src?.symbol ?? ''" :disabled="cv.locked || !cashSources(sym).length"
                                   @change="optionForms[sym].reserveFrom = $event.target.value; optionForms[sym].error = null">
-                            <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }} available</option>
+                            <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.label }} — {{ formatUSD(c.available) }} available</option>
                             <option v-if="!cashSources(sym).length" value="">No cash holding</option>
                           </select>
                         </label>
                       </div>
                       <p class="option-cover-detail" v-if="cv.src">
-                        {{ cv.src.symbol }}: {{ formatUSD(cv.available) }} available{{ cv.withPremium ? ' (with the premium)' : '' }} → {{ formatUSD(cv.after) }} available ({{ formatUSD(cv.obligation) }} reserved)
+                        {{ cv.src.label }}: {{ formatUSD(cv.available) }} available{{ cv.withPremium ? ' (with the premium)' : '' }} → {{ formatUSD(cv.after) }} available ({{ formatUSD(cv.obligation) }} reserved)
                         <span class="negative" v-if="!cv.enough"><br />Not enough available cash to secure this put.</span>
                       </p>
                       <p class="option-cover-detail negative" v-else>Securing a put needs a Cash holding in your portfolio.</p>
@@ -192,7 +195,7 @@ const OPTION_FORM = `
                       Breakeven {{ formatPrice(pv.breakeven) }} at expiration
                       <template v-if="pv.was"> · {{ pv.quantity }} contracts at an average of {{ formatPrice(pv.avg) }} (was {{ pv.was.quantity }} at {{ formatPrice(pv.was.avgCost) }})</template>
                       <br />
-                      <template v-if="pv.cash">{{ pv.cash.symbol }}: {{ formatUSD(pv.cash.available) }} → {{ formatUSD(pv.cash.after) }}<span class="negative" v-if="pv.cash.after < -0.005"> — not enough cash</span></template>
+                      <template v-if="pv.cash">{{ cashName(pv.cash.symbol) }}: {{ formatUSD(pv.cash.available) }} → {{ formatUSD(pv.cash.after) }}<span class="negative" v-if="pv.cash.after < -0.005"> — not enough cash</span></template>
                       <span class="text-muted" v-else>{{ pv.debit ? 'Paid from outside the portfolio.' : 'Not deposited to a cash holding.' }}</span>
                     </template>
                   </template>
@@ -271,7 +274,7 @@ const OPTION_ITEM = `
                       <label v-if="Number(closeForms[occ].price) > 0">
                         <span>{{ o.side === 'short' ? 'Pay from' : 'Deposit to' }}</span>
                         <select :value="closeCashFor(occ)" @change="closeForms[occ].cash = $event.target.value; closeForms[occ].error = null">
-                          <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                          <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.label }} — {{ formatUSD(c.available) }}</option>
                           <option value="">Outside the portfolio</option>
                         </select>
                       </label>
@@ -283,7 +286,7 @@ const OPTION_ITEM = `
                         <span class="negative" v-if="cp.tooMany">more than you have</span>
                         <strong v-else-if="cp.closes">closes the position (moves to Closed positions)</strong>
                         <template v-else>{{ cp.remaining }} contract{{ cp.remaining === 1 ? '' : 's' }} left</template>
-                        <template v-if="cp.cash"><br />{{ cp.cash.symbol }}: {{ formatUSD(cp.cash.available) }} → {{ formatUSD(cp.cash.after) }}</template>
+                        <template v-if="cp.cash"><br />{{ cashName(cp.cash.symbol) }}: {{ formatUSD(cp.cash.available) }} → {{ formatUSD(cp.cash.after) }}</template>
                       </template>
                     </p>
                     <div class="notice error portfolio-error" v-if="closeForms[occ].error">{{ closeForms[occ].error }}</div>
@@ -340,7 +343,7 @@ const OPTION_ITEM = `
                           <td>
                             {{ formatDate(tx.date + 'T12:00:00') }}
                             <div class="tx-from">
-                              {{ tx.type === 'close' ? (tx.expired ? 'Expired' : o.side === 'short' ? 'Buy to close' : 'Sell to close') : (o.side === 'short' ? 'Sell to open' : 'Buy to open') }}<template v-if="tx.cash"> · {{ tx.cashDir === 'out' ? 'from' : 'to' }} {{ tx.cash }}</template>
+                              {{ tx.type === 'close' ? (tx.expired ? 'Expired' : o.side === 'short' ? 'Buy to close' : 'Sell to close') : (o.side === 'short' ? 'Sell to open' : 'Buy to open') }}<template v-if="tx.cash"> · {{ tx.cashDir === 'out' ? 'from' : 'to' }} {{ cashName(tx.cash) }}</template>
                             </div>
                           </td>
                           <td class="num" :class="tx.type === 'close' ? 'negative' : ''">{{ (tx.type === 'close' ? '−' : '+') + tx.quantity }}</td>
@@ -392,7 +395,7 @@ const TRANSFER_PICKER = `
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioChart },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
@@ -400,7 +403,7 @@ export default {
   // set-position: { symbol, position: { quantity, avgCost, category?, transactions? } | null }
   //   or { updates: { SYMBOL: position | null } } to save several together — for config.portfolio
   // go-notes: open the Notes tab (from a news item already saved there)
-  emits: ['set-tickers', 'set-position', 'updated', 'go-account', 'go-notes'],
+  emits: ['set-tickers', 'set-position', 'move-position', 'set-portfolios', 'set-account-cash', 'updated', 'go-account', 'go-notes', 'go-bank-accounts'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -417,11 +420,125 @@ export default {
     const activeList = computed(() =>
       customLists.value.find(l => String(l.id) === activeListId.value) ?? null
     );
-    // The Portfolio page (portfolioOnly) is a virtual, read-only list: every
-    // ticker with a saved position (config.portfolio), in the order added.
-    // Option contracts have their own Options card (and each stock's Portfolio tab).
+    // ── Portfolios (config.portfolios — see utils/portfolios.js) ──
+    // The Account page (portfolioOnly) has sub-tabs Summary · Portfolios ·
+    // Activity; under Portfolios, a card per portfolio, and an opened one
+    // shows its holdings, options and closed positions. On Markets, each
+    // stock's Portfolio tab works in one portfolio at a time, chosen there.
+    const portfolios = computed(() => portfolioList(props.config));
+    const allPf = computed(() => mergePortfolios(portfolios.value));
+    const portfolioById = id => portfolios.value.find(p => p.id === id) ?? null;
+
+    const PORTFOLIO_TABS = [
+      { id: 'summary',    label: 'Summary' },
+      { id: 'portfolios', label: 'Portfolios' },
+      { id: 'activity',   label: 'Activity' },
+    ];
+    const PF_TAB_KEY = 'oilgas_portfolio_tab';
+    const pfTab = ref((() => {
+      try {
+        const saved = localStorage.getItem(PF_TAB_KEY);
+        if (saved === 'positions') return 'portfolios'; // renamed
+        if (PORTFOLIO_TABS.some(t => t.id === saved)) return saved;
+      } catch { /* none saved */ }
+      return 'summary';
+    })());
+    watch(pfTab, t => { try { localStorage.setItem(PF_TAB_KEY, t); } catch { /* per-browser only */ } });
+    const openPfId = ref(null); // the portfolio opened from its card
+    const openPf = computed(() => (props.portfolioOnly && pfTab.value === 'portfolios' && openPfId.value ? portfolioById(openPfId.value) : null));
+    // What the Account page shows: an opened portfolio, else all of them combined.
+    const viewPf = computed(() => openPf.value ?? allPf.value);
+    // Holdings / Options / Closed positions (and their quotes) — inside an opened portfolio.
+    const onPositions = computed(() => !props.portfolioOnly || !!openPf.value);
+    watch(pfTab, () => { openPfId.value = null; });
+
+    // Markets → a stock's Portfolio tab: which portfolio it's working in.
+    // { id } or { id: null, newName } for "＋ New portfolio" (created on the first save).
+    const pfChoice = reactive({});
+    const LAST_PF_KEY = 'oilgas_last_portfolio';
+    function holdsIn(pf, ticker) {
+      return !!(pf.portfolio?.[ticker]?.quantity > 0
+        || Object.values(pf.optionPositions ?? {}).some(o => o?.quantity > 0 && o.underlying === ticker));
+    }
+    function defaultPfId(ticker) {
+      const list = portfolios.value;
+      const holding = list.find(pf => holdsIn(pf, ticker));
+      if (holding) return holding.id;
+      let last = null;
+      try { last = localStorage.getItem(LAST_PF_KEY); } catch { /* none */ }
+      return (list.find(p => p.id === last) ?? list[0])?.id ?? null;
+    }
+    // The portfolio a stock's positions are read from and saved to.
+    function pfFor(ticker) {
+      if (props.portfolioOnly) return viewPf.value;
+      const c = pfChoice[ticker];
+      if (c && c.id === null) return { ...emptyPortfolio(c.newName ?? '', null), pending: true };
+      const pf = portfolioById(c?.id ?? defaultPfId(ticker));
+      return pf ?? { ...emptyPortfolio(DEFAULT_PORTFOLIO_NAME, null), pending: true };
+    }
+    function choosePortfolio(ticker, value) {
+      if (value === '__new') pfChoice[ticker] = { id: null, newName: '' };
+      else {
+        pfChoice[ticker] = { id: value };
+        try { localStorage.setItem(LAST_PF_KEY, value); } catch { /* per-browser only */ }
+      }
+      // Nothing held there yet: straight to "add a purchase".
+      if (!positionFor(ticker) && !optionsFor(ticker).length && !positionForms[ticker]) startPurchase(ticker);
+    }
+    // Where a save goes: the stock's portfolio, creating it first when it's new.
+    function pfTarget(ticker) {
+      const pf = pfFor(ticker);
+      if (pf.id) return { portfolioId: pf.id };
+      const name = (pf.name || '').trim().replace(/\s+/g, ' ').slice(0, 40) || DEFAULT_PORTFOLIO_NAME;
+      const id = newPortfolioId();
+      if (!props.portfolioOnly) {
+        pfChoice[ticker] = { id };
+        try { localStorage.setItem(LAST_PF_KEY, id); } catch { /* per-browser only */ }
+      }
+      return { portfolioId: id, newPortfolio: { id, name } };
+    }
+    function newPortfolioNameError(ticker) {
+      const pf = pfFor(ticker);
+      if (!pf.pending) return null;
+      const name = (pf.name || '').trim() || DEFAULT_PORTFOLIO_NAME;
+      return portfolios.value.some(p => p.name.toLowerCase() === name.toLowerCase()) ? `You already have a portfolio named "${name}".` : null;
+    }
+    function emitPosition(ticker, payload) {
+      emit('set-position', { ...withCash(payload), ...pfTarget(ticker) });
+    }
+
+    // Account → Portfolios: create, rename, delete; each card's headline numbers.
+    const pfForm = ref(null); // { mode: 'create' | 'rename', name, error }
+    function openPfForm(mode) {
+      pfForm.value = { mode, name: mode === 'rename' ? openPf.value?.name ?? '' : '', error: null };
+    }
+    function submitPfForm() {
+      const f = pfForm.value;
+      const name = f.name.trim().replace(/\s+/g, ' ').slice(0, 40);
+      if (!name) { f.error = 'Name the portfolio.'; return; }
+      const others = portfolios.value.filter(p => f.mode === 'create' || p.id !== openPf.value?.id);
+      if (others.some(p => p.name.toLowerCase() === name.toLowerCase())) { f.error = `You already have a portfolio named "${name}".`; return; }
+      if (f.mode === 'create') emit('set-portfolios', [...portfolios.value, emptyPortfolio(name)]);
+      else emit('set-portfolios', portfolios.value.map(p => (p.id === openPf.value.id ? { ...p, name } : p)));
+      pfForm.value = null;
+    }
+    function deletePortfolio() {
+      const pf = openPf.value;
+      if (!pf) return;
+      const n = Object.values(pf.portfolio ?? {}).filter(p => p?.quantity > 0).length + openOptionsIn(pf).length;
+      const closed = (pf.closedPositions ?? []).length;
+      const what = [n && `${n} open position${n === 1 ? '' : 's'}`, closed && `${closed} closed`].filter(Boolean).join(' and ');
+      if (!confirm(`Delete the "${pf.name}" portfolio${what ? ` and its ${what}` : ''}? This can't be undone.`)) return;
+      emit('set-portfolios', portfolios.value.filter(p => p.id !== pf.id));
+      openPfId.value = null;
+    }
+    const quoteOf = sym => (parseOcc(sym.split('#')[0]) ? optionQuotes[sym.split('#')[0]] : stockQuotes[sym]);
+    const pfMetrics = pf => summarizePortfolio(pf, quoteOf, (sym, p) => (p.category || autoCategoryFor(sym)) === 'cash');
+
+    // The Account page's holdings: every stock with a position in the
+    // portfolio being shown (or in any portfolio, combined), in the order added.
     const portfolioTickers = computed(() =>
-      Object.entries(props.config.portfolio ?? {})
+      Object.entries(viewPf.value.portfolio ?? {})
         .filter(([, p]) => p?.quantity > 0)
         .map(([sym]) => sym)
     );
@@ -1148,7 +1265,7 @@ export default {
     // A mover in the list below: open its card and bring it into view.
     function openMover(sym) {
       if (!tickers.value.includes(sym)) return;
-      if (props.portfolioOnly) { holdingsOpen.value = true; pfTab.value = 'positions'; }
+      if (props.portfolioOnly) holdingsOpen.value = true; // movers only show inside an opened portfolio
       ensureDetail(sym);
       if (!details[sym].open) toggleDetail(sym);
       nextTick(() => watchlistEl.value?.querySelector(`[data-ticker="${CSS.escape(sym)}"]`)
@@ -1307,7 +1424,7 @@ export default {
       }
       const byExpiry = new Map();
       for (const occ of optionsFor(sym)) {
-        const o = optionPositions.value[occ];
+        const o = optPos(occ);
         if (daysUntil(o.expiry) < 0) continue;
         if (!byExpiry.has(o.expiry)) byExpiry.set(o.expiry, []);
         byExpiry.get(o.expiry).push(`${o.quantity} × ${optionLabel(o, { withUnderlying: false }).replace(/^\w+ \d+ '\d+ /, '')}${o.side === 'short' ? ' (short)' : ''}`);
@@ -1465,7 +1582,7 @@ export default {
 
 
     function positionFor(ticker) {
-      const p = props.config.portfolio?.[ticker];
+      const p = pfFor(ticker)?.portfolio?.[ticker];
       return p && p.quantity > 0 ? p : null;
     }
 
@@ -1494,12 +1611,14 @@ export default {
       }
       const covering = sharesCovering(ticker);
       if (quantity < covering - 1e-9) { f.error = `${formatShares(covering)} shares cover open calls — the quantity can't go below that.`; return; }
+      const pfErr = newPortfolioNameError(ticker);
+      if (pfErr) { f.error = pfErr; return; }
       const position = { quantity, avgCost };
       if (f.category) position.category = f.category;
       // Editing the totals keeps the purchase history.
       const txs = positionFor(ticker)?.transactions;
       if (txs?.length) position.transactions = txs;
-      emit('set-position', { symbol: ticker, position });
+      emitPosition(ticker, { symbol: ticker, position });
       delete positionForms[ticker];
     }
 
@@ -1522,7 +1641,7 @@ export default {
       };
       delete saleForms[ticker];
       // Cash holdings are found by asset type, which needs each holding's quote.
-      const missing = Object.keys(props.config.portfolio ?? {}).filter(sym => !stockQuotes[sym]);
+      const missing = Object.keys(pfFor(ticker).portfolio ?? {}).filter(sym => !stockQuotes[sym]);
       if (missing.length) fetchStockQuotes(missing);
     }
 
@@ -1530,21 +1649,60 @@ export default {
     // Holdings whose asset type is Cash (money-market funds like SPAXX, or set
     // to Cash by hand), other than the stock being bought, with what's
     // available at the current price ($1 NAV when there's no quote yet).
-    // `available` is what's not reserved for cash-secured puts (see cashReserved).
+    // ── The account's cash (config.accountCash): deposits from your bank
+    // accounts land here; purchases can pay from it and sales deposit to it,
+    // like a cash holding. Shown in cash pickers as "Account cash" (key CASH).
+    const ACCOUNT_CASH = 'CASH';
+    const CASH_DELTA = '__accountCash'; // in a save's `updates`: change to the balance
+    const accountCash = computed(() => props.config.accountCash ?? { balance: 0, deposits: [] });
+    const cashName = sym => (sym === ACCOUNT_CASH ? 'Account cash' : sym);
+    // Change a cash balance in a save: a holding in `pf`, or the account's cash.
+    function cashAdjust(updates, pf, sym, shares) {
+      if (sym === ACCOUNT_CASH) {
+        updates[CASH_DELTA] = (updates[CASH_DELTA] ?? 0) + shares;
+        return;
+      }
+      const cur = sym in updates ? updates[sym] : pf.portfolio?.[sym] ?? null;
+      if (!cur) {
+        // Gone since: money coming back re-creates it; money going out is lost.
+        if (shares > 0) updates[sym] = { quantity: shares, avgCost: 1, category: 'cash' };
+        return;
+      }
+      const left = cur.quantity + shares;
+      updates[sym] = left > 1e-9 ? { ...cur, quantity: left } : null;
+    }
+    // A save's payload with the account-cash change pulled out of `updates`.
+    function withCash(payload) {
+      const u = payload.updates;
+      if (!u || !(CASH_DELTA in u)) return payload;
+      const { [CASH_DELTA]: cashDelta, ...updates } = u;
+      return { ...payload, updates, cashDelta };
+    }
+
+    // Where money can come from / go to for `ticker`: cash holdings in its
+    // portfolio, then the account's cash (signed in). `available` is what's
+    // not reserved for cash-secured puts (see cashReserved).
     function cashSources(ticker) {
-      return Object.entries(props.config.portfolio ?? {})
-        .filter(([sym, p]) => sym !== ticker && p?.quantity > 0 && categoryFor(sym) === 'cash')
+      const pf = pfFor(ticker);
+      const holdings = Object.entries(pf.portfolio ?? {})
+        .filter(([sym, p]) => sym !== ticker && p?.quantity > 0 && (p.category || autoCategoryFor(sym)) === 'cash')
         .map(([sym, p]) => {
           const price = stockQuotes[sym]?.price || 1;
           const balance = p.quantity * price;
-          const reserved = cashReserved(sym);
-          return { symbol: sym, price, balance, reserved, available: balance - reserved };
+          const reserved = cashReserved(sym, pf);
+          return { symbol: sym, label: sym, price, balance, reserved, available: balance - reserved };
         });
+      if (!props.user) return holdings;
+      const balance = accountCash.value.balance ?? 0;
+      const reserved = cashReserved(ACCOUNT_CASH);
+      return [...holdings, { symbol: ACCOUNT_CASH, label: 'Account cash', price: 1, balance, reserved, available: balance - reserved }];
     }
+    // Paying: the first source with money in it, else "Outside the portfolio".
+    const fundedSource = ticker => cashSources(ticker).find(c => c.available > 0.005)?.symbol ?? '';
     function payFromFor(ticker) {
       const f = purchaseForms[ticker];
       if (!f) return '';
-      return f.payFrom ?? cashSources(ticker)[0]?.symbol ?? '';
+      return f.payFrom ?? fundedSource(ticker);
     }
     function cancelPurchase(ticker) {
       delete purchaseForms[ticker];
@@ -1574,6 +1732,8 @@ export default {
       if (!(price > 0) || !Number.isFinite(price)) { f.error = 'Enter the price per share.'; return; }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the purchase date.'; return; }
       if (f.date > todayISO()) { f.error = "The purchase date can't be in the future."; return; }
+      const pfErr = newPortfolioNameError(ticker);
+      if (pfErr) { f.error = pfErr; return; }
       const p = positionFor(ticker);
       const next = purchasePreview(ticker);
       const tx = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), date: f.date, quantity: qty, price };
@@ -1582,19 +1742,17 @@ export default {
       const src = cashSources(ticker).find(c => c.symbol === payFromFor(ticker));
       if (src) {
         if (next.cost > src.available + 0.005) {
-          f.error = `Only ${formatUSD(src.available)} available in ${src.symbol}${src.reserved > 0 ? ` (${formatUSD(src.reserved)} is reserved for cash-secured puts)` : ''} — pay from another holding, or choose "Outside the portfolio".`;
+          f.error = `Only ${formatUSD(src.available)} available in ${src.label}${src.reserved > 0 ? ` (${formatUSD(src.reserved)} is reserved for cash-secured puts)` : ''} — pay from another holding, or choose "Outside the portfolio".`;
           return;
         }
-        const cashPos = positionFor(src.symbol);
         const shares = next.cost / src.price;
-        const left = cashPos.quantity - shares;
-        updates[src.symbol] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+        cashAdjust(updates, pfFor(ticker), src.symbol, -shares);
         Object.assign(tx, { paidFrom: src.symbol, paidShares: shares });
       }
       const position = { quantity: next.quantity, avgCost: next.avgCost, transactions: [...(p?.transactions ?? []), tx] };
       if (p?.category) position.category = p.category;
       updates[ticker] = position;
-      emit('set-position', { updates });
+      emitPosition(ticker, { updates });
       delete purchaseForms[ticker];
       delete positionForms[ticker];
     }
@@ -1604,7 +1762,8 @@ export default {
     // (price − avg cost) × shares. Selling everything moves the position to
     // config.closedPositions. Proceeds can go into a cash holding.
     const saleForms = reactive({}); // ticker → { quantity, price, date, depositTo, error }
-    const closedPositions = computed(() => props.config.closedPositions ?? []);
+    const closedPositions = computed(() => viewPf.value.closedPositions ?? []);
+    const closedIn = ticker => pfFor(ticker).closedPositions ?? [];
 
     function startSale(ticker) {
       const last = stockQuotes[ticker]?.price;
@@ -1687,9 +1846,8 @@ export default {
       const updates = {};
       const dest = cashSources(ticker).find(c => c.symbol === depositToFor(ticker));
       if (dest) {
-        const cashPos = positionFor(dest.symbol);
         const shares = (qty * price) / dest.price;
-        updates[dest.symbol] = { ...cashPos, quantity: cashPos.quantity + shares };
+        cashAdjust(updates, pfFor(ticker), dest.symbol, shares);
         Object.assign(tx, { depositTo: dest.symbol, depositShares: shares });
       }
       const transactions = [...(p.transactions ?? []), tx];
@@ -1697,33 +1855,30 @@ export default {
       let closed;
       if (remaining <= 1e-9) {
         updates[ticker] = null;
-        closed = [closedRecord(ticker, p, transactions, f.date), ...closedPositions.value];
+        closed = [closedRecord(ticker, p, transactions, f.date), ...closedIn(ticker)];
         delete details[ticker]; // its card leaves Holdings
       } else {
         updates[ticker] = { ...p, quantity: remaining, transactions };
       }
-      emit('set-position', closed ? { updates, closed } : { updates });
+      emitPosition(ticker, closed ? { updates, closed } : { updates });
       delete saleForms[ticker];
     }
 
     // Undo a sale on an open position: shares back, proceeds out of cash.
-    function reverseDeposit(updates, tx) {
+    function reverseDeposit(updates, tx, pf) {
       if (!tx.depositTo || !(tx.depositShares > 0)) return;
-      const cashPos = positionFor(tx.depositTo);
-      if (!cashPos) return; // that cash holding is gone — nothing to take back
-      const left = cashPos.quantity - tx.depositShares;
-      updates[tx.depositTo] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+      cashAdjust(updates, pf, tx.depositTo, -tx.depositShares); // a holding that's gone has nothing to take back
     }
     function deleteSale(ticker, tx) {
-      const back = tx.depositTo ? `\n${formatUSD(tx.quantity * tx.price)} comes back out of ${tx.depositTo}.` : '';
+      const back = tx.depositTo ? `\n${formatUSD(tx.quantity * tx.price)} comes back out of ${cashName(tx.depositTo)}.` : '';
       if (!confirm(`Delete this sale?\n\n${formatShares(tx.quantity)} ${ticker} at ${formatPrice(tx.price)} on ${tx.date}\n\nThe shares go back into your position.${back}`)) return;
       const p = positionFor(ticker);
       if (!p) return;
       const updates = {};
-      reverseDeposit(updates, tx);
+      reverseDeposit(updates, tx, pfFor(ticker));
       const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
       updates[ticker] = { ...p, quantity: p.quantity + tx.quantity, transactions: rest };
-      emit('set-position', { updates });
+      emitPosition(ticker, { updates });
     }
 
     // Closed positions: undo the final sale (back to Holdings), or delete the record.
@@ -1737,14 +1892,14 @@ export default {
       if (!last) return;
       if (!confirm(`Undo the ${rec.symbol} sale of ${formatShares(last.quantity)} shares on ${last.date}?\n\nIt goes back to your Holdings.` + (last.depositTo ? `\n${formatUSD(last.quantity * last.price)} comes back out of ${last.depositTo}.` : ''))) return;
       const updates = {};
-      reverseDeposit(updates, last);
+      reverseDeposit(updates, last, viewPf.value);
       const position = {
         quantity: last.quantity, avgCost: last.avgCost,
         transactions: rec.transactions.filter(t => t.id !== last.id),
       };
       if (rec.category) position.category = rec.category;
       updates[rec.symbol] = position;
-      emit('set-position', { updates, closed: closedPositions.value.filter(c => c.id !== rec.id) });
+      emit('set-position', withCash({ portfolioId: viewPf.value.id, updates, closed: closedPositions.value.filter(c => c.id !== rec.id) }));
     }
     function reopenClosedOption(rec) {
       if (optionPositionFor(rec.symbol)) {
@@ -1755,16 +1910,16 @@ export default {
       if (!last) return;
       if (!confirm(`Undo closing ${last.quantity} × ${rec.name} on ${last.date}?\n\nIt goes back to your open options.`)) return;
       const updates = {};
-      reverseCash(updates, last);
+      reverseCash(updates, last, viewPf.value);
       const position = {
         ...rec.option, quantity: last.quantity, avgCost: last.avgCost,
         transactions: rec.transactions.filter(t => t.id !== last.id),
       };
-      emit('set-position', { updates, options: { [rec.symbol]: position }, closed: closedPositions.value.filter(c => c.id !== rec.id) });
+      emit('set-position', withCash({ portfolioId: viewPf.value.id, updates, options: { [rec.symbol]: position }, closed: closedPositions.value.filter(c => c.id !== rec.id) }));
     }
     function deleteClosed(rec) {
       if (!confirm(`Delete the closed ${rec.kind === 'option' ? rec.name : rec.symbol} position from your history?\n\nThis doesn't change any cash holding.`)) return;
-      emit('set-position', { closed: closedPositions.value.filter(c => c.id !== rec.id) });
+      emit('set-position', { portfolioId: viewPf.value.id, closed: closedPositions.value.filter(c => c.id !== rec.id) });
     }
 
     const closedTotals = computed(() => {
@@ -1789,14 +1944,142 @@ export default {
     })());
     watch(closedOpen, open => { try { localStorage.setItem(CLOSED_KEY, open ? '1' : '0'); } catch { /* per-browser only */ } });
 
+    // ── Move a position to another portfolio (an opened portfolio's Portfolio tab) ──
+    // All of it: the position moves with its trades (merging into one already
+    // there: quantities add, averages weight, trades combine). Part of it: N
+    // shares leave at the average cost ("Transfer out") and arrive at that
+    // cost ("Transfer in"); the source's average doesn't change. Nothing is
+    // sold — no realized G/L, no cash. Option contracts on the stock can go
+    // too; shares covering calls only move with those calls. Each move is
+    // logged in config.transfers (Account → Activity) and can be undone.
+    const moveForms = reactive({}); // ticker → { to, newName, shares, withOptions, error }
+    const isTransfer = tx => tx.type === 'transfer-in' || tx.type === 'transfer-out';
+    function startMove(ticker) {
+      const p = positionFor(ticker);
+      if (!p) return;
+      const other = portfolios.value.find(x => x.id !== openPf.value?.id);
+      moveForms[ticker] = { to: other?.id ?? '__new', newName: '', shares: String(p.quantity), withOptions: false, error: null };
+      delete saleForms[ticker];
+      delete purchaseForms[ticker];
+      delete positionForms[ticker];
+    }
+    function cancelMove(ticker) { delete moveForms[ticker]; }
+    // Contracts on the stock that can move — not a put secured by a cash holding the target doesn't have.
+    function movableOptions(ticker) {
+      const f = moveForms[ticker];
+      const src = openPf.value;
+      const dest = f && f.to !== '__new' ? portfolioById(f.to) : null;
+      return optionsFor(ticker).map(occ => {
+        const o = src.optionPositions[occ];
+        const cashSym = o.side === 'short' && o.covered?.by === 'cash' ? o.covered.symbol : null;
+        const blocked = cashSym && cashSym !== ACCOUNT_CASH && !(dest?.portfolio?.[cashSym]?.quantity > 0);
+        return { occ, o, blocked, reason: blocked ? `secured by ${cashSym}, which ${dest?.name ?? 'the new portfolio'} doesn't hold` : null };
+      });
+    }
+    function movePreview(ticker) {
+      const f = moveForms[ticker];
+      const p = positionFor(ticker);
+      if (!f || !p) return null;
+      const qty = Number(f.shares);
+      const covering = sharesCovering(ticker, openPf.value);
+      const calls = coveredCalls(ticker, openPf.value);
+      const opts = f.withOptions ? movableOptions(ticker).filter(x => !x.blocked) : [];
+      const movingCalls = opts.filter(x => calls.includes(x.occ));
+      const callShares = movingCalls.reduce((sum, x) => sum + sharesOf(x.o), 0);
+      const dest = f.to === '__new' ? null : portfolioById(f.to);
+      const had = dest?.portfolio?.[ticker]?.quantity > 0 ? dest.portfolio[ticker] : null;
+      const destCovering = dest ? sharesCovering(ticker, dest) : 0;
+      let error = null;
+      if (!(qty > 0) || !Number.isFinite(qty)) error = 'Enter how many shares to move.';
+      else if (qty > p.quantity + 1e-9) error = `You hold ${formatShares(p.quantity)} shares.`;
+      // Shares covering calls left behind must stay; calls moving need their shares in the target.
+      else if (p.quantity - qty < covering - callShares - 1e-9) error = `${formatShares(covering - callShares)} shares cover calls staying in ${openPf.value.name} — move at most ${formatShares(Math.max(0, p.quantity - covering + callShares))}${calls.length && !f.withOptions ? ', or move the options too' : ''}.`;
+      else if ((had?.quantity ?? 0) + qty < destCovering + callShares - 1e-9) error = `The covered calls need ${formatShares(destCovering + callShares)} shares in ${dest?.name ?? 'the new portfolio'} — move at least ${formatShares(destCovering + callShares - (had?.quantity ?? 0))}.`;
+      const whole = Math.abs(qty - p.quantity) < 1e-9;
+      const merged = had ? { quantity: had.quantity + qty, avgCost: (had.quantity * had.avgCost + qty * p.avgCost) / (had.quantity + qty) } : { quantity: qty, avgCost: p.avgCost };
+      return { qty, whole, had, merged, dest, opts, blockedOpts: f.withOptions ? movableOptions(ticker).filter(x => x.blocked) : [], left: p.quantity - qty, error };
+    }
+    function saveMove(ticker) {
+      const f = moveForms[ticker];
+      const src = openPf.value;
+      const p = positionFor(ticker);
+      const pv = movePreview(ticker);
+      if (!pv || !src || !p) return;
+      if (pv.error) { f.error = pv.error; return; }
+      let destId = f.to;
+      let newPortfolio = null;
+      if (f.to === '__new') {
+        const name = f.newName.trim().replace(/\s+/g, ' ').slice(0, 40);
+        if (!name) { f.error = 'Name the new portfolio.'; return; }
+        if (portfolios.value.some(x => x.name.toLowerCase() === name.toLowerCase())) { f.error = `You already have a portfolio named "${name}".`; return; }
+        destId = newPortfolioId();
+        newPortfolio = { id: destId, name };
+      }
+      const dest = pv.dest ?? { id: destId, name: newPortfolio.name, portfolio: {}, optionPositions: {} };
+      const date = todayISO();
+      const transfer = {
+        id: newId(), date, symbol: ticker, quantity: pv.qty, avgCost: p.avgCost, whole: pv.whole,
+        fromId: src.id, fromName: src.name, toId: destId, toName: dest.name,
+        options: pv.opts.map(x => `${x.o.quantity} × ${optionLabel(baseOcc(x.occ), { withUnderlying: false })}`),
+      };
+      // The position in each portfolio afterwards.
+      const meta = p.category ? { category: p.category } : {};
+      let srcPos, moved;
+      if (pv.whole) {
+        srcPos = null;
+        moved = { quantity: p.quantity, avgCost: p.avgCost, ...meta, transactions: [...(p.transactions ?? [])] };
+      } else {
+        srcPos = { ...p, quantity: pv.left, transactions: [...(p.transactions ?? []), { id: newId(), type: 'transfer-out', date, quantity: pv.qty, price: p.avgCost, to: dest.name, transferId: transfer.id }] };
+        moved = { quantity: pv.qty, avgCost: p.avgCost, ...meta, transactions: [{ id: newId(), type: 'transfer-in', date, quantity: pv.qty, price: p.avgCost, from: src.name, transferId: transfer.id }] };
+      }
+      const destPos = pv.had
+        ? { ...pv.had, quantity: pv.merged.quantity, avgCost: pv.merged.avgCost, transactions: [...(pv.had.transactions ?? []), ...moved.transactions] }
+        : moved;
+      const srcOptions = {};
+      const destOptions = {};
+      for (const { occ, o } of pv.opts) {
+        srcOptions[occ] = null;
+        const cur = dest.optionPositions?.[occ];
+        destOptions[occ] = cur && cur.side === o.side && cur.quantity > 0
+          ? { ...cur, quantity: cur.quantity + o.quantity, avgCost: (cur.quantity * cur.avgCost + o.quantity * o.avgCost) / (cur.quantity + o.quantity), transactions: [...(cur.transactions ?? []), ...(o.transactions ?? [])] }
+          : o;
+      }
+      // Undo puts both portfolios back as they were (and drops a portfolio this move created).
+      const before = {
+        src: { updates: { [ticker]: p }, options: Object.fromEntries(pv.opts.map(x => [x.occ, x.o])) },
+        dest: { updates: { [ticker]: pv.had ?? null }, options: Object.fromEntries(pv.opts.map(x => [x.occ, dest.optionPositions?.[x.occ] ?? null])) },
+      };
+      emit('move-position', {
+        changes: [
+          { portfolioId: src.id, updates: { [ticker]: srcPos }, options: srcOptions },
+          { portfolioId: destId, newPortfolio, updates: { [ticker]: destPos }, options: destOptions },
+        ],
+        transfer,
+      });
+      delete moveForms[ticker];
+      if (srcPos === null) delete details[ticker]; // its card leaves this portfolio's Holdings
+      const what = `${formatShares(pv.qty)} ${ticker}${transfer.options.length ? ` and ${transfer.options.length} option position${transfer.options.length === 1 ? '' : 's'}` : ''}`;
+      showTransferToast(`Moved ${what} to ${dest.name}`, async () => {
+        emit('move-position', {
+          changes: [
+            { portfolioId: src.id, ...before.src },
+            ...(newPortfolio ? [] : [{ portfolioId: destId, ...before.dest }]),
+          ],
+          removeTransferId: transfer.id,
+          removePortfolioId: newPortfolio ? destId : null,
+        });
+      });
+    }
+
     function transactionsFor(ticker) {
       return [...(positionFor(ticker)?.transactions ?? [])]
         .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
     }
 
     function deleteTransaction(ticker, tx) {
+      if (isTransfer(tx)) return; // undone from the move itself, not trade by trade
       if (tx.type === 'sell') return deleteSale(ticker, tx);
-      const refund = tx.paidFrom ? `\n${formatUSD(tx.quantity * tx.price)} goes back to ${tx.paidFrom}.` : '';
+      const refund = tx.paidFrom ? `\n${formatUSD(tx.quantity * tx.price)} goes back to ${cashName(tx.paidFrom)}.` : '';
       if (!confirm(`Delete this purchase?\n\n${formatShares(tx.quantity)} ${ticker} at ${formatPrice(tx.price)} on ${tx.date}\n\nYour position will be reduced accordingly.${refund}`)) return;
       const p = positionFor(ticker);
       if (!p) return;
@@ -1804,16 +2087,13 @@ export default {
       // holding has since been removed).
       const updates = {};
       if (tx.paidFrom && tx.paidShares > 0) {
-        const cashPos = positionFor(tx.paidFrom);
-        updates[tx.paidFrom] = cashPos
-          ? { ...cashPos, quantity: cashPos.quantity + tx.paidShares }
-          : { quantity: tx.paidShares, avgCost: 1, category: 'cash' };
+        cashAdjust(updates, pfFor(ticker), tx.paidFrom, tx.paidShares);
       }
       const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
       const quantity = p.quantity - tx.quantity;
       if (quantity <= 1e-9) {
         // That purchase was the whole position — back to "add a purchase".
-        emit('set-position', { updates: { ...updates, [ticker]: null } });
+        emitPosition(ticker, { updates: { ...updates, [ticker]: null } });
         startPurchase(ticker);
         return;
       }
@@ -1823,7 +2103,7 @@ export default {
       const position = { quantity, avgCost: reversed > 0 ? reversed : p.avgCost };
       if (p.category) position.category = p.category;
       if (rest.length) position.transactions = rest;
-      emit('set-position', { updates: { ...updates, [ticker]: position } });
+      emitPosition(ticker, { updates: { ...updates, [ticker]: position } });
     }
 
     function removePosition(ticker) {
@@ -1837,7 +2117,7 @@ export default {
       }
       const n = positionFor(ticker)?.transactions?.length ?? 0;
       if (!confirm(`Remove your ${ticker} position${n ? ` and its ${n} purchase${n === 1 ? '' : 's'}` : ''}?`)) return;
-      emit('set-position', { symbol: ticker, position: null });
+      emitPosition(ticker, { symbol: ticker, position: null });
       // Back to "add a purchase" for this stock.
       delete positionForms[ticker];
       startPurchase(ticker);
@@ -1851,57 +2131,71 @@ export default {
     // checks the contract exists by fetching its quote. A long option is an
     // asset (value = contracts × 100 × premium); a short one is a liability —
     // its value counts negative and it gains as the premium falls.
-    const optionPositions = computed(() => props.config.optionPositions ?? {});
+    // Contracts live in a portfolio (see pfFor). In the merged view a contract
+    // held long in one portfolio and short in another is keyed "OCC#portfolio".
+    const baseOcc = key => key.split('#')[0];
+    const underlyingOf = key => parseOcc(baseOcc(key))?.underlying ?? null;
+    // A contract's position, in the portfolio its stock is shown in.
+    function optPos(occ) {
+      return pfFor(underlyingOf(occ))?.optionPositions?.[occ] ?? null;
+    }
     function optionPositionFor(occ) {
-      const p = optionPositions.value[occ];
+      const p = optPos(occ);
       return p && p.quantity > 0 ? p : null;
     }
-    const openOptionSymbols = computed(() => Object.keys(optionPositions.value).filter(optionPositionFor));
-    // A stock's open contracts, nearest expiration first.
+    const openOptionsIn = pf => Object.keys(pf?.optionPositions ?? {}).filter(k => pf.optionPositions[k]?.quantity > 0);
+    // The Account page's portfolio (or all of them): its open contracts.
+    const openOptionSymbols = computed(() => openOptionsIn(viewPf.value));
+    // A stock's open contracts (in its portfolio), nearest expiration first.
     function optionsFor(underlying) {
-      return openOptionSymbols.value
-        .filter(occ => optionPositions.value[occ].underlying === underlying)
-        .sort((a, b) => optionPositions.value[a].expiry.localeCompare(optionPositions.value[b].expiry) || a.localeCompare(b));
+      const pf = pfFor(underlying);
+      return openOptionsIn(pf)
+        .filter(occ => pf.optionPositions[occ].underlying === underlying)
+        .sort((a, b) => pf.optionPositions[a].expiry.localeCompare(pf.optionPositions[b].expiry) || a.localeCompare(b));
     }
 
     // ── Covered options: reservations derived from open short contracts ──
-    // A cash-secured put reserves strike × 100 × contracts of a cash holding;
-    // a covered call reserves 100 shares per contract of its stock. Nothing
-    // moves — closing, expiring or deleting the contract releases it.
+    // A cash-secured put reserves strike × 100 × contracts of a cash holding
+    // in the same portfolio; a covered call reserves 100 shares per contract
+    // of its stock. Nothing moves — closing, expiring or deleting the
+    // contract releases it.
     const reserveOf = p => p.strike * (p.multiplier ?? MULTIPLIER) * p.quantity;
     const sharesOf = p => (p.multiplier ?? MULTIPLIER) * p.quantity;
-    function cashSecuring(cashSymbol) {
-      return openOptionSymbols.value.filter(occ => {
-        const p = optionPositions.value[occ];
+    function cashSecuring(cashSymbol, pf = cashSymbol === ACCOUNT_CASH ? allPf.value : pfFor(cashSymbol)) {
+      return openOptionsIn(pf).filter(occ => {
+        const p = pf.optionPositions[occ];
         return p.side === 'short' && p.covered?.by === 'cash' && p.covered.symbol === cashSymbol;
       });
     }
-    function cashReserved(cashSymbol) {
-      return cashSecuring(cashSymbol).reduce((sum, occ) => sum + reserveOf(optionPositions.value[occ]), 0);
+    function cashReserved(cashSymbol, pf = cashSymbol === ACCOUNT_CASH ? allPf.value : pfFor(cashSymbol)) {
+      if (cashSymbol === ACCOUNT_CASH) pf = allPf.value; // the account's cash secures puts in any portfolio
+      return cashSecuring(cashSymbol, pf).reduce((sum, occ) => sum + reserveOf(pf.optionPositions[occ]), 0);
     }
-    function coveredCalls(underlying) {
-      return openOptionSymbols.value.filter(occ => {
-        const p = optionPositions.value[occ];
+    function coveredCalls(underlying, pf = pfFor(underlying)) {
+      return openOptionsIn(pf).filter(occ => {
+        const p = pf.optionPositions[occ];
         return p.underlying === underlying && p.side === 'short' && p.type === 'call' && p.covered?.by === 'shares';
       });
     }
-    function sharesCovering(underlying) {
-      return coveredCalls(underlying).reduce((sum, occ) => sum + sharesOf(optionPositions.value[occ]), 0);
+    function sharesCovering(underlying, pf = pfFor(underlying)) {
+      return coveredCalls(underlying, pf).reduce((sum, occ) => sum + sharesOf(pf.optionPositions[occ]), 0);
     }
     const totalReserved = computed(() => openOptionSymbols.value.reduce((sum, occ) => {
-      const p = optionPositions.value[occ];
+      const p = viewPf.value.optionPositions[occ];
       return sum + (p.side === 'short' && p.covered?.by === 'cash' ? reserveOf(p) : 0);
     }, 0));
     // How a short contract is covered, for badges and its detail line.
     function coverInfo(p) {
       if (p.side !== 'short') return null;
-      if (p.covered?.by === 'cash') return { kind: 'cash', badge: 'Cash-secured', text: `Reserves ${formatUSD(reserveOf(p))} of ${p.covered.symbol}` };
+      if (p.covered?.by === 'cash') return { kind: 'cash', badge: 'Cash-secured', text: `Reserves ${formatUSD(reserveOf(p))} of ${cashName(p.covered.symbol)}` };
       if (p.covered?.by === 'shares') return { kind: 'shares', badge: 'Covered', text: `Covers ${formatShares(sharesOf(p))} ${p.underlying} shares · called away at ${formatUSD(reserveOf(p))}` };
       return { kind: 'naked', badge: 'Naked', text: 'Uncovered — usually needs margin approval' };
     }
 
+    // Quotes for every contract in every portfolio (cards show each portfolio's value).
+    const allOptionSymbols = computed(() => [...new Set(openOptionsIn(allPf.value).map(baseOcc))]);
     const optionQuotes = reactive({}); // OCC symbol → quote (+ error)
-    async function fetchOptionQuotes(symbols = openOptionSymbols.value) {
+    async function fetchOptionQuotes(symbols = allOptionSymbols.value) {
       await Promise.all(symbols.map(async occ => {
         try {
           optionQuotes[occ] = { ...(await fetchQuote(occ)), error: null };
@@ -1911,11 +2205,11 @@ export default {
         }
       }));
     }
-    watch(openOptionSymbols, syms => {
+    watch(allOptionSymbols, syms => {
       const missing = syms.filter(s => !optionQuotes[s]);
       if (missing.length) fetchOptionQuotes(missing);
     });
-    const optionUnderlyings = computed(() => [...new Set(openOptionSymbols.value.map(occ => optionPositions.value[occ].underlying))]);
+    const optionUnderlyings = computed(() => [...new Set(allOptionSymbols.value.map(occ => parseOcc(occ).underlying))]);
     watch(optionUnderlyings, syms => {
       const missing = syms.filter(s => !stockQuotes[s]);
       if (missing.length) fetchStockQuotes(missing);
@@ -1925,7 +2219,7 @@ export default {
     function optionSummary(occ) {
       const p = optionPositionFor(occ);
       if (!p) return null;
-      const q = optionQuotes[occ];
+      const q = optionQuotes[baseOcc(occ)];
       const m = p.multiplier ?? MULTIPLIER;
       const sign = p.side === 'short' ? -1 : 1;
       const units = p.quantity * m;
@@ -1952,23 +2246,15 @@ export default {
       + (o.marketTime ? ` · last trade ${formatRelativeTime(o.marketTime)}` : '');
 
     // Cash holdings: take money out ('out') or put it in ('in'); undo with reverseCash.
-    function moveCash(updates, src, amount, dir) {
-      const cashPos = positionFor(src.symbol);
+    function moveCash(updates, src, amount, dir, pf) {
       const shares = amount / src.price;
-      const left = cashPos.quantity + (dir === 'in' ? shares : -shares);
-      updates[src.symbol] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
+      cashAdjust(updates, pf, src.symbol, dir === 'in' ? shares : -shares);
       return { cash: src.symbol, cashShares: shares, cashDir: dir };
     }
-    function reverseCash(updates, tx) {
+    function reverseCash(updates, tx, pf) {
       if (!tx.cash || !(tx.cashShares > 0)) return;
-      const cashPos = positionFor(tx.cash);
-      if (tx.cashDir === 'out') {
-        // Money it took goes back (re-creating the holding if it's gone).
-        updates[tx.cash] = cashPos ? { ...cashPos, quantity: cashPos.quantity + tx.cashShares } : { quantity: tx.cashShares, avgCost: 1, category: 'cash' };
-      } else if (cashPos) {
-        const left = cashPos.quantity - tx.cashShares;
-        updates[tx.cash] = left > 1e-9 ? { ...cashPos, quantity: left } : null;
-      }
+      // Money it took goes back (re-creating a holding that's gone); money it put in comes out.
+      cashAdjust(updates, pf, tx.cash, tx.cashDir === 'out' ? tx.cashShares : -tx.cashShares);
     }
     const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
@@ -1982,7 +2268,7 @@ export default {
         covered: true, reserveFrom: null, // selling to open: covered by shares (call) or cash (put)
       };
       checkContract(underlying);
-      const missing = Object.keys(props.config.portfolio ?? {}).filter(sym => !stockQuotes[sym]);
+      const missing = Object.keys(pfFor(ticker).portfolio ?? {}).filter(sym => !stockQuotes[sym]);
       if (missing.length) fetchStockQuotes(missing);
     }
     function cancelOption(underlying) {
@@ -2018,7 +2304,8 @@ export default {
     function optionCashFor(underlying) {
       const f = optionForms[underlying];
       if (!f) return '';
-      return f.cash ?? cashSources(underlying)[0]?.symbol ?? '';
+      // Buying pays (first funded source); selling to open deposits (first source).
+      return f.cash ?? (f.side === 'long' ? fundedSource(underlying) : cashSources(underlying)[0]?.symbol ?? '');
     }
     function reserveFromFor(underlying) {
       const f = optionForms[underlying];
@@ -2084,6 +2371,8 @@ export default {
       if (!(Number(f.premium) > 0)) { f.error = 'Enter the premium per share (e.g. 5.90).'; return; }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the trade date.'; return; }
       if (f.date > todayISO()) { f.error = "The trade date can't be in the future."; return; }
+      const pfErr = newPortfolioNameError(underlying);
+      if (pfErr) { f.error = pfErr; return; }
       const pv = optionPreview(underlying);
       if (pv.conflict) {
         f.error = `You're ${pv.conflict.side} this contract — close it on the Portfolio page rather than opening the other side.`;
@@ -2094,7 +2383,7 @@ export default {
         f.error = cv.kind === 'shares'
           ? `Covering ${f.contracts} call${n === 1 ? '' : 's'} takes ${formatShares(cv.need)} ${underlying} shares — you have ${formatShares(Math.max(0, cv.free))} not already covering calls. Sell fewer, or uncheck Covered.`
           : cv.src
-            ? `Securing this put takes ${formatUSD(cv.obligation)} — ${cv.src.symbol} has ${formatUSD(Math.max(0, cv.available))} available. Sell fewer, pick another holding, or uncheck Covered.`
+            ? `Securing this put takes ${formatUSD(cv.obligation)} — ${cv.src.label} has ${formatUSD(Math.max(0, cv.available))} available. Sell fewer, pick another holding, or uncheck Covered.`
             : 'Securing a put needs a Cash holding (e.g. a money-market fund) in your portfolio — or uncheck Covered.';
         return;
       }
@@ -2106,7 +2395,7 @@ export default {
           f.error = `Only ${formatUSD(c.available)} in ${c.symbol} — pay from another holding, or choose "Outside the portfolio".`;
           return;
         }
-        Object.assign(tx, moveCash(updates, c, pv.amount, pv.debit ? 'out' : 'in'));
+        Object.assign(tx, moveCash(updates, c, pv.amount, pv.debit ? 'out' : 'in', pfFor(underlying)));
       }
       const o = parseOcc(pv.occ);
       const position = {
@@ -2115,7 +2404,7 @@ export default {
       };
       if (pv.was?.covered) position.covered = pv.was.covered;
       else if (cv?.covered) position.covered = cv.kind === 'shares' ? { by: 'shares' } : { by: 'cash', symbol: cv.src.symbol };
-      emit('set-position', { updates, options: { [pv.occ]: position } });
+      emitPosition(underlying, { updates, options: { [pv.occ]: position } });
       delete optionForms[underlying];
     }
 
@@ -2146,7 +2435,8 @@ export default {
       const f = closeForms[occ];
       const p = optionPositionFor(occ);
       if (!f || !p) return '';
-      return f.cash ?? cashSources(p.underlying)[0]?.symbol ?? '';
+      // Buying back a short pays (first funded source); selling a long deposits.
+      return f.cash ?? (p.side === 'short' ? fundedSource(p.underlying) : cashSources(p.underlying)[0]?.symbol ?? '');
     }
     function closePreview(occ) {
       const f = closeForms[occ];
@@ -2206,18 +2496,18 @@ export default {
           f.error = `Only ${formatUSD(pv.cash.available)} available in ${c.symbol} — pay from another holding, or choose "Outside the portfolio".`;
           return;
         }
-        Object.assign(tx, moveCash(updates, c, pv.amount, pv.credit ? 'in' : 'out'));
+        Object.assign(tx, moveCash(updates, c, pv.amount, pv.credit ? 'in' : 'out', pfFor(p.underlying)));
       }
       const transactions = [...(p.transactions ?? []), tx];
       let closed;
       const options = {};
       if (pv.closes) {
         options[occ] = null;
-        closed = [optionClosedRecord(occ, p, transactions, f.date), ...closedPositions.value];
+        closed = [optionClosedRecord(occ, p, transactions, f.date), ...closedIn(p.underlying)];
       } else {
         options[occ] = { ...p, quantity: p.quantity - n, transactions };
       }
-      emit('set-position', closed ? { updates, options, closed } : { updates, options });
+      emitPosition(underlyingOf(occ), closed ? { updates, options, closed } : { updates, options });
       delete closeForms[occ];
     }
 
@@ -2236,11 +2526,11 @@ export default {
       if (!p) return;
       const m = p.multiplier ?? MULTIPLIER;
       const amount = tx.quantity * m * tx.price;
-      const cashNote = tx.cash ? `\n${formatUSD(amount)} ${tx.cashDir === 'out' ? 'goes back to' : 'comes back out of'} ${tx.cash}.` : '';
+      const cashNote = tx.cash ? `\n${formatUSD(amount)} ${tx.cashDir === 'out' ? 'goes back to' : 'comes back out of'} ${cashName(tx.cash)}.` : '';
       const what = tx.type === 'close' ? 'closing trade' : 'opening trade';
       if (!confirm(`Delete this ${what}?\n\n${tx.quantity} × ${optionLabel(p)} at ${formatPrice(tx.price)} on ${tx.date}${cashNote}`)) return;
       const updates = {};
-      reverseCash(updates, tx);
+      reverseCash(updates, tx, pfFor(underlyingOf(occ)));
       const rest = (p.transactions ?? []).filter(t => t.id !== tx.id);
       let position;
       if (tx.type === 'close') {
@@ -2250,12 +2540,12 @@ export default {
         const reversed = quantity > 0 ? (p.quantity * p.avgCost - tx.quantity * tx.price) / quantity : 0;
         position = quantity > 0 ? { ...p, quantity, avgCost: reversed > 0 ? reversed : p.avgCost, transactions: rest } : null;
       }
-      emit('set-position', { updates, options: { [occ]: position } });
+      emitPosition(underlyingOf(occ), { updates, options: { [occ]: position } });
     }
     function removeOption(occ) {
       const p = optionPositionFor(occ);
       if (!p || !confirm(`Remove ${optionLabel(p)} from your portfolio?\n\nThis deletes the position and its trades without changing any cash holding — to record a sale or expiry, use Close instead.`)) return;
-      emit('set-position', { options: { [occ]: null } });
+      emitPosition(underlyingOf(occ), { options: { [occ]: null } });
     }
     // Options card: "Open XOM" — the stock's card in Holdings, on its Portfolio tab.
     function openOptionsOf(underlying) {
@@ -2318,11 +2608,64 @@ export default {
       return { ...t, gainPct: t.gain != null && basis > 0 ? (t.gain / basis) * 100 : null, dayPct: null };
     });
     // Whole portfolio: holdings + options.
+    // Whole account (Summary): holdings + options + the account's cash.
     const netValue = computed(() => {
+      if (portfolioTotals.value && portfolioTotals.value.value == null) return null;
+      if (optionsTotals.value && optionsTotals.value.value == null) return null;
       const h = portfolioTotals.value?.value ?? 0;
-      const o = optionsTotals.value?.value;
-      if (o == null || (portfolioTotals.value && portfolioTotals.value.value == null)) return null;
-      return { holdings: h, options: o, total: h + o };
+      const o = optionsTotals.value?.value ?? 0;
+      const cash = openPf.value ? 0 : (accountCash.value.balance ?? 0);
+      return { holdings: h, options: o, cash, total: h + o + cash };
+    });
+
+    // ── Summary → Cash: deposits from your bank accounts (Profile → Bank accounts) ──
+    // No balance or bank check yet: a deposit just adds to the account's cash.
+    const bankAccounts = ref(null); // loaded when the deposit form opens
+    const depositForm = ref(null);  // { amount, date, bankId, busy, error }
+    const showAllDeposits = ref(false);
+    async function startDeposit() {
+      depositForm.value = { amount: '', date: todayISO(), bankId: null, error: null, loading: true };
+      try {
+        bankAccounts.value = await fetchBankAccounts();
+      } catch (e) {
+        if (depositForm.value) depositForm.value.error = `Couldn't load your bank accounts: ${e.message}`;
+      }
+      if (depositForm.value) depositForm.value.loading = false;
+    }
+    const connectedBanks = computed(() => (bankAccounts.value ?? []).filter(a => a.status === 'connected'));
+    const depositBankFor = f => f.bankId ?? connectedBanks.value[0]?.id ?? null;
+    function saveDeposit() {
+      const f = depositForm.value;
+      const amount = Math.round(Number(f.amount) * 100) / 100;
+      if (!(amount > 0)) { f.error = 'Enter the amount to deposit.'; return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(f.date)) { f.error = 'Enter the deposit date.'; return; }
+      if (f.date > todayISO()) { f.error = "The deposit date can't be in the future."; return; }
+      const bank = connectedBanks.value.find(a => a.id === Number(depositBankFor(f)));
+      if (!bank) { f.error = 'Pick a connected bank account to deposit from.'; return; }
+      const cur = accountCash.value;
+      const deposit = {
+        id: newId(), date: f.date, amount,
+        bankAccountId: bank.id, bank: bank.bank, last4: bank.last4, type: bank.type, // kept if the account is later removed
+      };
+      emit('set-account-cash', {
+        ...cur,
+        balance: Math.round(((cur.balance ?? 0) + amount) * 100) / 100,
+        deposits: [deposit, ...(cur.deposits ?? [])],
+      });
+      depositForm.value = null;
+    }
+    function deleteDeposit(d) {
+      if (!confirm(`Delete this deposit?\n\n${formatUSD(d.amount)} from ${d.bank} ••${d.last4} on ${d.date}\n\nIt comes back out of your account's cash.`)) return;
+      const cur = accountCash.value;
+      emit('set-account-cash', {
+        ...cur,
+        balance: Math.round(((cur.balance ?? 0) - d.amount) * 100) / 100,
+        deposits: (cur.deposits ?? []).filter(x => x.id !== d.id),
+      });
+    }
+    const depositsShown = computed(() => {
+      const list = [...(accountCash.value.deposits ?? [])].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
+      return showAllDeposits.value ? list : list.slice(0, 5);
     });
     // Under the allocation charts: what short options (left out of them) amount to.
     const shortSummary = computed(() => {
@@ -2429,14 +2772,14 @@ export default {
         }
       };
       return [...openOptionSymbols.value].sort((a, b) => cmp(val(a), val(b), dir)
-        || optionPositions.value[a].expiry.localeCompare(optionPositions.value[b].expiry)
+        || viewPf.value.optionPositions[a].expiry.localeCompare(viewPf.value.optionPositions[b].expiry)
         || a.localeCompare(b));
     });
 
     const optionGroups = computed(() => {
       const groups = new Map();
       for (const occ of openOptionSymbols.value) {
-        const p = optionPositions.value[occ];
+        const p = viewPf.value.optionPositions[occ];
         if (!groups.has(p.expiry)) groups.set(p.expiry, []);
         groups.get(p.expiry).push(occ);
       }
@@ -2445,26 +2788,10 @@ export default {
         .sort(([a], [b]) => (desc ? b.localeCompare(a) : a.localeCompare(b)))
         .map(([expiry, items]) => ({
           expiry, days: daysToExpiry(expiry),
-          items: items.sort((a, b) => optionPositions.value[a].underlying.localeCompare(optionPositions.value[b].underlying)
-            || optionPositions.value[a].strike - optionPositions.value[b].strike),
+          items: items.sort((a, b) => viewPf.value.optionPositions[a].underlying.localeCompare(viewPf.value.optionPositions[b].underlying)
+            || viewPf.value.optionPositions[a].strike - viewPf.value.optionPositions[b].strike),
         }));
     });
-    // Portfolio page sub-tabs (remembered per browser).
-    const PORTFOLIO_TABS = [
-      { id: 'summary',   label: 'Summary' },
-      { id: 'positions', label: 'Positions' },
-      { id: 'activity',  label: 'Activity' },
-    ];
-    const PF_TAB_KEY = 'oilgas_portfolio_tab';
-    const pfTab = ref((() => {
-      try {
-        const saved = localStorage.getItem(PF_TAB_KEY);
-        if (PORTFOLIO_TABS.some(t => t.id === saved)) return saved;
-      } catch { /* none saved */ }
-      return 'summary';
-    })());
-    watch(pfTab, t => { try { localStorage.setItem(PF_TAB_KEY, t); } catch { /* per-browser only */ } });
-    const onPositions = computed(() => !props.portfolioOnly || pfTab.value === 'positions');
 
     const OPTIONS_KEY = 'oilgas_options_open';
     const optionsOpen = ref((() => {
@@ -2493,7 +2820,11 @@ export default {
     // Short options are liabilities (negative value), so the charts leave them out.
     function allocationRows() {
       const rows = holdingRows();
-      return rows.some(r => r.value == null || !r.category) ? null : rows.filter(r => r.value > 0);
+      if (rows.some(r => r.value == null || !r.category)) return null;
+      // The account's cash counts as Cash on the Summary (it isn't in any one portfolio).
+      const cash = openPf.value ? 0 : (accountCash.value.balance ?? 0);
+      if (cash > 0) rows.push({ symbol: 'Account cash', category: 'cash', categoryLabel: CATEGORY_LABELS.cash, value: cash });
+      return rows.filter(r => r.value > 0);
     }
     const allocationByType = computed(() => {
       const rows = allocationRows();
@@ -2522,7 +2853,7 @@ export default {
     const hasNonStockHoldings = computed(() =>
       portfolioTickers.value.some(t => categoryFor(t) && categoryFor(t) !== 'stocks') || openOptionSymbols.value.length > 0
     );
-    const hasShortOptions = computed(() => openOptionSymbols.value.some(occ => optionPositions.value[occ].side === 'short'));
+    const hasShortOptions = computed(() => openOptionSymbols.value.some(occ => viewPf.value.optionPositions[occ].side === 'short'));
 
     // ── 52-week range bar on every card ──
     // Positions (0–100%) along a scale spanning the 52-week low→high. On the
@@ -2638,6 +2969,7 @@ export default {
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
       purchaseForms, startPurchase, cancelPurchase, purchasePreview, savePurchase, transactionsFor, deleteTransaction,
       cashSources, payFromFor,
+      moveForms, startMove, cancelMove, movePreview, saveMove, movableOptions, isTransfer,
       saleForms, startSale, cancelSale, depositToFor, salePreview, saveSale, closedPositions, closedTotals,
       reopenClosed, deleteClosed, realizedFor, closedOpen,
       optionable, optionsFor, optionSummary, optionTitle, optionQuotes, optionForms, startOption, cancelOption, onContractChange,
@@ -2647,6 +2979,10 @@ export default {
       categoryFor, reserveFromFor, coverPreview, coverInfo, cashReserved, cashSecuring, sharesCovering, coveredCalls, totalReserved,
       isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
       openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
+      portfolios, openPf, openPfId, pfFor, pfChoice, choosePortfolio, holdsIn, DEFAULT_PORTFOLIO_NAME,
+      pfForm, openPfForm, submitPfForm, deletePortfolio, pfMetrics,
+      accountCash, cashName, ACCOUNT_CASH, cashReserved, depositForm, startDeposit, connectedBanks, depositBankFor, saveDeposit, deleteDeposit,
+      depositsShown, showAllDeposits, bankAccounts, BANK_TYPES,
       HOLDING_SORTS, OPTION_SORTS, holdingSort, optionSort, setSort, sortedOptions, holdingWeight,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
@@ -2663,7 +2999,7 @@ export default {
   template: `
     <div>
       <div class="flex-between mb-16" v-if="portfolioOnly">
-        <div class="section-header" style="margin-bottom:0">Portfolio</div>
+        <div class="section-header" style="margin-bottom:0">Account</div>
         <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
       </div>
       <div class="subtab-bar" role="tablist" aria-label="Portfolio sections" v-if="portfolioOnly">
@@ -2672,9 +3008,77 @@ export default {
       </div>
 
       <!-- Portfolio → Summary: the whole portfolio, when there are options too -->
-      <p class="portfolio-net" v-if="portfolioOnly && pfTab === 'summary' && user && openOptionSymbols.length && netValue">
-        Net value <strong>{{ formatUSD(netValue.total) }}</strong> <span class="text-muted">= holdings {{ formatUSD(netValue.holdings) }} {{ netValue.options < 0 ? '−' : '+' }} options {{ formatUSD(Math.abs(netValue.options)) }}</span>
+      <p class="portfolio-net" v-if="portfolioOnly && pfTab === 'summary' && user && (openOptionSymbols.length || netValue?.cash) && netValue">
+        Net value <strong>{{ formatUSD(netValue.total) }}</strong>
+        <span class="text-muted">{{ ' = holdings ' + formatUSD(netValue.holdings)
+          + (openOptionSymbols.length ? (netValue.options < 0 ? ' − ' : ' + ') + 'options ' + formatUSD(Math.abs(netValue.options)) : '')
+          + (netValue.cash ? (netValue.cash < 0 ? ' − ' : ' + ') + 'cash ' + formatUSD(Math.abs(netValue.cash)) : '') }}</span>
       </p>
+
+      <!-- Account → Summary: the account's cash and deposits from your bank accounts -->
+      <div class="card cash-card" v-if="portfolioOnly && pfTab === 'summary' && user">
+        <div class="cash-head">
+          <div>
+            <div class="card-title" style="margin-bottom:2px">Cash</div>
+            <div class="cash-balance" :class="{ negative: (accountCash.balance ?? 0) < 0 }">{{ formatUSD(accountCash.balance ?? 0) }}</div>
+            <div class="text-muted text-sm" v-if="cashReserved(ACCOUNT_CASH) > 0">
+              {{ formatUSD(cashReserved(ACCOUNT_CASH)) }} reserved for cash-secured puts · {{ formatUSD((accountCash.balance ?? 0) - cashReserved(ACCOUNT_CASH)) }} available
+            </div>
+          </div>
+          <button type="button" class="primary" v-if="!depositForm" @click="startDeposit">＋ Deposit</button>
+        </div>
+
+        <form class="portfolio-form deposit-form" v-if="depositForm" @submit.prevent="saveDeposit" novalidate @input="depositForm.error = null">
+          <div class="skeleton" style="height:60px" v-if="depositForm.loading"></div>
+          <template v-else-if="!connectedBanks.length">
+            <p class="text-muted text-sm" style="margin:0">
+              {{ (bankAccounts ?? []).length ? 'None of your bank accounts is connected.' : 'Add a bank account to deposit from.' }}
+              <a href="#" @click.prevent="$emit('go-bank-accounts')">Profile → Bank accounts</a>
+            </p>
+            <div class="portfolio-actions"><button type="button" @click="depositForm = null">Close</button></div>
+          </template>
+          <template v-else>
+            <div class="portfolio-fields">
+              <label>
+                <span>Amount</span>
+                <input type="number" inputmode="decimal" min="0" step="0.01" v-model="depositForm.amount" placeholder="e.g. 5000" />
+              </label>
+              <label>
+                <span>Date</span>
+                <input type="date" :max="new Date().toLocaleDateString('en-CA')" v-model="depositForm.date" />
+              </label>
+              <label>
+                <span>From</span>
+                <select :value="depositBankFor(depositForm)" @change="depositForm.bankId = Number($event.target.value)">
+                  <option v-for="a in connectedBanks" :key="a.id" :value="a.id">{{ a.bank }} {{ (BANK_TYPES.find(t => t.id === a.type)?.label ?? a.type).toLowerCase() }} ••{{ a.last4 }}</option>
+                </select>
+              </label>
+            </div>
+            <p class="purchase-preview" v-if="Number(depositForm.amount) > 0">
+              Cash: {{ formatUSD(accountCash.balance ?? 0) }} → {{ formatUSD((accountCash.balance ?? 0) + Math.round(Number(depositForm.amount) * 100) / 100) }}
+            </p>
+            <div class="notice error portfolio-error" v-if="depositForm.error">{{ depositForm.error }}</div>
+            <div class="portfolio-actions">
+              <button type="submit" class="primary">Deposit</button>
+              <button type="button" @click="depositForm = null">Cancel</button>
+            </div>
+          </template>
+        </form>
+
+        <ul class="deposit-list" v-if="depositsShown.length">
+          <li v-for="d in depositsShown" :key="d.id" class="deposit-row">
+            <span class="deposit-date">{{ formatDate(d.date + 'T12:00:00') }}</span>
+            <span class="deposit-what">Deposit from {{ d.bank }} {{ (BANK_TYPES.find(t => t.id === d.type)?.label ?? d.type).toLowerCase() }} ••{{ d.last4 }}</span>
+            <span class="deposit-amount positive">+{{ formatUSD(d.amount) }}</span>
+            <button type="button" class="link-button danger-link" :aria-label="'Delete deposit of ' + formatUSD(d.amount)" title="Delete this deposit" @click="deleteDeposit(d)">✕</button>
+          </li>
+        </ul>
+        <button type="button" class="link-button deposit-more" v-if="(accountCash.deposits ?? []).length > 5"
+                @click="showAllDeposits = !showAllDeposits">{{ showAllDeposits ? 'Show fewer' : 'Show all ' + accountCash.deposits.length + ' deposits' }}</button>
+        <p class="text-muted text-sm cash-note" v-else-if="!(accountCash.deposits ?? []).length && !depositForm">
+          Deposit from a bank account to fund purchases — pick <strong>Account cash</strong> under "Pay from" on a stock's Portfolio tab.
+        </p>
+      </div>
 
       <template v-if="!portfolioOnly">
       <!-- Major Market Indexes -->
@@ -2813,7 +3217,7 @@ export default {
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
       <!-- Allocation: by asset type and by sector, side by side -->
-      <div class="card allocation-card" v-if="isPortfolioList && pfTab === 'summary' && (portfolioTotals || openOptionSymbols.length)">
+      <div class="card allocation-card" v-if="isPortfolioList && pfTab === 'summary' && (portfolioTotals || openOptionSymbols.length || (accountCash.balance ?? 0) > 0)">
         <div class="card-title allocation-head">Allocation</div>
         <div class="allocation-pair">
           <section class="allocation-panel" aria-label="Allocation by asset type">
@@ -2838,14 +3242,65 @@ export default {
         </p>
       </div>
 
-      <!-- Top movers (Portfolio → Positions, above Holdings) -->
-      <TopMovers v-if="portfolioOnly && pfTab === 'positions'" :sources="moverSources" v-model:selected-ids="moverSelected"
+      <!-- Account → Portfolios: a card per portfolio -->
+      <section class="pf-cards" v-if="portfolioOnly && pfTab === 'portfolios' && !openPf" aria-label="Portfolios">
+        <button v-for="p in portfolios" :key="p.id" type="button" class="card pf-card" @click="openPfId = p.id">
+          <template v-for="m in [pfMetrics(p)]" :key="p.id + '-m'">
+            <span class="pf-card-name">{{ p.name }}</span>
+            <span class="pf-card-label">Position</span>
+            <span class="pf-card-value">{{ m.value != null ? formatUSD(m.value) : (m.positions ? '…' : formatUSD(0)) }}</span>
+            <span class="pf-card-stats">
+              <span><span class="pf-card-label">1D</span> <strong :class="changeClass(m.dayPct)">{{ m.dayPct != null ? formatPct(m.dayPct) : '—' }}</strong></span>
+              <span><span class="pf-card-label">All-time</span> <strong :class="changeClass(m.allTimePct)">{{ m.allTimePct != null ? formatPct(m.allTimePct) : '—' }}</strong></span>
+            </span>
+            <span class="text-muted text-sm">{{ m.positions }} position{{ m.positions === 1 ? '' : 's' }}</span>
+          </template>
+        </button>
+        <div class="card pf-card pf-card-new">
+          <form v-if="pfForm?.mode === 'create'" @submit.prevent="submitPfForm" novalidate>
+            <input v-model="pfForm.name" maxlength="40" placeholder="Portfolio name, e.g. IRA" aria-label="New portfolio name" @input="pfForm.error = null" />
+            <div class="pf-card-new-actions">
+              <button type="submit" class="primary">Create</button>
+              <button type="button" @click="pfForm = null">Cancel</button>
+            </div>
+            <div class="notice error" v-if="pfForm.error" style="margin:8px 0 0">{{ pfForm.error }}</div>
+          </form>
+          <button v-else type="button" class="pf-card-new-btn" @click="openPfForm('create')">＋ New portfolio</button>
+        </div>
+        <p class="text-muted text-sm pf-cards-note" v-if="!portfolios.length">
+          No portfolios yet. Create one here, or add a purchase from any stock's Portfolio tab on Markets → Stocks.
+        </p>
+      </section>
+
+      <!-- An opened portfolio: its header, the all-time gain chart, then what used to be Positions -->
+      <template v-if="openPf">
+        <div class="pf-detail-head">
+          <button type="button" class="link-button" @click="openPfId = null">← All portfolios</button>
+          <form class="pf-rename" v-if="pfForm?.mode === 'rename'" @submit.prevent="submitPfForm" novalidate>
+            <input v-model="pfForm.name" maxlength="40" aria-label="Portfolio name" @input="pfForm.error = null" />
+            <button type="submit" class="primary">Save</button>
+            <button type="button" @click="pfForm = null">Cancel</button>
+            <span class="negative text-sm" v-if="pfForm.error">{{ pfForm.error }}</span>
+          </form>
+          <template v-else>
+            <h3 class="pf-detail-name">{{ openPf.name }}</h3>
+            <span class="pf-detail-actions">
+              <button type="button" class="link-button" @click="openPfForm('rename')">Rename</button>
+              <button type="button" class="link-button danger-link" @click="deletePortfolio">Delete</button>
+            </span>
+          </template>
+        </div>
+        <PortfolioChart :portfolio="openPf" :intraday="intraday" :quotes="stockQuotes" :is-cash="sym => categoryFor(sym) === 'cash'" />
+      </template>
+
+      <!-- Top movers (an opened portfolio, above Holdings) -->
+      <TopMovers v-if="portfolioOnly && openPf" :sources="moverSources" v-model:selected-ids="moverSelected"
                  :quotes="stockQuotes" @select="openMover" />
 
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
-      <div class="notice" v-else-if="isPortfolioList && pfTab !== 'activity' && !tickers.length && !openOptionSymbols.length">
-        <template v-if="closedPositions.length">No open positions — your sold positions are under Positions → Closed positions.</template>
-        <template v-else>No positions yet. Open a stock in one of your watchlists and use its Portfolio tab to add a purchase.</template>
+      <div class="notice" v-else-if="isPortfolioList && (pfTab === 'summary' ? portfolios.length : openPf) && !tickers.length && !openOptionSymbols.length">
+        <template v-if="closedPositions.length">No open positions — sold ones are under Closed positions.</template>
+        <template v-else>No positions yet. Open a stock on Markets → Stocks and use its Portfolio tab to add a purchase{{ openPf ? ' to ' + openPf.name : '' }}.</template>
       </div>
       <div class="notice" v-else-if="!isPortfolioList && tickers.length === 0">
         This watchlist is empty — search above to add stocks.
@@ -3200,11 +3655,76 @@ export default {
 
           <!-- Portfolio: your position (quantity × average cost) and G/L -->
           <div class="portfolio" v-else-if="details[sym]?.tab === 'portfolio'">
+            <!-- Markets: which portfolio this tab works in — pick one, or name a new one (created on the first save) -->
+            <div class="pf-choice" v-if="user && !portfolioOnly">
+              <label class="pf-choice-field">
+                <span>Portfolio</span>
+                <select :value="pfFor(sym).id ?? '__new'" @change="choosePortfolio(sym, $event.target.value)" aria-label="Portfolio">
+                  <option v-for="p in portfolios" :key="p.id" :value="p.id">{{ p.name }}{{ holdsIn(p, sym) ? ' ✓' : '' }}</option>
+                  <option value="__new">＋ New portfolio…</option>
+                </select>
+              </label>
+              <label class="pf-choice-field" v-if="pfFor(sym).pending">
+                <span>New portfolio name</span>
+                <input :value="pfChoice[sym]?.newName ?? ''" maxlength="40" :placeholder="portfolios.length ? 'e.g. IRA' : DEFAULT_PORTFOLIO_NAME"
+                       @input="pfChoice[sym] = { id: null, newName: $event.target.value }" />
+              </label>
+              <span class="text-muted text-sm pf-choice-hint" v-if="pfFor(sym).pending">Created when you save {{ portfolios.length ? '' : '(your first portfolio)' }}</span>
+              <span class="text-muted text-sm pf-choice-hint" v-else-if="portfolios.filter(p => holdsIn(p, sym)).length > 1">✓ held in {{ portfolios.filter(p => holdsIn(p, sym)).length }} portfolios</span>
+            </div>
             <div class="notice" v-if="!user">
               Track your {{ sym }} position — enter quantity and average cost to see its market value, total and
               today's gain/loss, and add it to your Portfolio page with allocation charts.
               <a href="#" @click.prevent="$emit('go-account')">Sign in</a> to track positions.
             </div>
+            <!-- Move to another portfolio (an opened portfolio): all or part, optionally with the stock's options -->
+            <form class="portfolio-form move-form" v-else-if="portfolioOnly && openPf && moveForms[sym] && positionFor(sym)"
+                  @submit.prevent="saveMove(sym)" novalidate @input="moveForms[sym].error = null" @change="moveForms[sym].error = null">
+              <p class="text-muted text-sm" style="margin:0 0 10px">
+                Move {{ sym }} out of {{ openPf.name }} — you hold {{ formatShares(positionFor(sym).quantity) }} shares at an average of {{ formatPrice(positionFor(sym).avgCost) }}<template v-if="sharesCovering(sym) > 0"> ({{ formatShares(sharesCovering(sym)) }} cover calls)</template>.
+                Nothing is sold: no realized gain or loss, and no cash moves.
+              </p>
+              <div class="portfolio-fields">
+                <label>
+                  <span>To</span>
+                  <select v-model="moveForms[sym].to">
+                    <option v-for="p in portfolios.filter(x => x.id !== openPf.id)" :key="p.id" :value="p.id">{{ p.name }}{{ holdsIn(p, sym) ? ' ✓' : '' }}</option>
+                    <option value="__new">＋ New portfolio…</option>
+                  </select>
+                </label>
+                <label v-if="moveForms[sym].to === '__new'">
+                  <span>New portfolio name</span>
+                  <input v-model="moveForms[sym].newName" maxlength="40" placeholder="e.g. IRA" />
+                </label>
+                <label>
+                  <span>Shares</span>
+                  <span class="sale-qty">
+                    <input type="number" inputmode="decimal" min="0" step="any" :max="positionFor(sym).quantity" v-model="moveForms[sym].shares" />
+                    <button type="button" class="link-button" @click="moveForms[sym].shares = String(positionFor(sym).quantity)">All</button>
+                  </span>
+                </label>
+              </div>
+              <label class="option-cover-check move-options" v-if="optionsFor(sym).length">
+                <input type="checkbox" v-model="moveForms[sym].withOptions" />
+                <span>Move the options on {{ sym }} too ({{ optionsFor(sym).length }} position{{ optionsFor(sym).length === 1 ? '' : 's' }})</span>
+              </label>
+              <p class="purchase-preview" v-if="movePreview(sym) && !movePreview(sym).error">
+                <template v-for="mp in [movePreview(sym)]">
+                  {{ moveForms[sym].to === '__new' ? (moveForms[sym].newName.trim() || 'New portfolio') : mp.dest.name }}:
+                  <template v-if="mp.had">{{ formatShares(mp.had.quantity) }} at {{ formatPrice(mp.had.avgCost) }} → </template>{{ formatShares(mp.merged.quantity) }} {{ sym }} at {{ formatPrice(mp.merged.avgCost) }}
+                  · {{ openPf.name }}: <template v-if="mp.whole">none left</template><template v-else>{{ formatShares(mp.left) }} left at {{ formatPrice(positionFor(sym).avgCost) }}</template>
+                  <template v-if="mp.whole && (positionFor(sym).transactions ?? []).length"> · its {{ positionFor(sym).transactions.length }} trade{{ positionFor(sym).transactions.length === 1 ? '' : 's' }} move too</template>
+                  <template v-if="mp.opts.length"><br />With {{ mp.opts.map(x => x.o.quantity + ' × ' + optionLabel(x.occ.split('#')[0], { withUnderlying: false })).join(', ') }}</template>
+                  <template v-if="mp.blockedOpts.length"><br /><span class="text-muted">Staying: {{ mp.blockedOpts.map(x => optionLabel(x.occ.split('#')[0], { withUnderlying: false }) + ' (' + x.reason + ')').join(', ') }}</span></template>
+                </template>
+              </p>
+              <div class="notice error portfolio-error" v-if="moveForms[sym].error || movePreview(sym)?.error">{{ moveForms[sym].error || movePreview(sym).error }}</div>
+              <div class="portfolio-actions">
+                <button type="submit" class="primary">Move</button>
+                <button type="button" @click="cancelMove(sym)">Cancel</button>
+              </div>
+            </form>
+
             <!-- Sell (Portfolio page only): shares at a price on a date; proceeds optionally to a cash holding -->
             <form class="portfolio-form sale-form" v-else-if="portfolioOnly && saleForms[sym] && positionFor(sym)"
                   @submit.prevent="saveSale(sym)" novalidate
@@ -3232,7 +3752,7 @@ export default {
                 <label>
                   <span>Deposit to</span>
                   <select :value="depositToFor(sym)" @change="saleForms[sym].depositTo = $event.target.value">
-                    <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.symbol }} — {{ formatUSD(c.available) }}</option>
+                    <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">{{ c.label }} — {{ formatUSD(c.available) }}</option>
                     <option value="">Outside the portfolio</option>
                   </select>
                 </label>
@@ -3246,7 +3766,7 @@ export default {
                 <template v-else>{{ formatShares(salePreview(sym).remaining) }} shares left</template>
                 <br />
                 <template v-if="salePreview(sym).to">
-                  Deposited to {{ salePreview(sym).to.symbol }}: {{ formatUSD(salePreview(sym).to.before) }} → {{ formatUSD(salePreview(sym).to.after) }}
+                  Deposited to {{ cashName(salePreview(sym).to.symbol) }}: {{ formatUSD(salePreview(sym).to.before) }} → {{ formatUSD(salePreview(sym).to.after) }}
                 </template>
                 <span class="text-muted" v-else>Not deposited to a cash holding.</span>
               </p>
@@ -3281,7 +3801,7 @@ export default {
                   <span>Pay from</span>
                   <select :value="payFromFor(sym)" @change="purchaseForms[sym].payFrom = $event.target.value">
                     <option v-for="c in cashSources(sym)" :key="c.symbol" :value="c.symbol">
-                      {{ c.symbol }} — {{ formatUSD(c.available) }} available
+                      {{ c.label }} — {{ formatUSD(c.available) }} available
                     </option>
                     <option value="">Outside the portfolio</option>
                   </select>
@@ -3299,7 +3819,7 @@ export default {
                 </span>
                 <br />
                 <template v-if="purchasePreview(sym).from">
-                  Paid from {{ purchasePreview(sym).from.symbol }}:
+                  Paid from {{ cashName(purchasePreview(sym).from.symbol) }}:
                   {{ formatUSD(purchasePreview(sym).from.available) }} →
                   <span :class="{ negative: purchasePreview(sym).from.after < 0 }">{{ formatUSD(purchasePreview(sym).from.after) }}</span>
                   <span class="negative" v-if="purchasePreview(sym).from.after < 0"> (not enough)</span>
@@ -3421,6 +3941,7 @@ export default {
               <div class="portfolio-actions">
                 <button type="button" class="primary" @click="startPurchase(sym)">＋ Add purchase</button>
                 <button type="button" v-if="portfolioOnly" @click="startSale(sym)">Sell</button>
+                <button type="button" v-if="portfolioOnly && openPf" @click="startMove(sym)">Move…</button>
                 <button type="button" @click="startPositionEdit(sym)">Edit position</button>
                 <button type="button" class="danger" @click="removePosition(sym)">Remove</button>
               </div>
@@ -3442,15 +3963,16 @@ export default {
                     <td>
                       {{ formatDate(tx.date + 'T12:00:00') }}
                       <div class="tx-from">
-                        {{ tx.type === 'sell' ? 'Sell' : 'Buy' }}<template v-if="tx.paidFrom"> · from {{ tx.paidFrom }}</template><template v-if="tx.depositTo"> · to {{ tx.depositTo }}</template>
+                        {{ tx.type === 'sell' ? 'Sell' : tx.type === 'transfer-out' ? 'Moved to ' + tx.to : tx.type === 'transfer-in' ? 'Moved from ' + tx.from : 'Buy' }}<template v-if="tx.paidFrom"> · from {{ cashName(tx.paidFrom) }}</template><template v-if="tx.depositTo"> · to {{ cashName(tx.depositTo) }}</template>
                       </div>
                     </td>
-                    <td class="num" :class="tx.type === 'sell' ? 'negative' : ''">{{ (tx.type === 'sell' ? '−' : '+') + formatShares(tx.quantity) }}</td>
+                    <td class="num" :class="tx.type === 'sell' || tx.type === 'transfer-out' ? 'negative' : ''">{{ (tx.type === 'sell' || tx.type === 'transfer-out' ? '−' : '+') + formatShares(tx.quantity) }}</td>
                     <td class="num">{{ formatPrice(tx.price) }}</td>
                     <td class="num tx-amount">{{ formatUSD(tx.quantity * tx.price) }}</td>
                     <td class="num" :class="tx.type === 'sell' ? changeClass(tx.realized) : ''">{{ tx.type === 'sell' ? signedUSD(tx.realized) : '' }}</td>
                     <td class="num">
-                      <button type="button" class="link-button danger-link" :aria-label="'Delete ' + (tx.type === 'sell' ? 'sale' : 'purchase') + ' of ' + tx.quantity + ' on ' + tx.date"
+                      <span class="text-muted" v-if="isTransfer(tx)" title="Part of a move between portfolios">⇄</span>
+                      <button type="button" class="link-button danger-link" v-else :aria-label="'Delete ' + (tx.type === 'sell' ? 'sale' : 'purchase') + ' of ' + tx.quantity + ' on ' + tx.date"
                               :title="'Delete this ' + (tx.type === 'sell' ? 'sale' : 'purchase')" @click="deleteTransaction(sym, tx)">✕</button>
                     </td>
                   </tr>
@@ -3604,7 +4126,7 @@ ${OPTION_FORM}
 
       <!-- Portfolio page: Options — every open contract by expiration; collapsible -->
       <div class="holdings-card options-card" :class="{ collapsed: !optionsOpen }"
-           v-if="portfolioOnly && pfTab === 'positions' && user && (openOptionSymbols.length || tickers.length)">
+           v-if="portfolioOnly && openPf && user">
         <button type="button" class="holdings-toggle" :aria-expanded="optionsOpen" aria-controls="portfolio-options"
                 @click="optionsOpen = !optionsOpen">
           <span class="holdings-heading">
@@ -3686,7 +4208,7 @@ ${OPTION_FORM}
       </div>
 
       <!-- Portfolio page: Closed positions — collapsible, totals at average cost -->
-      <div class="holdings-card closed-card" v-if="portfolioOnly && pfTab === 'positions' && closedPositions.length">
+      <div class="holdings-card closed-card" v-if="portfolioOnly && openPf && closedPositions.length">
         <button type="button" class="holdings-toggle" :aria-expanded="closedOpen" aria-controls="closed-positions"
                 @click="closedOpen = !closedOpen">
           <span class="holdings-heading">
@@ -3752,7 +4274,7 @@ ${OPTION_FORM}
       </div>
 
       <!-- Portfolio → Activity: the trade history -->
-      <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :config="config" />
+      <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :portfolios="portfolios" :account-cash="accountCash" :transfers="config.transfers ?? []" />
 
       <!-- After a copy / move / remove in edit mode: what happened, with Undo -->
       <div class="wl-toast" v-if="transferToast" role="status">

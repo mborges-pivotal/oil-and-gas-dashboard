@@ -2,6 +2,7 @@ const { ref, computed, onMounted } = Vue;
 import AlertForm from './AlertForm.js';
 import { fetchWatchlists } from '../services/watchlists.js';
 import { saveAlertsBulk } from '../utils/alertsStore.js';
+import { portfolioList, mergePortfolios } from '../utils/portfolios.js';
 
 /**
  * New alert from Inbox → Alerts: pick stocks — one-tap groups (Default,
@@ -31,7 +32,7 @@ export default {
     });
 
     const held = computed(() =>
-      Object.entries(props.config?.portfolio ?? {}).filter(([, p]) => p?.quantity > 0).map(([s]) => s)
+      Object.entries(mergePortfolios(portfolioList(props.config)).portfolio).filter(([, p]) => p?.quantity > 0).map(([s]) => s)
     );
     const groups = computed(() => [
       { id: 'default', label: 'Default', symbols: props.config?.stocks?.tickers ?? [] },

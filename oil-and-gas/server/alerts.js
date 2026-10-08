@@ -39,6 +39,7 @@
 const db = require('./db');
 const { dispatch, requireUser, readJsonBody, sendJson, HttpError } = require('./auth');
 const { getEarnings } = require('./events');
+const { allPositions } = require('./portfolios');
 
 const MAX_ALERTS = 200;
 const MAX_BULK = 50;
@@ -339,9 +340,8 @@ async function runCheck(userId, onlyIds = null) {
   await Promise.all(symbols.map(async sym => {
     try { quotes.set(sym, await getQuote(sym)); } catch { /* skip this symbol this round */ }
   }));
-  const settings = db.getProfile(userId)?.settings ?? {};
-  const portfolio = settings.portfolio ?? {};
-  const options = settings.optionPositions ?? {};
+  // Positions across all of the user's portfolios (a stock in two counts once, at its combined average).
+  const { portfolio, optionPositions: options } = allPositions(db.getProfile(userId)?.settings ?? {});
   const events = [];
   for (const alert of active) {
     const option = parseOcc(alert.symbol);
@@ -414,7 +414,7 @@ async function createBulk(req, res) {
     throw new HttpError(400, `That would pass the limit of ${MAX_ALERTS} alerts (you have ${db.countAlerts(userId)})`);
   }
 
-  const portfolio = kind === 'position' ? (db.getProfile(userId)?.settings?.portfolio ?? {}) : {};
+  const portfolio = kind === 'position' ? allPositions(db.getProfile(userId)?.settings ?? {}).portfolio : {};
   const skipped = [];
   const ids = [];
   for (const symbol of symbols) {

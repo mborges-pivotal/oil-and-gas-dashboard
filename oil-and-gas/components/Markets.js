@@ -20,7 +20,7 @@ export default {
   name: 'Markets',
   components: { EconomicIndicators, OilGasMarkets, Stocks },
   props: ['config', 'user'],
-  emits: ['set-tickers', 'set-position', 'go-account', 'go-notes'],
+  emits: ['set-tickers', 'set-position', 'set-portfolios', 'go-account', 'go-notes'],
   setup() {
     const activeSection = ref('stocks'); // the first sub-tab
     // Last refresh time reported by each child, shown in the header row.
@@ -126,7 +126,7 @@ export default {
         <Stocks v-else-if="activeSection === 'stocks'" :config="config" :user="user"
           @updated="updated.stocks = $event"
           @set-tickers="$emit('set-tickers', $event)"
-          @set-position="$emit('set-position', $event)"
+          @set-position="$emit('set-position', $event)" @set-portfolios="$emit('set-portfolios', $event)"
           @go-account="$emit('go-account')" @go-notes="$emit('go-notes')" />
         <OilGasMarkets v-else :config="config" :section="activeSection"
           @updated="updated.oilgas = $event" />

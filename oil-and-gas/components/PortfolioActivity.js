@@ -3,11 +3,11 @@ import { formatUSD, formatPrice, formatDate, changeClass } from '../utils/format
 import { MULTIPLIER, optionLabel } from '../utils/options.js';
 
 /**
- * Portfolio → Activity: every recorded trade, newest first, grouped by
- * month — stock purchases and sales, and option opens, closes and
- * expirations — from open positions and Closed positions alike. Built from
- * the transactions saved on each position (config.portfolio,
- * config.optionPositions, config.closedPositions), so it's read-only:
+ * Account → Activity: every recorded trade in every portfolio (or one, picked
+ * in the filter), newest first, grouped by month — stock purchases and
+ * sales, and option opens, closes and expirations — from open positions and
+ * Closed positions alike. Built from the transactions saved on each position
+ * (each portfolio's portfolio / optionPositions / closedPositions), so it's read-only:
  * trades are added, closed or deleted on the position itself. Positions
  * entered as a total (quantity × average cost) have no trades to list.
  */
@@ -15,30 +15,37 @@ const KINDS = [
   { id: 'all',     label: 'All' },
   { id: 'stock',   label: 'Stocks' },
   { id: 'option',  label: 'Options' },
+  { id: 'cash',    label: 'Cash' },
+  { id: 'transfer', label: 'Transfers' },
 ];
+const cashName = sym => (sym === 'CASH' ? 'Account cash' : sym);
 
 const sharesFormat = new Intl.NumberFormat('en-US', { maximumFractionDigits: 6 });
 const signedUSD = v => (v > 0 ? '+' : v < 0 ? '−' : '') + formatUSD(Math.abs(v));
 
 export default {
   name: 'PortfolioActivity',
-  props: { config: Object },
+  props: { portfolios: { type: Array, default: () => [] }, accountCash: { type: Object, default: null }, transfers: { type: Array, default: () => [] } },
   setup(props) {
     const kind = ref('all');
     const query = ref('');
+    const pfFilter = ref(''); // '' = all portfolios
 
     // One row per trade: { id, date, kind, action, symbol, title, quantity, unit, price,
     //   cash (signed flow: − paid, + received), realized, via, closed }
     const rows = computed(() => {
       const out = [];
+      let pf = null; // the portfolio being read (set in the loop below)
       const stockRows = (symbol, txs, closed) => {
         for (const t of txs ?? []) {
+          if (t.type === 'transfer-in' || t.type === 'transfer-out') continue; // listed once, as the move below
           const sell = t.type === 'sell';
           out.push({
-            id: `s-${symbol}-${t.id}`, date: t.date, kind: 'stock', action: sell ? 'Sell' : 'Buy',
+            portfolio: pf.name, portfolioId: pf.id,
+            id: `s-${pf.id}-${symbol}-${t.id}`, date: t.date, kind: 'stock', action: sell ? 'Sell' : 'Buy',
             symbol, title: symbol, quantity: t.quantity, unit: 'shares', price: t.price,
             cash: (sell ? 1 : -1) * t.quantity * t.price, realized: sell ? t.realized : null,
-            via: t.paidFrom ? `from ${t.paidFrom}` : t.depositTo ? `to ${t.depositTo}` : '', closed,
+            via: t.paidFrom ? `from ${cashName(t.paidFrom)}` : t.depositTo ? `to ${cashName(t.depositTo)}` : '', closed,
           });
         }
       };
@@ -52,18 +59,43 @@ export default {
           // Money in: selling to open a short, or closing a long; out otherwise.
           const inflow = open ? short : !short;
           out.push({
-            id: `o-${occ}-${t.id}`, date: t.date, kind: 'option', action, symbol: o.underlying,
+            portfolio: pf.name, portfolioId: pf.id,
+            id: `o-${pf.id}-${occ}-${t.id}`, date: t.date, kind: 'option', action, symbol: o.underlying,
             title: optionLabel(occ), quantity: t.quantity, unit: t.quantity === 1 ? 'contract' : 'contracts', price: t.price,
             cash: (inflow ? 1 : -1) * t.quantity * m * t.price, realized: open ? null : t.realized,
-            via: t.cash ? `${t.cashDir === 'out' ? 'from' : 'to'} ${t.cash}` : '', closed,
+            via: t.cash ? `${t.cashDir === 'out' ? 'from' : 'to'} ${cashName(t.cash)}` : '', closed,
           });
         }
       };
-      for (const [sym, p] of Object.entries(props.config?.portfolio ?? {})) stockRows(sym, p?.transactions, false);
-      for (const [occ, p] of Object.entries(props.config?.optionPositions ?? {})) if (p) optionRows(occ, p, p.transactions, false);
-      for (const c of props.config?.closedPositions ?? []) {
-        if (c.kind === 'option') optionRows(c.symbol, c.option, c.transactions, true);
-        else stockRows(c.symbol, c.transactions, true);
+      for (const p of props.portfolios) {
+        if (pfFilter.value && p.id !== pfFilter.value) continue;
+        pf = p;
+        for (const [sym, pos] of Object.entries(p.portfolio ?? {})) stockRows(sym, pos?.transactions, false);
+        for (const [occ, pos] of Object.entries(p.optionPositions ?? {})) if (pos) optionRows(occ, pos, pos.transactions, false);
+        for (const c of p.closedPositions ?? []) {
+          if (c.kind === 'option') optionRows(c.symbol, c.option, c.transactions, true);
+          else stockRows(c.symbol, c.transactions, true);
+        }
+      }
+      // Moves between portfolios — shown for either portfolio when one is picked.
+      for (const m of props.transfers ?? []) {
+        if (pfFilter.value && m.fromId !== pfFilter.value && m.toId !== pfFilter.value) continue;
+        out.push({
+          id: `m-${m.id}`, date: m.date, kind: 'transfer', action: 'Transfer', symbol: m.symbol, title: m.symbol,
+          quantity: m.quantity, unit: m.quantity === 1 ? 'share' : 'shares', price: m.avgCost, priceLabel: 'avg',
+          cash: 0, realized: null, closed: false, portfolio: null,
+          via: `${m.fromName} → ${m.toName}${m.whole ? ' (whole position, with its trades)' : ''}${m.options?.length ? ' · with ' + m.options.join(', ') : ''}`,
+        });
+      }
+      // Deposits into the account's cash (not in any portfolio — shown unless one is picked).
+      if (!pfFilter.value) {
+        for (const d of props.accountCash?.deposits ?? []) {
+          out.push({
+            id: `d-${d.id}`, date: d.date, kind: 'cash', action: 'Deposit', symbol: '', title: 'Account cash',
+            quantity: null, unit: '', price: null, cash: d.amount, realized: null,
+            via: `from ${d.bank} ••${d.last4}`, closed: false, portfolio: null,
+          });
+        }
       }
       return out.sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id));
     });
@@ -72,6 +104,8 @@ export default {
       all: rows.value.length,
       stock: rows.value.filter(r => r.kind === 'stock').length,
       option: rows.value.filter(r => r.kind === 'option').length,
+      cash: rows.value.filter(r => r.kind === 'cash').length,
+      transfer: rows.value.filter(r => r.kind === 'transfer').length,
     }));
     const filtered = computed(() => {
       const q = query.value.trim().toUpperCase();
@@ -103,7 +137,7 @@ export default {
     // A bigger list stays quick: show 100 at a time.
     const PAGE = 100;
     const shown = ref(PAGE);
-    watch([kind, query], () => { shown.value = PAGE; });
+    watch([kind, query, pfFilter], () => { shown.value = PAGE; });
     const visibleMonths = computed(() => {
       let left = shown.value;
       const out = [];
@@ -115,10 +149,10 @@ export default {
       return out;
     });
 
-    const actionClass = r => (r.action === 'Expired' ? 'expired' : r.cash > 0 ? 'in' : r.cash < 0 ? 'out' : '');
+    const actionClass = r => (r.action === 'Expired' ? 'expired' : r.kind === 'transfer' ? 'transfer' : r.cash > 0 ? 'in' : r.cash < 0 ? 'out' : '');
 
     return {
-      KINDS, kind, query, rows, counts, filtered, visibleMonths, totals, shown, PAGE, actionClass,
+      KINDS, kind, query, pfFilter, rows, counts, filtered, visibleMonths, totals, shown, PAGE, actionClass,
       formatUSD, formatPrice, formatDate, changeClass, signedUSD, formatQty: n => sharesFormat.format(n),
     };
   },
@@ -131,8 +165,14 @@ export default {
             {{ k.label }} <span class="note-chip-count">{{ counts[k.id] }}</span>
           </button>
         </div>
-        <input type="search" class="activity-search" v-model="query" placeholder="Filter by ticker, contract or type"
-               aria-label="Filter activity" autocomplete="off" />
+        <div class="activity-filters">
+          <select v-if="portfolios.length > 1" v-model="pfFilter" aria-label="Portfolio">
+            <option value="">All portfolios</option>
+            <option v-for="p in portfolios" :key="p.id" :value="p.id">{{ p.name }}</option>
+          </select>
+          <input type="search" class="activity-search" v-model="query" placeholder="Filter by ticker, contract or type"
+                 aria-label="Filter activity" autocomplete="off" />
+        </div>
       </div>
 
       <p class="text-muted text-sm activity-empty" v-if="!rows.length">
@@ -155,13 +195,14 @@ export default {
                 <span class="activity-action" :class="actionClass(r)">{{ r.action }}</span>
                 <span class="activity-title">{{ r.title }}</span>
                 <span class="activity-closed" v-if="r.closed" title="This position has been closed">closed</span>
+                <span class="activity-portfolio" v-if="portfolios.length > 1 && !pfFilter && r.portfolio">{{ r.portfolio }}</span>
                 <span class="activity-detail text-muted">
-                  {{ formatQty(r.quantity) }} {{ r.unit }} at {{ formatPrice(r.price) }}<template v-if="r.via"> · {{ r.via }}</template>
+                  <template v-if="r.quantity != null">{{ formatQty(r.quantity) }} {{ r.unit }} at {{ formatPrice(r.price) }}{{ r.priceLabel ? ' ' + r.priceLabel : '' }}<template v-if="r.via"> · </template></template>{{ r.via }}
                 </span>
               </span>
               <span class="activity-num">
                 <span class="activity-label">Cash</span>
-                <span :class="changeClass(r.cash)">{{ r.cash ? signedUSD(r.cash) : '—' }}</span>
+                <span :class="r.cash ? changeClass(r.cash) : 'text-muted'">{{ r.cash ? signedUSD(r.cash) : '—' }}</span>
               </span>
               <span class="activity-num">
                 <template v-if="r.realized != null">

@@ -4,6 +4,7 @@ import AlertComposer from './AlertComposer.js';
 import { alertsStore, loadAlerts, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertStatus, alertSubject } from '../utils/alerts.js';
 import { parseOcc } from '../utils/options.js';
+import { portfolioList, mergePortfolios } from '../utils/portfolios.js';
 import { fetchQuote } from '../services/yahooFinance.js';
 import { fetchEarnings } from '../services/events.js';
 
@@ -59,14 +60,16 @@ export default {
         }));
     });
 
+    // Positions across all portfolios (a stock held in two counts at its combined average).
+    const merged = computed(() => mergePortfolios(portfolioList(props.config)));
     const avgCostFor = sym => {
-      const p = parseOcc(sym) ? props.config?.optionPositions?.[sym] : props.config?.portfolio?.[sym];
+      const p = parseOcc(sym) ? merged.value.optionPositions[sym] : merged.value.portfolio[sym];
       return p?.quantity > 0 ? p.avgCost : null;
     };
     // Option contracts: the form's option mode (short = sold to open).
     const optionFor = sym => {
       const o = parseOcc(sym);
-      return o && { ...o, short: props.config?.optionPositions?.[sym]?.side === 'short' };
+      return o && { ...o, short: merged.value.optionPositions[sym]?.side === 'short' };
     };
 
     async function startEdit(a) {

@@ -1,4 +1,5 @@
 import { updateProfile } from '../services/auth.js';
+import { migratePortfolios } from './portfolios.js';
 
 const CONFIG_KEY = 'oilgas_config';
 
@@ -40,7 +41,8 @@ function withoutApiKeys(config) {
 // missing (never touch a key they already have, even if its value differs
 // from the current default). Returns true if anything was added.
 function backfill(config, serverDefaults) {
-  let backfilled = false;
+  // A single top-level portfolio becomes the first of config.portfolios ("Main").
+  let backfilled = migratePortfolios(config);
   for (const key of Object.keys(serverDefaults)) {
     if (!(key in config) && !API_KEY_FIELDS.includes(key)) {
       config[key] = serverDefaults[key];

@@ -4,6 +4,7 @@ import { notesStore, loadNotes, addManualNote, editNote, removeNote } from '../u
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
 import { formatDate, formatRelativeTime } from '../utils/formatters.js';
 import { labelChipStyle } from '../utils/labelColors.js';
+import { portfolioList } from '../utils/portfolios.js';
 
 /**
  * Notes tab (signed in): news articles saved from a stock's News tab (each
@@ -78,7 +79,7 @@ export default {
     // positions and stocks already used in notes.
     const knownSymbols = computed(() => [...new Set([
       ...(props.config?.stocks?.tickers ?? []),
-      ...Object.keys(props.config?.portfolio ?? {}),
+      ...portfolioList(props.config).flatMap(p => Object.keys(p.portfolio ?? {})),
       ...symbols.value,
     ])].sort());
 

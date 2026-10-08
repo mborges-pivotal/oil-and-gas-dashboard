@@ -20,7 +20,9 @@ import { monthlyTicks, hourlyTicks, dropEdgeTickCollisions } from '../utils/date
 export default {
   name: 'HistoryChart',
   // data: ascending array of { period, value }
-  props: { data: Array, formatValue: Function, intraday: Boolean, baseline: Number },
+  // changeInPoints: the corner shows the change as a difference ("+1.20 pts")
+  // rather than a percent — for series that are already percentages.
+  props: { data: Array, formatValue: Function, intraday: Boolean, baseline: Number, changeInPoints: Boolean },
   setup(props) {
     // Drawn at the container's real width so text stays legible on phones.
     const wrap = ref(null);
@@ -108,6 +110,7 @@ export default {
       if (!firstPoint.value || !lastPoint.value) return null;
       const first = hasBaseline.value ? props.baseline : Number(firstPoint.value.value);
       const last = Number(lastPoint.value.value);
+      if (props.changeInPoints) return { abs: last - first, pct: last - first };
       if (!first) return null;
       return { abs: last - first, pct: ((last - first) / Math.abs(first)) * 100 };
     });
@@ -130,7 +133,7 @@ export default {
       <div class="chart-corner-label" v-if="lastPoint">
         <span class="chart-corner-value">{{ fmt(Number(lastPoint.value)) }}</span>
         <span v-if="periodChange" class="chart-corner-change" :class="periodChange.pct >= 0 ? 'positive' : 'negative'">
-          {{ formatPct(periodChange.pct) }}
+          {{ changeInPoints ? (periodChange.abs >= 0 ? '+' : '') + periodChange.abs.toFixed(2) + ' pts' : formatPct(periodChange.pct) }}
         </span>
       </div>
       <svg :viewBox="'0 0 ' + width + ' ' + height" class="history-chart-svg"

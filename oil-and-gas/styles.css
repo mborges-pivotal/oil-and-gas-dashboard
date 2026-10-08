@@ -1775,6 +1775,66 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .event-tag { justify-self: end; }
 }
 
+/* Account → Summary: cash and deposits */
+.cash-card { margin-bottom: 12px; }
+.cash-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.cash-balance { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.deposit-form { margin-top: 12px; }
+.deposit-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.deposit-row { display: grid; grid-template-columns: 100px minmax(0, 1fr) auto auto; align-items: baseline; gap: 4px 12px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; }
+.deposit-date { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.deposit-amount { font-weight: 700; font-variant-numeric: tabular-nums; }
+.deposit-row .link-button { padding: 0 4px; }
+.deposit-more { margin-top: 6px; padding: 0; font-size: 13px; }
+.cash-note { margin: 10px 0 0; }
+@media (max-width: 480px) {
+  .deposit-row { grid-template-columns: 1fr auto auto; }
+  .deposit-date { grid-column: 1 / -1; font-size: 12px; }
+}
+
+/* Account → Portfolios: cards, an opened portfolio, its chart */
+.pf-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.pf-card {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin: 0; padding: 16px; text-align: left;
+  font: inherit; color: var(--text); cursor: pointer; transition: border-color var(--transition), box-shadow var(--transition);
+}
+button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(0, 0, 0, .08); }
+.pf-card-name { font-size: 15px; font-weight: 700; margin-bottom: 4px; }
+.pf-card-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; }
+.pf-card-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pf-card-stats { display: flex; gap: 16px; font-size: 13px; font-variant-numeric: tabular-nums; margin: 2px 0; }
+.pf-card-new { justify-content: center; align-items: stretch; border-style: dashed; cursor: default; }
+.pf-card-new-btn { border: none; background: none; color: var(--accent); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; padding: 18px 0; }
+.pf-card-new input { width: 100%; }
+.pf-card-new-actions { display: flex; gap: 8px; margin-top: 8px; }
+.pf-card-new-actions button { padding: 5px 12px; }
+.pf-cards-note { grid-column: 1 / -1; margin: 0; }
+.pf-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+.pf-detail-head .link-button { padding: 0; }
+.pf-detail-name { margin: 0; font-size: 18px; }
+.pf-detail-actions { display: flex; gap: 12px; margin-left: auto; }
+.pf-rename { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pf-rename button { padding: 5px 12px; }
+.pf-chart-card { margin-bottom: 12px; }
+.pf-chart-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px; }
+.pf-chart-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pf-chart-ranges { flex-wrap: nowrap; }
+.pf-chart-note { margin: 8px 0 0; }
+/* Markets → a stock's Portfolio tab: which portfolio */
+.pf-choice { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.pf-choice-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.pf-choice-field select, .pf-choice-field input { min-width: 180px; }
+.pf-choice-hint { padding-bottom: 6px; }
+/* Activity: portfolio filter and tag */
+.activity-filters { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 1 auto; }
+.activity-portfolio { font-size: 11px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; }
+@media (max-width: 480px) {
+  .pf-cards { grid-template-columns: 1fr; }
+  .pf-chart-ranges { width: 100%; }
+  .pf-chart-ranges .range-btn:last-child { flex: 1.7 1 0; }
+  .pf-choice-field, .pf-choice-field select, .pf-choice-field input { width: 100%; min-width: 0; }
+}
+
 /* Portfolio page: sorting Holdings and Options */
 .sort-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
 .sort-bar-inset { padding: 10px 0 2px; border-bottom: none; background: none; }
@@ -1836,6 +1896,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .activity-action { font-size: 11px; font-weight: 700; line-height: 16px; padding: 1px 7px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); white-space: nowrap; }
 .activity-action.in { color: var(--positive); border-color: currentColor; background: transparent; }
 .activity-action.out { color: var(--accent); border-color: currentColor; background: transparent; }
+.activity-action.transfer { color: var(--text); border-style: dashed; }
+.move-form .move-options { margin-top: 10px; }
 .activity-action.expired { color: var(--negative); background: var(--negative-bg); border-color: transparent; }
 .activity-title { font-weight: 700; font-size: 14px; }
 .activity-closed { font-size: 11px; color: var(--text-muted); border: 1px dashed var(--border); border-radius: 999px; padding: 0 6px; }
@@ -1849,6 +1911,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   .activity-date { grid-column: 1 / -1; font-size: 12px; }
   .activity-search { flex-basis: 100%; }
 }
+
+/* Profile → Bank accounts */
+.bank-form { margin-top: 12px; }
+.bank-list { list-style: none; margin: 12px 0 0; padding: 0; }
+.bank-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 0; border-top: 1px solid var(--border); }
+.bank-icon { font-size: 18px; }
+.bank-info { display: flex; flex-direction: column; flex: 1; min-width: 140px; }
+.bank-name { font-weight: 700; font-size: 14px; }
+.bank-status { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; }
+.bank-status.connected { color: var(--positive); }
+.bank-status.disconnected { color: var(--text-muted); border-style: dashed; }
+.bank-actions { display: flex; gap: 12px; }
+.bank-actions .link-button { padding: 0; }
+.bank-row-error { flex-basis: 100%; margin: 4px 0 0; }
 
 /* Profile → Alerts */
 .alerts-filters { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 14px; }

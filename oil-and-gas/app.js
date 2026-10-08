@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/config.js';
+import { emptyPortfolio } from './utils/portfolios.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
 import { fetchCurrentUser, logout } from './services/auth.js';
 import { THEME_OPTIONS, applyTheme, normalizeTheme } from './utils/theme.js';
@@ -341,17 +342,13 @@ const App = {
 
     // Content tabs only — Settings and Sign In / Profile are pages reached
     // from the header's account menu (UserMenu).
-    // Portfolio appears when signed in (positions need an account) and you
-    // hold at least one position — or have closed ones to look back at.
-    const hasPositions = computed(() => !!user.value && (
-      Object.values(config.value?.portfolio ?? {}).some(p => p?.quantity > 0)
-      || Object.values(config.value?.optionPositions ?? {}).some(p => p?.quantity > 0)
-      || (config.value?.closedPositions?.length ?? 0) > 0
-    ));
+    // Account (your portfolios) appears when signed in — positions need an
+    // account, and that's where portfolios are created.
+    const hasPositions = computed(() => !!user.value);
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
-      ...(hasPositions.value ? [{ id: 'portfolio', label: 'Portfolio' }] : []),
+      ...(hasPositions.value ? [{ id: 'portfolio', label: 'Account' }] : []),
       // Inbox (signed in): Notes · Alerts · Messages, badged with unread alerts + messages.
       ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
     ]);
@@ -405,7 +402,7 @@ const App = {
     }, { immediate: true });
     // A changed refresh interval (Settings) re-times the checks.
     watch(() => config.value?.ui?.refreshIntervalSeconds, () => { if (user.value) startAlertChecks(); });
-    // Last position removed, signed out, or reset while on Portfolio.
+    // Signed out while on Account.
     watch(hasPositions, has => {
       if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
     });
@@ -453,10 +450,10 @@ const App = {
       const next = {
         ...updated,
         ui: { ...updated.ui, theme: config.value.ui?.theme },
-        // Portfolio positions are edited on the Stocks tab, not in this panel.
-        portfolio: config.value.portfolio,
-        optionPositions: config.value.optionPositions,
-        closedPositions: config.value.closedPositions,
+        // Portfolios are edited on the stock cards and the Account page, not in this panel.
+        portfolios: config.value.portfolios,
+        accountCash: config.value.accountCash,
+        transfers: config.value.transfers,
         eiaApiKey: config.value.eiaApiKey,
         fredApiKey: config.value.fredApiKey,
       };
@@ -540,15 +537,16 @@ const App = {
       persistConfig({ ...config.value, stocks: { ...config.value.stocks, tickers } }, 'Watchlist');
     }
 
-    // A stock's position (quantity + average cost) saved or removed on its
-    // Portfolio tab. config.portfolio is { SYMBOL: { quantity, avgCost } }.
-    // Also { updates: { SYMBOL: position | null, … } } — several positions in
-    // one save (a purchase paid from a cash holding changes both), so they
-    // can't land separately.
-    // `options` (optional) updates config.optionPositions the same way
-    // (OCC symbol → position | null); `closed` replaces config.closedPositions
-    // — sold-out positions. All in one save, so cash moves stay consistent.
-    function onSetPosition({ symbol, position, updates, options, closed }) {
+    // Positions saved or removed in one portfolio (config.portfolios[i], see
+    // utils/portfolios.js): { portfolioId, symbol, position } or { updates:
+    // { SYMBOL: position | null, … } } — several in one save (a purchase paid
+    // from a cash holding changes both), so they can't land separately.
+    // `options` updates its option contracts the same way (OCC → position |
+    // null); `closed` replaces its closed positions. `newPortfolio` ({ id,
+    // name }) creates the portfolio first — a purchase into a new portfolio.
+    // `cashDelta` adds to (or takes from) the account's cash (config.accountCash)
+    // — a purchase paid from it, or a sale deposited to it.
+    function onSetPosition({ portfolioId, newPortfolio, symbol, position, updates, options, closed, cashDelta }) {
       const merge = (current, changes) => {
         const out = { ...(current ?? {}) };
         for (const [sym, pos] of Object.entries(changes)) {
@@ -557,10 +555,64 @@ const App = {
         }
         return out;
       };
-      const next = { ...config.value, portfolio: merge(config.value.portfolio, updates ?? (symbol ? { [symbol]: position } : {})) };
-      if (options) next.optionPositions = merge(config.value.optionPositions, options);
-      if (closed) next.closedPositions = closed;
+      let list = [...(config.value.portfolios ?? [])];
+      if (newPortfolio && !list.some(p => p.id === newPortfolio.id)) list.push(emptyPortfolio(newPortfolio.name, newPortfolio.id));
+      const i = list.findIndex(p => p.id === portfolioId);
+      if (i === -1) {
+        saveError.value = 'That portfolio no longer exists — nothing was saved.';
+        return;
+      }
+      const pf = { ...list[i], portfolio: merge(list[i].portfolio, updates ?? (symbol ? { [symbol]: position } : {})) };
+      if (options) pf.optionPositions = merge(list[i].optionPositions, options);
+      if (closed) pf.closedPositions = closed;
+      list[i] = pf;
+      const next = { ...config.value, portfolios: list };
+      if (cashDelta) {
+        const cash = config.value.accountCash ?? { balance: 0, deposits: [] };
+        next.accountCash = { ...cash, balance: Math.round(((cash.balance ?? 0) + cashDelta) * 100) / 100 };
+      }
       persistConfig(next, 'Portfolio position');
+    }
+
+    // The account's cash: a deposit added or deleted (Account → Summary).
+    function onSetAccountCash(accountCash) {
+      persistConfig({ ...config.value, accountCash }, 'Cash');
+    }
+    function openBankAccounts() {
+      accountSection.value = 'banks';
+      activeTab.value = 'account';
+    }
+
+    // A position moved between portfolios — every portfolio's change in one
+    // save, plus its entry in config.transfers (Account → Activity). Undo sends
+    // the "before" state with removeTransferId (and removePortfolioId when the
+    // move had created that portfolio).
+    function onMovePosition({ changes, transfer, removeTransferId, removePortfolioId }) {
+      const merge = (current, changes) => {
+        const out = { ...(current ?? {}) };
+        for (const [sym, pos] of Object.entries(changes ?? {})) {
+          if (pos) out[sym] = pos;
+          else delete out[sym];
+        }
+        return out;
+      };
+      let list = [...(config.value.portfolios ?? [])];
+      for (const c of changes) {
+        if (c.newPortfolio && !list.some(p => p.id === c.newPortfolio.id)) list.push(emptyPortfolio(c.newPortfolio.name, c.newPortfolio.id));
+        const i = list.findIndex(p => p.id === c.portfolioId);
+        if (i === -1) continue;
+        list[i] = { ...list[i], portfolio: merge(list[i].portfolio, c.updates), optionPositions: merge(list[i].optionPositions, c.options) };
+      }
+      if (removePortfolioId) list = list.filter(p => p.id !== removePortfolioId);
+      let transfers = config.value.transfers ?? [];
+      if (removeTransferId) transfers = transfers.filter(t => t.id !== removeTransferId);
+      if (transfer) transfers = [transfer, ...transfers];
+      persistConfig({ ...config.value, portfolios: list, transfers }, 'Move');
+    }
+
+    // Portfolios created, renamed or deleted (Account → Portfolios).
+    function onSetPortfolios(list) {
+      persistConfig({ ...config.value, portfolios: list }, 'Portfolios');
     }
 
 
@@ -572,7 +624,7 @@ const App = {
       inboxSection, selectTab, openNotes, accountSection, openLabels, openAlertsManager,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios, onSetAccountCash, openBankAccounts,
     };
   },
   template: `
@@ -624,11 +676,12 @@ const App = {
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
-            @set-tickers="onSetTickers" @set-position="onSetPosition" @go-account="activeTab = 'account'"
+            @set-tickers="onSetTickers" @set-position="onSetPosition" @set-portfolios="onSetPortfolios" @go-account="activeTab = 'account'"
             @go-notes="openNotes" />
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
-            @set-position="onSetPosition" @go-notes="openNotes" />
+            @set-position="onSetPosition" @move-position="onMovePosition" @set-portfolios="onSetPortfolios" @set-account-cash="onSetAccountCash"
+            @go-bank-accounts="openBankAccounts" @go-notes="openNotes" />
           <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
