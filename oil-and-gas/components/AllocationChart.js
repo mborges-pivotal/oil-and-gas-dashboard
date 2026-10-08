@@ -29,7 +29,9 @@ function compactUSD(v) {
 
 export default {
   name: 'AllocationChart',
-  props: { slices: Array, label: String },
+  // mode: 'pct' (default) labels the ring with percentages; 'usd' with
+  // compact dollars, and the legend leads with the dollar amount.
+  props: { slices: Array, label: String, mode: { type: String, default: 'pct' } },
   setup(props) {
     const SIZE = 180;
     const C = SIZE / 2;
@@ -113,7 +115,7 @@ export default {
           <template v-for="a in arcs" :key="'l' + a.key">
             <text v-if="a.labelAt" :x="a.labelAt.x" :y="a.labelAt.y" :fill="a.ink"
                   class="allocation-slice-label" :class="{ dim: active && active !== a.key }"
-                  text-anchor="middle" dominant-baseline="central">{{ pctText(a.pct) }}</text>
+                  text-anchor="middle" dominant-baseline="central">{{ mode === 'usd' ? compactUSD(a.value) : pctText(a.pct) }}</text>
           </template>
         </svg>
         <!-- Center: total, or the hovered / tapped slice in full -->
@@ -136,8 +138,8 @@ export default {
             @mouseenter="active = a.key" @click="toggle(a.key)">
           <span class="allocation-swatch" :style="{ background: a.color }"></span>
           <span class="allocation-name">{{ a.name }}</span>
-          <span class="allocation-pct">{{ pctText(a.pct) }}</span>
-          <span class="allocation-value">{{ compactUSD(a.value) }}</span>
+          <span class="allocation-pct">{{ mode === 'usd' ? compactUSD(a.value) : pctText(a.pct) }}</span>
+          <span class="allocation-value">{{ mode === 'usd' ? pctText(a.pct) : compactUSD(a.value) }}</span>
         </li>
       </ul>
 

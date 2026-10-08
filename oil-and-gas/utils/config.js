@@ -67,11 +67,11 @@ export async function loadConfig(user = null) {
   if (user) {
     if (user.settings) {
       config = JSON.parse(JSON.stringify(user.settings));
-      if (backfill(config, serverDefaults)) await saveConfig(config, user);
+      if (backfill(config, serverDefaults)) config = adoptServerIds(config, config, await saveConfig(config, user)) ?? config;
     } else {
       config = readLocal() ?? { ...serverDefaults };
       backfill(config, serverDefaults);
-      await saveConfig(config, user);
+      config = adoptServerIds(config, config, await saveConfig(config, user)) ?? config;
     }
   } else {
     config = readLocal();
@@ -96,10 +96,33 @@ export async function loadConfig(user = null) {
 export async function saveConfig(config, user = null) {
   const toStore = withoutApiKeys(config);
   if (user) {
-    await updateProfile({ settings: toStore });
+    // The saved settings come back — portfolio IDs may have been made unique (see adoptServerIds).
+    return (await updateProfile({ settings: toStore }))?.settings ?? null;
   } else {
     localStorage.setItem(CONFIG_KEY, JSON.stringify(toStore));
   }
+}
+
+/**
+ * The server keeps portfolio IDs unique across accounts and may hand back
+ * different ones than were sent (server/portfolioIds.js). Given what was
+ * sent and what was saved, return `current` with those IDs swapped in (and
+ * transfers pointed at them), or null when nothing changed.
+ */
+export function adoptServerIds(current, sent, saved) {
+  const a = sent?.portfolios ?? [];
+  const b = saved?.portfolios ?? [];
+  const map = {};
+  a.forEach((p, i) => { if (b[i] && p.id !== b[i].id) map[p.id] = b[i].id; });
+  // A whole portfolio list where there wasn't one (an older settings file) — take it as saved.
+  if (!Array.isArray(current?.portfolios) && Array.isArray(saved?.portfolios)) return { ...current, portfolios: saved.portfolios, transfers: saved.transfers };
+  if (!Object.keys(map).length) return null;
+  const fix = id => map[id] ?? id;
+  return {
+    ...current,
+    portfolios: (current.portfolios ?? []).map(p => (p.id in map ? { ...p, id: map[p.id] } : p)),
+    transfers: (current.transfers ?? []).map(t => ({ ...t, fromId: fix(t.fromId), toId: fix(t.toId) })),
+  };
 }
 
 /**

@@ -21,10 +21,11 @@ import NoteForm from './NoteForm.js';
 import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
 import PortfolioActivity from './PortfolioActivity.js';
-import PortfolioChart from './PortfolioChart.js';
+import PortfolioOverview from './PortfolioOverview.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
-import { portfolioList, mergePortfolios, emptyPortfolio, newPortfolioId, summarizePortfolio, DEFAULT_PORTFOLIO_NAME } from '../utils/portfolios.js';
+import { portfolioList, mergePortfolios, emptyPortfolio, summarizePortfolio, DEFAULT_PORTFOLIO_NAME } from '../utils/portfolios.js';
+import { suggestPortfolioId, claimPortfolioId } from '../services/portfolios.js';
 import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
@@ -395,7 +396,7 @@ const TRANSFER_PICKER = `
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioChart },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   props: { config: Object, user: Object, portfolioOnly: Boolean },
@@ -485,12 +486,13 @@ export default {
       // Nothing held there yet: straight to "add a purchase".
       if (!positionFor(ticker) && !optionsFor(ticker).length && !positionForms[ticker]) startPurchase(ticker);
     }
-    // Where a save goes: the stock's portfolio, creating it first when it's new.
-    function pfTarget(ticker) {
+    // Where a save goes: the stock's portfolio, creating it first when it's new
+    // (its ID — derived from the name, unique across accounts — comes from the server).
+    async function pfTarget(ticker) {
       const pf = pfFor(ticker);
       if (pf.id) return { portfolioId: pf.id };
       const name = (pf.name || '').trim().replace(/\s+/g, ' ').slice(0, 40) || DEFAULT_PORTFOLIO_NAME;
-      const id = newPortfolioId();
+      const id = await claimPortfolioId(name);
       if (!props.portfolioOnly) {
         pfChoice[ticker] = { id };
         try { localStorage.setItem(LAST_PF_KEY, id); } catch { /* per-browser only */ }
@@ -503,24 +505,67 @@ export default {
       const name = (pf.name || '').trim() || DEFAULT_PORTFOLIO_NAME;
       return portfolios.value.some(p => p.name.toLowerCase() === name.toLowerCase()) ? `You already have a portfolio named "${name}".` : null;
     }
-    function emitPosition(ticker, payload) {
-      emit('set-position', { ...withCash(payload), ...pfTarget(ticker) });
+    const pfError = ref(null); // a new portfolio couldn't be created (its ID)
+    async function emitPosition(ticker, payload) {
+      pfError.value = null;
+      try {
+        emit('set-position', { ...withCash(payload), ...(await pfTarget(ticker)) });
+      } catch (e) {
+        pfError.value = `Couldn't create the portfolio: ${e.message}. Nothing was saved.`;
+      }
     }
 
     // Account → Portfolios: create, rename, delete; each card's headline numbers.
     const pfForm = ref(null); // { mode: 'create' | 'rename', name, error }
+    // Creating: the ID fills in from the name (the server's suggestion — unique
+    // across accounts) until you edit it; edited, it's checked as you type.
+    // Renaming keeps the ID.
     function openPfForm(mode) {
-      pfForm.value = { mode, name: mode === 'rename' ? openPf.value?.name ?? '' : '', error: null };
+      pfForm.value = { mode, name: mode === 'rename' ? openPf.value?.name ?? '' : '', id: '', idEdited: false, idState: null, busy: false, error: null };
     }
-    function submitPfForm() {
+    let idTimer = null;
+    function onPfFormInput(field) {
+      const f = pfForm.value;
+      if (!f || f.mode !== 'create') return;
+      f.error = null;
+      if (field === 'id') {
+        f.idEdited = true;
+        f.id = f.id.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-{2,}/g, '-').slice(0, 40);
+      }
+      f.idState = 'checking';
+      clearTimeout(idTimer);
+      idTimer = setTimeout(async () => {
+        if (pfForm.value !== f) return;
+        try {
+          const r = await suggestPortfolioId(f.name, f.idEdited ? f.id : '');
+          if (pfForm.value !== f) return;
+          if (!f.idEdited) { f.id = r.id; f.idState = 'ok'; }
+          else f.idState = !f.id ? null : !r.valid ? 'invalid' : r.available ? 'ok' : { taken: true, suggestion: r.id === f.id ? null : r.id };
+          if (f.idEdited && r.available === false) f.idState = { taken: true, suggestion: null };
+        } catch { f.idState = null; }
+      }, 300);
+    }
+    async function submitPfForm() {
       const f = pfForm.value;
       const name = f.name.trim().replace(/\s+/g, ' ').slice(0, 40);
       if (!name) { f.error = 'Name the portfolio.'; return; }
       const others = portfolios.value.filter(p => f.mode === 'create' || p.id !== openPf.value?.id);
       if (others.some(p => p.name.toLowerCase() === name.toLowerCase())) { f.error = `You already have a portfolio named "${name}".`; return; }
-      if (f.mode === 'create') emit('set-portfolios', [...portfolios.value, emptyPortfolio(name)]);
-      else emit('set-portfolios', portfolios.value.map(p => (p.id === openPf.value.id ? { ...p, name } : p)));
-      pfForm.value = null;
+      if (f.mode === 'rename') {
+        emit('set-portfolios', portfolios.value.map(p => (p.id === openPf.value.id ? { ...p, name } : p)));
+        pfForm.value = null;
+        return;
+      }
+      f.busy = true;
+      try {
+        const id = await claimPortfolioId(name, f.idEdited ? f.id : '');
+        emit('set-portfolios', [...portfolios.value, emptyPortfolio(name, id)]);
+        pfForm.value = null;
+      } catch (e) {
+        f.error = e.message + (e.suggestion ? ` — try "${e.suggestion}".` : '');
+        if (e.suggestion) { f.id = e.suggestion; f.idEdited = true; f.idState = 'ok'; }
+        f.busy = false;
+      }
     }
     function deletePortfolio() {
       const pf = openPf.value;
@@ -1999,7 +2044,7 @@ export default {
       const merged = had ? { quantity: had.quantity + qty, avgCost: (had.quantity * had.avgCost + qty * p.avgCost) / (had.quantity + qty) } : { quantity: qty, avgCost: p.avgCost };
       return { qty, whole, had, merged, dest, opts, blockedOpts: f.withOptions ? movableOptions(ticker).filter(x => x.blocked) : [], left: p.quantity - qty, error };
     }
-    function saveMove(ticker) {
+    async function saveMove(ticker) {
       const f = moveForms[ticker];
       const src = openPf.value;
       const p = positionFor(ticker);
@@ -2012,7 +2057,12 @@ export default {
         const name = f.newName.trim().replace(/\s+/g, ' ').slice(0, 40);
         if (!name) { f.error = 'Name the new portfolio.'; return; }
         if (portfolios.value.some(x => x.name.toLowerCase() === name.toLowerCase())) { f.error = `You already have a portfolio named "${name}".`; return; }
-        destId = newPortfolioId();
+        try {
+          destId = await claimPortfolioId(name);
+        } catch (e) {
+          f.error = `Couldn't create the portfolio: ${e.message}`;
+          return;
+        }
         newPortfolio = { id: destId, name };
       }
       const dest = pv.dest ?? { id: destId, name: newPortfolio.name, portfolio: {}, optionPositions: {} };
@@ -2618,6 +2668,21 @@ export default {
       return { holdings: h, options: o, cash, total: h + o + cash };
     });
 
+    // The account card (Summary): every portfolio plus the account's cash.
+    // 1D % is against yesterday's total; all-time % is over the money
+    // invested (cash, which doesn't gain, isn't in that base).
+    const accountMetrics = computed(() => {
+      const m = summarizePortfolio(allPf.value, quoteOf, (sym, p) => (p.category || autoCategoryFor(sym)) === 'cash');
+      const cash = accountCash.value.balance ?? 0;
+      const value = m.value != null ? m.value + cash : null;
+      const options = optionsTotals.value?.value ?? 0;
+      const prev = value != null && m.dayGain != null ? value - m.dayGain : null;
+      return {
+        ...m, value, cash, options, holdings: value != null ? value - cash - options : null,
+        dayPct: m.dayGain != null && prev > 0 ? (m.dayGain / prev) * 100 : null,
+      };
+    });
+
     // ── Summary → Cash: deposits from your bank accounts (Profile → Bank accounts) ──
     // No balance or bank check yet: a deposit just adds to the account's cash.
     const bankAccounts = ref(null); // loaded when the deposit form opens
@@ -2750,6 +2815,16 @@ export default {
       return [...base].sort((a, b) => cmp(val(a), val(b), dir) || a.localeCompare(b));
     });
     holdingsOrder.value = sortedHoldings;
+    // An opened portfolio's holdings by value, for its Holdings view (null until every price is in).
+    // On the Summary (all portfolios combined) the account's cash is a holding too.
+    const overviewHoldings = computed(() => {
+      const rows = portfolioTickers.value.map(positionSummary).filter(Boolean);
+      if (rows.some(r => r.value == null)) return null;
+      const out = rows.map(r => ({ symbol: r.symbol, name: stockQuotes[r.symbol]?.shortName ?? '', value: r.value }));
+      const cash = openPf.value ? 0 : (accountCash.value.balance ?? 0);
+      if (cash > 0) out.push({ symbol: 'Cash', name: 'Account cash', value: cash });
+      return out;
+    });
     // Each holding's share of the Holdings' total market value (options have
     // their own card). Waits for every price, like the totals.
     function holdingWeight(sym) {
@@ -2980,9 +3055,10 @@ export default {
       isPortfolioList, portfolioTotals, optionsTotals, netValue, shortSummary, optionGroups, optionsOpen, optionAdd, startOptionAdd,
       openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
       portfolios, openPf, openPfId, pfFor, pfChoice, choosePortfolio, holdsIn, DEFAULT_PORTFOLIO_NAME,
-      pfForm, openPfForm, submitPfForm, deletePortfolio, pfMetrics,
+      pfForm, openPfForm, submitPfForm, onPfFormInput, deletePortfolio, pfMetrics, pfError, accountMetrics,
       accountCash, cashName, ACCOUNT_CASH, cashReserved, depositForm, startDeposit, connectedBanks, depositBankFor, saveDeposit, deleteDeposit,
       depositsShown, showAllDeposits, bankAccounts, BANK_TYPES,
+      overviewHoldings, viewPf,
       HOLDING_SORTS, OPTION_SORTS, holdingSort, optionSort, setSort, sortedOptions, holdingWeight,
       CATEGORIES, CATEGORY_LABELS, autoCategoryFor, rangeFor, rangeLabel,
       moverSources, moverSelected, openMover, holdingsOpen,
@@ -3008,18 +3084,34 @@ export default {
       </div>
 
       <!-- Portfolio → Summary: the whole portfolio, when there are options too -->
-      <p class="portfolio-net" v-if="portfolioOnly && pfTab === 'summary' && user && (openOptionSymbols.length || netValue?.cash) && netValue">
-        Net value <strong>{{ formatUSD(netValue.total) }}</strong>
-        <span class="text-muted">{{ ' = holdings ' + formatUSD(netValue.holdings)
-          + (openOptionSymbols.length ? (netValue.options < 0 ? ' − ' : ' + ') + 'options ' + formatUSD(Math.abs(netValue.options)) : '')
-          + (netValue.cash ? (netValue.cash < 0 ? ' − ' : ' + ') + 'cash ' + formatUSD(Math.abs(netValue.cash)) : '') }}</span>
-      </p>
+      <!-- Account → Summary: the whole account, like a portfolio card — total value,
+           1D and all-time — with its cash and deposits at the bottom -->
+      <div class="card cash-card account-card-summary" v-if="portfolioOnly && pfTab === 'summary' && user">
+        <template v-for="m in [accountMetrics]" :key="'acct'">
+          <div class="acct-head">
+            <span class="pf-card-name">Account <span class="text-muted acct-sub">· {{ portfolios.length }} portfolio{{ portfolios.length === 1 ? '' : 's' }}</span></span>
+          </div>
+          <div class="acct-main">
+            <div>
+              <span class="pf-card-label">Total value</span>
+              <div class="pf-card-value">{{ m.value != null ? formatUSD(m.value) : '…' }}</div>
+            </div>
+            <span class="pf-card-stats">
+              <span><span class="pf-card-label">1D</span> <strong :class="changeClass(m.dayPct)">{{ m.dayPct != null ? formatPct(m.dayPct) : '—' }}</strong></span>
+              <span><span class="pf-card-label">All-time</span> <strong :class="changeClass(m.allTimePct)">{{ m.allTimePct != null ? formatPct(m.allTimePct) : '—' }}</strong></span>
+            </span>
+          </div>
+          <p class="text-muted text-sm acct-breakdown" v-if="m.value != null">
+            {{ 'Holdings ' + formatUSD(m.holdings)
+              + (openOptionSymbols.length ? (m.options < 0 ? ' − ' : ' + ') + 'options ' + formatUSD(Math.abs(m.options)) : '')
+              + ((m.cash ?? 0) !== 0 ? (m.cash < 0 ? ' − ' : ' + ') + 'cash ' + formatUSD(Math.abs(m.cash)) : '') }}
+            · {{ m.positions }} position{{ m.positions === 1 ? '' : 's' }}
+          </p>
+        </template>
 
-      <!-- Account → Summary: the account's cash and deposits from your bank accounts -->
-      <div class="card cash-card" v-if="portfolioOnly && pfTab === 'summary' && user">
-        <div class="cash-head">
+        <div class="cash-head acct-cash">
           <div>
-            <div class="card-title" style="margin-bottom:2px">Cash</div>
+            <div class="pf-card-label">Cash</div>
             <div class="cash-balance" :class="{ negative: (accountCash.balance ?? 0) < 0 }">{{ formatUSD(accountCash.balance ?? 0) }}</div>
             <div class="text-muted text-sm" v-if="cashReserved(ACCOUNT_CASH) > 0">
               {{ formatUSD(cashReserved(ACCOUNT_CASH)) }} reserved for cash-secured puts · {{ formatUSD((accountCash.balance ?? 0) - cashReserved(ACCOUNT_CASH)) }} available
@@ -3216,37 +3308,22 @@ export default {
 
       <div class="notice error" style="margin-bottom:10px" v-if="listsError">{{ listsError }}</div>
 
-      <!-- Allocation: by asset type and by sector, side by side -->
-      <div class="card allocation-card" v-if="isPortfolioList && pfTab === 'summary' && (portfolioTotals || openOptionSymbols.length || (accountCash.balance ?? 0) > 0)">
-        <div class="card-title allocation-head">Allocation</div>
-        <div class="allocation-pair">
-          <section class="allocation-panel" aria-label="Allocation by asset type">
-            <h3 class="allocation-panel-title">By asset type</h3>
-            <AllocationChart v-if="allocationByType && allocationByType.length" :slices="allocationByType" label="Allocation by asset type" />
-            <div class="skeleton allocation-skeleton" v-else></div>
-          </section>
-          <section class="allocation-panel" aria-label="Allocation by sector">
-            <h3 class="allocation-panel-title">By sector</h3>
-            <AllocationChart v-if="allocationBySector && allocationBySector.length" :slices="allocationBySector" label="Allocation by sector" />
-            <div class="skeleton allocation-skeleton" v-else></div>
-          </section>
-        </div>
-        <p class="text-muted text-sm allocation-note">
-          By current market value.
-          Asset types come from Yahoo Finance — change one on a stock's Portfolio tab (e.g. a bond fund → Bonds).
-          <template v-if="hasNonStockHoldings">By sector groups stocks by their sector and other holdings by type (fund sector breakdowns aren't available).</template>
-        </p>
-        <p class="text-muted text-sm allocation-note" v-if="shortSummary">
+      <!-- Account → Summary: every portfolio combined — Performance · Holdings · By sector · By asset type -->
+      <PortfolioOverview v-if="isPortfolioList && pfTab === 'summary' && user && (portfolioTotals || openOptionSymbols.length || (accountCash.balance ?? 0) > 0)"
+                         :portfolio="viewPf" :intraday="intraday" :quotes="stockQuotes" :is-cash="sym => categoryFor(sym) === 'cash'"
+                         :holdings="overviewHoldings" :sectors="allocationBySector" :types="allocationByType"
+                         storage-key="oilgas_summary_overview" performance-title="All-time gain · all portfolios">
+        <p class="text-muted text-sm hlist-note" v-if="shortSummary">
           <strong>Short options</strong> are liabilities, so they're not in the charts:
           {{ shortSummary.value != null ? formatUSD(shortSummary.value) + ' value' : 'value pending' }}<template v-if="shortSummary.reserved > 0"> · {{ formatUSD(shortSummary.reserved) }} cash reserved</template><template v-if="shortSummary.shares > 0"> · {{ formatShares(shortSummary.shares) }} shares covering calls</template>.
         </p>
-      </div>
+      </PortfolioOverview>
 
       <!-- Account → Portfolios: a card per portfolio -->
       <section class="pf-cards" v-if="portfolioOnly && pfTab === 'portfolios' && !openPf" aria-label="Portfolios">
         <button v-for="p in portfolios" :key="p.id" type="button" class="card pf-card" @click="openPfId = p.id">
           <template v-for="m in [pfMetrics(p)]" :key="p.id + '-m'">
-            <span class="pf-card-name">{{ p.name }}</span>
+            <span class="pf-card-name">{{ p.name }} <span class="pf-card-id">{{ p.id }}</span></span>
             <span class="pf-card-label">Position</span>
             <span class="pf-card-value">{{ m.value != null ? formatUSD(m.value) : (m.positions ? '…' : formatUSD(0)) }}</span>
             <span class="pf-card-stats">
@@ -3258,9 +3335,20 @@ export default {
         </button>
         <div class="card pf-card pf-card-new">
           <form v-if="pfForm?.mode === 'create'" @submit.prevent="submitPfForm" novalidate>
-            <input v-model="pfForm.name" maxlength="40" placeholder="Portfolio name, e.g. IRA" aria-label="New portfolio name" @input="pfForm.error = null" />
+            <input v-model="pfForm.name" maxlength="40" placeholder="Portfolio name, e.g. IRA" aria-label="New portfolio name" @input="onPfFormInput('name')" />
+            <label class="pf-id-field">
+              <span>ID</span>
+              <input v-model="pfForm.id" maxlength="40" placeholder="from the name" aria-label="Portfolio ID" spellcheck="false" autocapitalize="off" @input="onPfFormInput('id')" />
+            </label>
+            <span class="pf-id-hint text-sm" :class="pfForm.idState === 'ok' ? 'positive' : (pfForm.idState === 'invalid' || pfForm.idState?.taken) ? 'negative' : 'text-muted'">
+              <template v-if="pfForm.idState === 'checking'">Checking…</template>
+              <template v-else-if="pfForm.idState === 'ok'">✓ Available — unique across all accounts</template>
+              <template v-else-if="pfForm.idState === 'invalid'">Lowercase letters, digits and hyphens</template>
+              <template v-else-if="pfForm.idState?.taken">Taken — pick another</template>
+              <template v-else>Derived from the name; unique across all accounts</template>
+            </span>
             <div class="pf-card-new-actions">
-              <button type="submit" class="primary">Create</button>
+              <button type="submit" class="primary" :disabled="pfForm.busy">{{ pfForm.busy ? 'Creating…' : 'Create' }}</button>
               <button type="button" @click="pfForm = null">Cancel</button>
             </div>
             <div class="notice error" v-if="pfForm.error" style="margin:8px 0 0">{{ pfForm.error }}</div>
@@ -3283,14 +3371,15 @@ export default {
             <span class="negative text-sm" v-if="pfForm.error">{{ pfForm.error }}</span>
           </form>
           <template v-else>
-            <h3 class="pf-detail-name">{{ openPf.name }}</h3>
+            <h3 class="pf-detail-name">{{ openPf.name }} <span class="pf-card-id" title="Portfolio ID — unique across accounts; stays the same if you rename it">{{ openPf.id }}</span></h3>
             <span class="pf-detail-actions">
               <button type="button" class="link-button" @click="openPfForm('rename')">Rename</button>
               <button type="button" class="link-button danger-link" @click="deletePortfolio">Delete</button>
             </span>
           </template>
         </div>
-        <PortfolioChart :portfolio="openPf" :intraday="intraday" :quotes="stockQuotes" :is-cash="sym => categoryFor(sym) === 'cash'" />
+        <PortfolioOverview :portfolio="openPf" :intraday="intraday" :quotes="stockQuotes" :is-cash="sym => categoryFor(sym) === 'cash'"
+                           :holdings="overviewHoldings" :sectors="allocationBySector" />
       </template>
 
       <!-- Top movers (an opened portfolio, above Holdings) -->
@@ -3656,6 +3745,7 @@ export default {
           <!-- Portfolio: your position (quantity × average cost) and G/L -->
           <div class="portfolio" v-else-if="details[sym]?.tab === 'portfolio'">
             <!-- Markets: which portfolio this tab works in — pick one, or name a new one (created on the first save) -->
+            <div class="notice error" v-if="pfError && user && !portfolioOnly" style="margin:0 0 10px">{{ pfError }}</div>
             <div class="pf-choice" v-if="user && !portfolioOnly">
               <label class="pf-choice-field">
                 <span>Portfolio</span>

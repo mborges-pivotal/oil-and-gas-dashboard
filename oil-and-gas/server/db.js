@@ -116,6 +116,17 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS alerts_user_id ON alerts(user_id);
 
+  -- Portfolio IDs, unique across every account. The portfolios themselves
+  -- live in each profile's settings (settings.portfolios); this registry is
+  -- what keeps their IDs (derived from the name: "Retirement IRA" →
+  -- retirement-ira, then retirement-ira-2, …) from colliding between users.
+  CREATE TABLE IF NOT EXISTS portfolio_ids (
+    id         TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS portfolio_ids_user_id ON portfolio_ids(user_id);
+
   -- External bank accounts (Profile → Bank accounts), the source of deposits
   -- into the account's cash. Only the last 4 digits of the number are kept.
   -- Nothing is verified yet: status is set by the user.
@@ -229,6 +240,11 @@ function migrateAlertEventAck() {
 migrateAlertEventAck();
 
 const stmts = {
+  portfolioIdOwner: db.prepare('SELECT user_id FROM portfolio_ids WHERE id = ?'),
+  insertPortfolioId: db.prepare('INSERT OR IGNORE INTO portfolio_ids (id, user_id) VALUES (?, ?)'),
+  userPortfolioIds: db.prepare('SELECT id FROM portfolio_ids WHERE user_id = ?'),
+  deletePortfolioId: db.prepare('DELETE FROM portfolio_ids WHERE id = ? AND user_id = ?'),
+  profilesWithSettings: db.prepare('SELECT user_id, settings FROM profiles WHERE settings IS NOT NULL'),
   bankAccounts: db.prepare('SELECT * FROM bank_accounts WHERE user_id = ? ORDER BY created_at, id'),
   bankAccount: db.prepare('SELECT * FROM bank_accounts WHERE id = ? AND user_id = ?'),
   countBankAccounts: db.prepare('SELECT COUNT(*) AS n FROM bank_accounts WHERE user_id = ?'),
@@ -489,6 +505,17 @@ function toAlertEvent(row) {
 }
 
 module.exports = {
+  portfolioIdOwner: id => stmts.portfolioIdOwner.get(id)?.user_id ?? null,
+  /** Claim `id` for `userId`; false if someone already has it. */
+  registerPortfolioId: (id, userId) => {
+    stmts.insertPortfolioId.run(id, userId);
+    return stmts.portfolioIdOwner.get(id)?.user_id === userId;
+  },
+  /** Free the user's IDs that aren't in `keep` (deleted portfolios). */
+  releasePortfolioIds: (userId, keep) => {
+    for (const { id } of stmts.userPortfolioIds.all(userId)) if (!keep.includes(id)) stmts.deletePortfolioId.run(id, userId);
+  },
+  profilesWithSettings: () => stmts.profilesWithSettings.all().map(r => ({ userId: r.user_id, settings: JSON.parse(r.settings) })),
   listBankAccounts: userId => stmts.bankAccounts.all(userId).map(toBankAccount),
   getBankAccount: (userId, id) => toBankAccount(stmts.bankAccount.get(id, userId)),
   countBankAccounts: userId => stmts.countBankAccounts.get(userId).n,

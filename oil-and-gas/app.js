@@ -1,4 +1,4 @@
-import { loadConfig, saveConfig, resetConfig, exportConfig } from './utils/config.js';
+import { loadConfig, saveConfig, resetConfig, exportConfig, adoptServerIds } from './utils/config.js';
 import { emptyPortfolio } from './utils/portfolios.js';
 import { configureYahooFinance } from './services/yahooFinance.js';
 import { fetchCurrentUser, logout } from './services/auth.js';
@@ -516,7 +516,10 @@ const App = {
     async function persistConfig(next, what) {
       config.value = next;
       try {
-        await saveConfig(next, user.value);
+        const saved = await saveConfig(next, user.value);
+        // Portfolio IDs the server made unique replace ours.
+        const adopted = saved && adoptServerIds(config.value, next, saved);
+        if (adopted) config.value = adopted;
       } catch (err) {
         saveError.value = `${what} was applied but not saved: ${err.message}`;
       }

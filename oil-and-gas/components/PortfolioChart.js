@@ -35,6 +35,8 @@ export default {
     intraday: Object,            // symbol → { series: [{ period, value }], previousClose }
     quotes: Object,              // symbol → quote (for the 1D fallback price)
     isCash: { type: Function, default: () => false },
+    embedded: Boolean, // inside PortfolioOverview's card: no card of its own
+    title: { type: String, default: 'All-time gain' },
   },
   setup(props) {
     const range = ref('ALL');
@@ -142,10 +144,10 @@ export default {
     return { RANGES, range, data, loading, error, current, holdings, firstTrade, formatPct, formatDate, pctFmt: v => formatPct(v) };
   },
   template: `
-    <div class="card pf-chart-card">
+    <div :class="embedded ? 'pf-chart-embedded' : 'card pf-chart-card'">
       <div class="pf-chart-head">
         <div>
-          <div class="card-title" style="margin-bottom:2px" title="Gain over the money invested in stocks and funds">All-time gain</div>
+          <div class="card-title" style="margin-bottom:2px" title="Gain over the money invested in stocks and funds">{{ title }}</div>
           <div class="pf-chart-value" :class="current == null ? '' : current >= 0 ? 'positive' : 'negative'">{{ current != null ? formatPct(current) : '—' }}</div>
         </div>
         <div class="range-btn-group pf-chart-ranges" role="group" aria-label="Chart range">

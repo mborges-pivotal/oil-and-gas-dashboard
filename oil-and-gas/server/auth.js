@@ -277,7 +277,13 @@ async function updateProfile(req, res) {
   const userId = requireUser(req);
   const body = await readJsonBody(req);
   if ('displayName' in body) db.updateDisplayName(userId, validateDisplayName(body.displayName));
-  if ('settings' in body) db.updateSettings(userId, validateSettings(body.settings));
+  if ('settings' in body) {
+    const settings = validateSettings(body.settings);
+    // Portfolio IDs must be unique across accounts — fix any that aren't (the
+    // response carries the result, so the client adopts the new IDs).
+    require('./portfolioIds').normalizeSettings(userId, settings);
+    db.updateSettings(userId, settings);
+  }
   sendJson(res, 200, { user: db.getProfile(userId) });
 }
 

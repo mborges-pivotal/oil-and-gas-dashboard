@@ -1777,6 +1777,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Account → Summary: cash and deposits */
 .cash-card { margin-bottom: 12px; }
+.acct-head { margin-bottom: 6px; }
+.acct-sub { font-weight: 500; font-size: 13px; }
+.acct-main { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 20px; }
+.acct-main .pf-card-stats { font-size: 14px; }
+.acct-breakdown { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.acct-cash { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.acct-cash .cash-balance { font-size: 18px; }
 .cash-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .cash-balance { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .deposit-form { margin-top: 12px; }
@@ -1806,6 +1813,10 @@ button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(
 .pf-card-new { justify-content: center; align-items: stretch; border-style: dashed; cursor: default; }
 .pf-card-new-btn { border: none; background: none; color: var(--accent); font: inherit; font-weight: 600; font-size: 14px; cursor: pointer; padding: 18px 0; }
 .pf-card-new input { width: 100%; }
+.pf-card-id { font-size: 11px; font-weight: 600; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 5px; vertical-align: 2px; }
+.pf-id-field { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
+.pf-id-field input { flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.pf-id-hint { display: block; margin-top: 4px; }
 .pf-card-new-actions { display: flex; gap: 8px; margin-top: 8px; }
 .pf-card-new-actions button { padding: 5px 12px; }
 .pf-cards-note { grid-column: 1 / -1; margin: 0; }
@@ -1820,6 +1831,45 @@ button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(
 .pf-chart-value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pf-chart-ranges { flex-wrap: nowrap; }
 .pf-chart-note { margin: 8px 0 0; }
+/* An opened portfolio's overview card: Performance · Holdings · Sectors */
+.pf-overview { margin-bottom: 12px; }
+.pf-overview-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.pf-overview-tabs { margin: 0; flex: 1; min-width: 0; }
+.pf-overview-mode { flex-wrap: nowrap; }
+.pf-overview-mode .range-btn { min-width: 38px; }
+.pf-chart-embedded .pf-chart-head { margin-top: 2px; }
+.hbar-caption { font-size: 13px; margin: 6px 0 8px; min-height: 18px; font-variant-numeric: tabular-nums; }
+/* One 100% stacked bar: 2px surface gaps between segments, rounded ends */
+.hbar { display: flex; gap: 2px; height: 36px; border-radius: 6px; overflow: hidden; background: var(--surface); }
+.hbar-seg { display: flex; align-items: center; justify-content: center; min-width: 3px; flex-basis: 0; cursor: pointer; transition: opacity var(--transition); overflow: hidden; }
+.hbar-seg.dim { opacity: .35; }
+.hbar-label { font-size: 11px; font-weight: 700; white-space: nowrap; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.hlist { list-style: none; margin: 14px 0 0; padding: 0; }
+.hlist-row { display: grid; grid-template-columns: 10px 20px minmax(0, 1fr) 120px 90px 90px; align-items: center; gap: 10px; padding: 7px 0; border-top: 1px solid var(--border); font-size: 13px; transition: opacity var(--transition); }
+.hlist-row.dim { opacity: .45; }
+.hlist-swatch { width: 10px; height: 10px; border-radius: 3px; }
+.hlist-rank { color: var(--text-muted); font-variant-numeric: tabular-nums; text-align: right; }
+.hlist-id { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hlist-minibar { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.hlist-minibar > span { display: block; height: 100%; border-radius: 3px; }
+.hlist-main { text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+.hlist-second { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+.hlist-note { margin: 10px 0 0; }
+.pf-sectors-view .allocation { margin-top: 4px; }
+@media (max-width: 600px) {
+  .hlist-minibar { display: none; }
+  .hlist-second { display: none; }
+  .hlist-row { grid-template-columns: 10px 18px minmax(0, 1fr) auto; }
+  /* Narrow bar: only segments with room keep a label (the list below names them all) */
+  .hbar-seg:not(.wide) .hbar-label { display: none; }
+  .pf-overview-tabs { flex-basis: 100%; }
+  .pf-overview-tabs .subtab-btn { padding-left: 10px; padding-right: 10px; }
+  .pf-overview-tabs .label-full { display: none; }
+  .pf-overview-tabs .label-short { display: inline; }
+  .pf-overview-mode { width: auto; margin-left: auto; }
+  .pf-overview-mode .range-btn { flex: none; min-width: 44px; padding: 5px 12px; }
+}
+
 /* Markets → a stock's Portfolio tab: which portfolio */
 .pf-choice { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 14px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
 .pf-choice-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-muted); font-weight: 600; }
