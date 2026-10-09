@@ -7,7 +7,6 @@ import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
 import MarketsComponent from './components/Markets.js';
-import NewsComponent from './components/News.js';
 import StocksComponent from './components/Stocks.js';
 import InboxComponent from './components/Inbox.js';
 import Leaderboard from './components/Leaderboard.js';
@@ -323,7 +322,6 @@ const App = {
     Stocks: StocksComponent,
     Inbox: InboxComponent,
     Leaderboard,
-    News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
     SettingsPanel,
@@ -349,7 +347,6 @@ const App = {
     const hasPositions = computed(() => !!user.value);
     const tabs = computed(() => [
       { id: 'markets',   label: 'Markets' },
-      { id: 'news',      label: 'News' },
       ...(hasPositions.value ? [{ id: 'portfolio', label: 'Account' }] : []),
       // Inbox (signed in): Notes · Alerts · Activity (messages), badged with unread alerts + messages.
       ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
@@ -735,7 +732,6 @@ const App = {
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
             @set-tickers="onSetTickers" @set-position="onSetPosition" @set-portfolios="onSetPortfolios" @go-account="activeTab = 'account'"
             @go-notes="openNotes" />
-          <News          v-if="activeTab === 'news'"      :config="config" />
           <Leaderboard   v-if="activeTab === 'leaderboard'" :public-count="publicPortfolios" @make-public="openAccountPortfolios" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only :start-tab="accountStartTab"
             :discover-query="discoverQuery" :start-share="startShare" @go-activity="openActivity"

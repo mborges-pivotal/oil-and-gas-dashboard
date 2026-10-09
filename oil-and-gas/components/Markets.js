@@ -2,29 +2,31 @@ const { ref, reactive, computed, watch, nextTick } = Vue;
 import EconomicIndicators from './EconomicIndicators.js';
 import OilGasMarkets from './OilGasMarkets.js';
 import Stocks from './Stocks.js';
+import News from './News.js';
 
-// `short` is shown on phones so all four sub-tabs fit without scrolling.
+// `short` is shown on phones so all five sub-tabs fit without scrolling.
 const SECTIONS = [
   { id: 'stocks', label: 'Stocks',              short: 'Stocks' },
+  { id: 'news',   label: 'News',                short: 'News' },
   { id: 'econ',   label: 'Economic Indicators', short: 'Economy' },
   { id: 'oil',    label: 'Oil Price Indexes',   short: 'Oil' },
   { id: 'gas',    label: 'Retail Gas Prices',   short: 'Gas' },
 ];
 
 /**
- * Markets tab — Stocks, Economic Indicators and Oil & Gas Markets under one
+ * Markets tab — Stocks, News, Economic Indicators and Oil & Gas Markets under one
  * sub-tab bar (on touch screens, swipe the content left/right to switch). Oil and Gas share a single OilGasMarkets instance (it fetches
  * both on mount), so switching between those two doesn't refetch.
  */
 export default {
   name: 'Markets',
-  components: { EconomicIndicators, OilGasMarkets, Stocks },
+  components: { EconomicIndicators, OilGasMarkets, Stocks, News },
   props: ['config', 'user'],
   emits: ['set-tickers', 'set-position', 'set-portfolios', 'go-account', 'go-notes'],
   setup() {
     const activeSection = ref('stocks'); // the first sub-tab
     // Last refresh time reported by each child, shown in the header row.
-    const updated = reactive({ econ: null, oilgas: null, stocks: null });
+    const updated = reactive({ econ: null, oilgas: null, stocks: null, news: null });
     const lastUpdated = computed(() => {
       const s = activeSection.value;
       return s === 'oil' || s === 'gas' ? updated.oilgas : updated[s];
@@ -128,6 +130,7 @@ export default {
           @set-tickers="$emit('set-tickers', $event)"
           @set-position="$emit('set-position', $event)" @set-portfolios="$emit('set-portfolios', $event)"
           @go-account="$emit('go-account')" @go-notes="$emit('go-notes')" />
+        <News v-else-if="activeSection === 'news'" :config="config" embedded @updated="updated.news = $event" />
         <OilGasMarkets v-else :config="config" :section="activeSection"
           @updated="updated.oilgas = $event" />
       </div>

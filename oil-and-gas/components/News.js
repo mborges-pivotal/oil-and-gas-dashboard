@@ -16,8 +16,10 @@ const FRESHNESS_OPTIONS = [
 
 export default {
   name: 'News',
-  props: ['config'],
-  setup(props) {
+  // embedded: inside Markets (its sub-tab bar names it; the update time goes to its header via `updated`)
+  props: { config: Object, embedded: Boolean },
+  emits: ['updated'],
+  setup(props, { emit }) {
     const articles = ref([]);
     const loading = ref(true);
     const feedErrors = ref({});   // feedName → error message
@@ -93,6 +95,7 @@ export default {
       articles.value = mergeFeeds(results);
       loading.value = false;
       lastUpdated.value = new Date().toLocaleTimeString();
+      emit('updated', lastUpdated.value + ' (30-min cache)');
     }
 
     onMounted(() => fetchAll());
@@ -115,9 +118,9 @@ export default {
   template: `
     <div>
       <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Oil & Gas News</div>
+        <div class="section-header" style="margin-bottom:0">{{ embedded ? '' : 'Oil & Gas News' }}</div>
         <div class="flex gap-8" style="align-items:center">
-          <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }} (30-min cache)</div>
+          <div class="text-muted text-sm" v-if="lastUpdated && !embedded">Updated {{ lastUpdated }} (30-min cache)</div>
           <button @click="refresh" :disabled="loading">↻ Refresh</button>
         </div>
       </div>
