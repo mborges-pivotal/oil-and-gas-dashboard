@@ -10,6 +10,7 @@ import MarketsComponent from './components/Markets.js';
 import NewsComponent from './components/News.js';
 import StocksComponent from './components/Stocks.js';
 import InboxComponent from './components/Inbox.js';
+import Leaderboard from './components/Leaderboard.js';
 import { loadNotes, clearNotes } from './utils/notesStore.js';
 import { unreadTotal, defaultInboxSection, clearInbox, onMarkRead } from './utils/inboxStore.js';
 import { loadAlerts, clearAlerts, checkNow, persistAlertsRead } from './utils/alertsStore.js';
@@ -321,6 +322,7 @@ const App = {
     Markets: MarketsComponent,
     Stocks: StocksComponent,
     Inbox: InboxComponent,
+    Leaderboard,
     News: NewsComponent,
     Account: AccountComponent,
     ArticleViewer,
@@ -349,6 +351,8 @@ const App = {
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
       ...(hasPositions.value ? [{ id: 'portfolio', label: 'Account' }] : []),
+      // Leaderboard (signed in): public portfolios from every account, ranked by return.
+      ...(user.value ? [{ id: 'leaderboard', label: 'Leaderboard', short: '🏆' }] : []), // phones: just the trophy
       // Inbox (signed in): Notes · Alerts · Messages, badged with unread alerts + messages.
       ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
     ]);
@@ -356,7 +360,9 @@ const App = {
     // Inbox sub-tab. Opening Inbox lands on unread alerts, then unread
     // messages, else Notes; links from a saved news item go to Notes.
     const inboxSection = ref('notes');
+    const accountStartTab = ref(null); // Account sub-tab to open on (from the Leaderboard)
     function selectTab(id) {
+      accountStartTab.value = null; // Account opens on its last-used sub-tab
       if (id === 'inbox' && activeTab.value !== 'inbox') inboxSection.value = defaultInboxSection();
       activeTab.value = id;
     }
@@ -404,7 +410,7 @@ const App = {
     watch(() => config.value?.ui?.refreshIntervalSeconds, () => { if (user.value) startAlertChecks(); });
     // Signed out while on Account.
     watch(hasPositions, has => {
-      if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
+      if (!has && (activeTab.value === 'portfolio' || activeTab.value === 'leaderboard')) activeTab.value = 'markets';
     });
 
     function showNotice(message) {
@@ -613,6 +619,13 @@ const App = {
       persistConfig({ ...config.value, portfolios: list, transfers }, 'Move');
     }
 
+    // Leaderboard → "make one public": Account opened on its Portfolios sub-tab.
+    function openAccountPortfolios() {
+      accountStartTab.value = 'portfolios';
+      activeTab.value = 'portfolio';
+    }
+    const publicPortfolios = computed(() => (config.value?.portfolios ?? []).filter(p => p.visibility === 'public').length);
+
     // Portfolios created, renamed or deleted (Account → Portfolios).
     function onSetPortfolios(list) {
       persistConfig({ ...config.value, portfolios: list }, 'Portfolios');
@@ -627,7 +640,8 @@ const App = {
       inboxSection, selectTab, openNotes, accountSection, openLabels, openAlertsManager,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios, onSetAccountCash, openBankAccounts,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios,
+      accountStartTab, openAccountPortfolios, publicPortfolios, onSetAccountCash, openBankAccounts,
     };
   },
   template: `
@@ -643,9 +657,9 @@ const App = {
             :key="tab.id"
             class="tab-btn"
             :class="{ active: activeTab === tab.id }"
-            :aria-label="tab.badge ? tab.label + ', ' + tab.badge + ' unread' : null"
+            :aria-label="tab.badge ? tab.label + ', ' + tab.badge + ' unread' : (tab.short ? tab.label : null)" :title="tab.short ? tab.label : null"
             @click="selectTab(tab.id)"
-          >{{ tab.label }}<span class="count-badge" v-if="tab.badge" aria-hidden="true">{{ tab.badge > 99 ? '99+' : tab.badge }}</span></button>
+          ><span class="label-full">{{ tab.label }}</span><span class="label-short" aria-hidden="true">{{ tab.short ?? tab.label }}</span><span class="count-badge" v-if="tab.badge" aria-hidden="true">{{ tab.badge > 99 ? '99+' : tab.badge }}</span></button>
         </nav>
         <div class="theme-switch header-theme-switch" role="group" aria-label="Color theme">
           <button
@@ -682,7 +696,8 @@ const App = {
             @set-tickers="onSetTickers" @set-position="onSetPosition" @set-portfolios="onSetPortfolios" @go-account="activeTab = 'account'"
             @go-notes="openNotes" />
           <News          v-if="activeTab === 'news'"      :config="config" />
-          <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only
+          <Leaderboard   v-if="activeTab === 'leaderboard'" :public-count="publicPortfolios" @make-public="openAccountPortfolios" />
+          <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only :start-tab="accountStartTab"
             @set-position="onSetPosition" @move-position="onMovePosition" @set-portfolios="onSetPortfolios" @set-account-cash="onSetAccountCash"
             @go-bank-accounts="openBankAccounts" @go-notes="openNotes" />
           <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager" />

@@ -399,7 +399,8 @@ export default {
   components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
-  props: { config: Object, user: Object, portfolioOnly: Boolean },
+  // startTab: the Account sub-tab to open on (else the last one used).
+  props: { config: Object, user: Object, portfolioOnly: Boolean, startTab: { type: String, default: null } },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
   // set-position: { symbol, position: { quantity, avgCost, category?, transactions? } | null }
   //   or { updates: { SYMBOL: position | null } } to save several together — for config.portfolio
@@ -439,12 +440,14 @@ export default {
     const pfTab = ref((() => {
       try {
         const saved = localStorage.getItem(PF_TAB_KEY);
+        if (props.startTab && PORTFOLIO_TABS.some(t => t.id === props.startTab)) return props.startTab;
         if (saved === 'positions') return 'portfolios'; // renamed
+        if (saved === 'leaderboard') return 'summary'; // moved to the top bar
         if (PORTFOLIO_TABS.some(t => t.id === saved)) return saved;
       } catch { /* none saved */ }
       return 'summary';
     })());
-    watch(pfTab, t => { try { localStorage.setItem(PF_TAB_KEY, t); } catch { /* per-browser only */ } });
+    watch(pfTab, t => { try { localStorage.setItem(PF_TAB_KEY, t); } catch { /* per-browser only */ } }, { immediate: !!props.startTab });
     const openPfId = ref(null); // the portfolio opened from its card
     const openPf = computed(() => (props.portfolioOnly && pfTab.value === 'portfolios' && openPfId.value ? portfolioById(openPfId.value) : null));
     // What the Account page shows: an opened portfolio, else all of them combined.
@@ -516,12 +519,18 @@ export default {
     }
 
     // Account → Portfolios: create, rename, delete; each card's headline numbers.
-    const pfForm = ref(null); // { mode: 'create' | 'rename', name, error }
+    const pfForm = ref(null); // { mode: 'create' | 'edit', name, visibility, id…, error }
     // Creating: the ID fills in from the name (the server's suggestion — unique
     // across accounts) until you edit it; edited, it's checked as you type.
     // Renaming keeps the ID.
+    // mode: 'create' | 'edit' (name and visibility; the ID never changes).
+    // Public portfolios appear on the Leaderboard (top bar): name, your display name, return %.
     function openPfForm(mode) {
-      pfForm.value = { mode, name: mode === 'rename' ? openPf.value?.name ?? '' : '', id: '', idEdited: false, idState: null, busy: false, error: null };
+      const cur = mode === 'edit' ? openPf.value : null;
+      pfForm.value = {
+        mode, name: cur?.name ?? '', visibility: cur?.visibility === 'public' ? 'public' : 'private',
+        id: '', idEdited: false, idState: null, busy: false, error: null,
+      };
     }
     let idTimer = null;
     function onPfFormInput(field) {
@@ -551,15 +560,15 @@ export default {
       if (!name) { f.error = 'Name the portfolio.'; return; }
       const others = portfolios.value.filter(p => f.mode === 'create' || p.id !== openPf.value?.id);
       if (others.some(p => p.name.toLowerCase() === name.toLowerCase())) { f.error = `You already have a portfolio named "${name}".`; return; }
-      if (f.mode === 'rename') {
-        emit('set-portfolios', portfolios.value.map(p => (p.id === openPf.value.id ? { ...p, name } : p)));
+      if (f.mode === 'edit') {
+        emit('set-portfolios', portfolios.value.map(p => (p.id === openPf.value.id ? { ...p, name, visibility: f.visibility } : p)));
         pfForm.value = null;
         return;
       }
       f.busy = true;
       try {
         const id = await claimPortfolioId(name, f.idEdited ? f.id : '');
-        emit('set-portfolios', [...portfolios.value, emptyPortfolio(name, id)]);
+        emit('set-portfolios', [...portfolios.value, { ...emptyPortfolio(name, id), visibility: f.visibility }]);
         pfForm.value = null;
       } catch (e) {
         f.error = e.message + (e.suggestion ? ` — try "${e.suggestion}".` : '');
@@ -3078,9 +3087,9 @@ export default {
         <div class="section-header" style="margin-bottom:0">Account</div>
         <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
       </div>
-      <div class="subtab-bar" role="tablist" aria-label="Portfolio sections" v-if="portfolioOnly">
+      <div class="subtab-bar account-tabs" role="tablist" aria-label="Account sections" v-if="portfolioOnly">
         <button v-for="t in PORTFOLIO_TABS" :key="t.id" type="button" role="tab" class="subtab-btn"
-                :class="{ active: pfTab === t.id }" :aria-selected="pfTab === t.id" @click="pfTab = t.id">{{ t.label }}</button>
+                :class="{ active: pfTab === t.id }" :aria-selected="pfTab === t.id" :aria-label="t.label" @click="pfTab = t.id"><span class="label-full">{{ t.label }}</span><span class="label-short" aria-hidden="true">{{ t.short ?? t.label }}</span></button>
       </div>
 
       <!-- Portfolio → Summary: the whole portfolio, when there are options too -->
@@ -3323,7 +3332,7 @@ export default {
       <section class="pf-cards" v-if="portfolioOnly && pfTab === 'portfolios' && !openPf" aria-label="Portfolios">
         <button v-for="p in portfolios" :key="p.id" type="button" class="card pf-card" @click="openPfId = p.id">
           <template v-for="m in [pfMetrics(p)]" :key="p.id + '-m'">
-            <span class="pf-card-name">{{ p.name }} <span class="pf-card-id">{{ p.id }}</span></span>
+            <span class="pf-card-name">{{ p.name }} <span class="pf-card-id">{{ p.id }}</span> <span class="pf-vis-badge" :class="p.visibility === 'public' ? 'public' : ''" :title="p.visibility === 'public' ? 'Public — on the Leaderboard' : 'Private'">{{ p.visibility === 'public' ? '🌐' : '🔒' }}</span></span>
             <span class="pf-card-label">Position</span>
             <span class="pf-card-value">{{ m.value != null ? formatUSD(m.value) : (m.positions ? '…' : formatUSD(0)) }}</span>
             <span class="pf-card-stats">
@@ -3340,6 +3349,10 @@ export default {
               <span>ID</span>
               <input v-model="pfForm.id" maxlength="40" placeholder="from the name" aria-label="Portfolio ID" spellcheck="false" autocapitalize="off" @input="onPfFormInput('id')" />
             </label>
+            <div class="pf-visibility" role="radiogroup" aria-label="Visibility">
+              <label><input type="radio" value="private" v-model="pfForm.visibility" /> 🔒 Private</label>
+              <label><input type="radio" value="public" v-model="pfForm.visibility" /> 🌐 Public</label>
+            </div>
             <span class="pf-id-hint text-sm" :class="pfForm.idState === 'ok' ? 'positive' : (pfForm.idState === 'invalid' || pfForm.idState?.taken) ? 'negative' : 'text-muted'">
               <template v-if="pfForm.idState === 'checking'">Checking…</template>
               <template v-else-if="pfForm.idState === 'ok'">✓ Available — unique across all accounts</template>
@@ -3364,16 +3377,21 @@ export default {
       <template v-if="openPf">
         <div class="pf-detail-head">
           <button type="button" class="link-button" @click="openPfId = null">← All portfolios</button>
-          <form class="pf-rename" v-if="pfForm?.mode === 'rename'" @submit.prevent="submitPfForm" novalidate>
+          <form class="pf-rename" v-if="pfForm?.mode === 'edit'" @submit.prevent="submitPfForm" novalidate>
             <input v-model="pfForm.name" maxlength="40" aria-label="Portfolio name" @input="pfForm.error = null" />
+            <div class="pf-visibility" role="radiogroup" aria-label="Visibility">
+              <label><input type="radio" value="private" v-model="pfForm.visibility" /> 🔒 Private</label>
+              <label><input type="radio" value="public" v-model="pfForm.visibility" /> 🌐 Public</label>
+            </div>
             <button type="submit" class="primary">Save</button>
             <button type="button" @click="pfForm = null">Cancel</button>
             <span class="negative text-sm" v-if="pfForm.error">{{ pfForm.error }}</span>
+            <span class="text-muted text-sm pf-visibility-note">Public portfolios appear on the Leaderboard with their name, your display name and their return % — never amounts or holdings.</span>
           </form>
           <template v-else>
-            <h3 class="pf-detail-name">{{ openPf.name }} <span class="pf-card-id" title="Portfolio ID — unique across accounts; stays the same if you rename it">{{ openPf.id }}</span></h3>
+            <h3 class="pf-detail-name">{{ openPf.name }} <span class="pf-vis-badge" :class="openPf.visibility === 'public' ? 'public' : ''">{{ openPf.visibility === 'public' ? '🌐 Public' : '🔒 Private' }}</span> <span class="pf-card-id" title="Portfolio ID — unique across accounts; stays the same if you rename it">{{ openPf.id }}</span></h3>
             <span class="pf-detail-actions">
-              <button type="button" class="link-button" @click="openPfForm('rename')">Rename</button>
+              <button type="button" class="link-button" @click="openPfForm('edit')">Edit</button>
               <button type="button" class="link-button danger-link" @click="deletePortfolio">Delete</button>
             </span>
           </template>

@@ -56,6 +56,7 @@ const { handleAlertsApi } = require('./server/alerts');
 const { handleEventsApi } = require('./server/events');
 const { handleBankAccountsApi } = require('./server/bankAccounts');
 const { handlePortfoliosApi } = require('./server/portfoliosApi');
+const { handleLeaderboardApi } = require('./server/leaderboard');
 // Portfolio IDs: register every profile's and make them unique across accounts.
 const fixedProfiles = require('./server/portfolioIds').normalizeAllProfiles();
 if (fixedProfiles) console.log(`Portfolio IDs: updated ${fixedProfiles} profile(s)`);
@@ -230,6 +231,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/alerts' || reqUrl.pathname.startsWith('/api/alerts/')) {
     handleAlertsApi(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname === '/api/leaderboard') {
+    handleLeaderboardApi(req, res, reqUrl);
     return;
   }
 

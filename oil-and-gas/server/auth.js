@@ -283,6 +283,7 @@ async function updateProfile(req, res) {
     // response carries the result, so the client adopts the new IDs).
     require('./portfolioIds').normalizeSettings(userId, settings);
     db.updateSettings(userId, settings);
+    require('./leaderboard').clearLeaderboardCache(); // visibility or positions may have changed
   }
   sendJson(res, 200, { user: db.getProfile(userId) });
 }
