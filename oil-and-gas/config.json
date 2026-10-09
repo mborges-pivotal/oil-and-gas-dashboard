@@ -1,6 +1,6 @@
 {
   "stocks": {
-    "tickers": ["XOM", "CVX", "COP", "SLB", "HAL", "PSX", "VLO", "MPC", "OXY", "EOG", "NOV", "KMI"]
+    "tickers": []
   },
   "marketIndexes": {
     "symbols": ["^GSPC", "^DJI", "^IXIC", "^RUT", "^VIX"]

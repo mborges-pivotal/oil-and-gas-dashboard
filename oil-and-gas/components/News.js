@@ -1,4 +1,4 @@
-const { ref, computed, onMounted } = Vue;
+const { ref, reactive, computed, onMounted } = Vue;
 import { fetchFeed, mergeFeeds, clearFeedCache } from '../services/rss.js';
 import { formatDate, formatRelativeTime } from '../utils/formatters.js';
 import { safeArticleUrl, onArticleClick } from '../utils/articleViewer.js';
@@ -14,16 +14,22 @@ const FRESHNESS_OPTIONS = [
   { value: '30d', label: 'Last 30 days',  maxAgeMs: 30 * 24 * 60 * 60 * 1000 },
 ];
 
+// Loaded once per session (the first time News is shown) and kept across
+// tab switches; only ↻ Refresh — or a changed feed list in Settings — fetches again.
+const session = reactive({ articles: [], feedErrors: {}, lastUpdated: null, feedKey: null, loading: false });
+let inFlight = null;
+
 export default {
   name: 'News',
   // embedded: on Markets, under the indexes — a small "News" heading instead of the page title
   props: { config: Object, embedded: Boolean },
   emits: ['updated'],
   setup(props, { emit }) {
-    const articles = ref([]);
-    const loading = ref(true);
-    const feedErrors = ref({});   // feedName → error message
-    const lastUpdated = ref(null);
+    // Session-wide (see `session` above): articles, feedName → error message, last fetch time.
+    const articles = computed(() => session.articles);
+    const feedErrors = computed(() => session.feedErrors);
+    const lastUpdated = computed(() => session.lastUpdated);
+    const loading = computed(() => session.loading);
 
     const feeds = computed(() => (props.config.news?.feeds ?? []).filter(f => f.enabled !== false));
     const proxy = computed(() => props.config.news?.rssProxy ?? 'rss2json');
@@ -73,11 +79,19 @@ export default {
       freshnessFilter.value = 'all';
     }
 
+    const feedKey = computed(() => JSON.stringify([proxy.value, feeds.value.map(f => f.url)]));
+
     async function fetchAll(force = false) {
+      if (inFlight && !force) return inFlight;
+      inFlight = doFetch(force).finally(() => { inFlight = null; });
+      return inFlight;
+    }
+    async function doFetch(force) {
       if (force) clearFeedCache();
-      loading.value = articles.value.length === 0;
-      feedErrors.value = {};
+      session.loading = session.articles.length === 0;
+      const errors = {};
       const results = [];
+      const key = feedKey.value;
 
       for (let i = 0; i < feeds.value.length; i++) {
         const feed = feeds.value[i];
@@ -87,18 +101,25 @@ export default {
           const items = await fetchFeed(feed.url, feed.name, proxy.value);
           results.push(items);
         } catch (e) {
-          feedErrors.value[feed.name] = e.message;
+          errors[feed.name] = e.message;
           results.push([]);
         }
       }
 
-      articles.value = mergeFeeds(results);
-      loading.value = false;
-      lastUpdated.value = new Date().toLocaleTimeString();
-      emit('updated', lastUpdated.value + ' (30-min cache)');
+      session.articles = mergeFeeds(results);
+      session.feedErrors = errors;
+      session.feedKey = key;
+      session.loading = false;
+      session.lastUpdated = new Date().toLocaleTimeString();
+      emit('updated', session.lastUpdated);
     }
 
-    onMounted(() => fetchAll());
+    // First time shown (or the feeds changed in Settings): fetch. Otherwise
+    // show what's already loaded — no request.
+    onMounted(() => {
+      if (session.feedKey !== feedKey.value || (!session.lastUpdated && !inFlight)) fetchAll();
+      else if (session.lastUpdated) emit('updated', session.lastUpdated);
+    });
 
     function refresh() { fetchAll(true); }
 
@@ -121,7 +142,7 @@ export default {
         <div class="card-title" style="margin-bottom:0" v-if="embedded">News</div>
         <div class="section-header" style="margin-bottom:0" v-else>News</div>
         <div class="flex gap-8" style="align-items:center">
-          <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }} (30-min cache)</div>
+          <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
           <button @click="refresh" :disabled="loading">↻ Refresh</button>
         </div>
       </div>

@@ -6,6 +6,7 @@ import AlertsManager from './AlertsManager.js';
 import BankAccounts from './BankAccounts.js';
 import AvatarEditor from './AvatarEditor.js';
 import Avatar from './Avatar.js';
+import DashboardSettings from './DashboardSettings.js';
 
 // Signed-in sections, shown as a side navigation (a tab row on phones).
 const SECTIONS = [
@@ -13,6 +14,7 @@ const SECTIONS = [
   { id: 'labels',  label: 'Labels',  icon: '🏷' },
   { id: 'alerts',  label: 'Alerts',  icon: '🔔' },
   { id: 'banks',   label: 'Bank accounts', short: 'Banks', icon: '🏦' },
+  { id: 'dashboard', label: 'Dashboard', icon: '⚙' },
 ];
 
 const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
@@ -21,17 +23,17 @@ const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
  * Account tab: sign-in / registration when signed out. Signed in, a side
  * navigation of profile sections: Profile (display name, password,
  * sign-out), Labels (the labels used by Inbox → Notes), Alerts (every
- * stock alert: edit, pause, delete, create) and Bank accounts (where deposits come from). Dashboard
- * settings themselves are edited in the Settings tab — they're just stored
- * on this profile once signed in.
+ * stock alert: edit, pause, delete, create), Bank accounts (where deposits come from)
+ * and Dashboard (the dashboard's settings — refresh, data relay, crack-spread
+ * thresholds, news feeds; DashboardSettings → save-settings).
  */
 export default {
   name: 'Account',
-  components: { LabelsManager, AlertsManager, BankAccounts, AvatarEditor, Avatar },
+  components: { LabelsManager, AlertsManager, BankAccounts, AvatarEditor, Avatar, DashboardSettings },
   // section: which signed-in section to show (v-model:section from app.js).
   // config: dashboard settings (Alerts uses your watchlist and holdings).
   props: { user: Object, config: Object, section: { type: String, default: 'profile' } },
-  emits: ['signed-in', 'signed-out', 'updated', 'update:section'],
+  emits: ['signed-in', 'signed-out', 'updated', 'update:section', 'save-settings'],
   setup(props, { emit }) {
     // ── Signed out: sign in / create account ────────────────────────────
     const mode = ref('login'); // 'login' | 'register'
@@ -198,6 +200,7 @@ export default {
         <LabelsManager v-if="section === 'labels'" />
         <AlertsManager v-else-if="section === 'alerts'" :config="config" />
         <BankAccounts v-else-if="section === 'banks'" />
+        <DashboardSettings v-else-if="section === 'dashboard'" :config="config" @save="$emit('save-settings', $event)" />
 
         <template v-else>
         <div class="flex-between mb-16">

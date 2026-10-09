@@ -125,28 +125,3 @@ export function adoptServerIds(current, sent, saved) {
   };
 }
 
-/**
- * Reset config to bundled defaults (for `user`'s profile, or this browser).
- */
-export async function resetConfig(user = null) {
-  if (!user) {
-    localStorage.removeItem(CONFIG_KEY);
-    return loadConfig();
-  }
-  const config = await fetchDefaults();
-  await saveConfig(config, user);
-  return config; // straight from config.json, so API keys are already injected
-}
-
-/**
- * Export config as a downloadable JSON file.
- */
-export function exportConfig(config) {
-  const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'oilgas-config.json';
-  a.click();
-  URL.revokeObjectURL(url);
-}

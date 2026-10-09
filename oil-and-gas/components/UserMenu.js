@@ -4,8 +4,8 @@ const { ref, computed, watch, nextTick, onUnmounted } = Vue;
 /**
  * Header account menu — replaces the old ⚙ Settings and Sign In tabs.
  * The button — a circle with the signed-in user's picture (or a person icon
- * when signed out) — opens a dropdown with Profile / Sign in, Settings and
- * Sign out. (The theme button is in the app's subheader.)
+ * when signed out) — opens a dropdown with Profile / Sign in, Dashboard
+ * settings (Profile → Dashboard) and Sign out. (The theme button is in the app's subheader.)
  */
 export default {
   name: 'UserMenu',
@@ -28,7 +28,7 @@ export default {
       }
       return (u.email || '?')[0].toUpperCase();
     });
-    const isActive = computed(() => props.activeTab === 'settings' || props.activeTab === 'account');
+    const isActive = computed(() => props.activeTab === 'account');
 
     function items() {
       // Only the visible items (keyboard navigation).
@@ -132,9 +132,8 @@ export default {
                 :class="{ current: activeTab === 'account' }" @click="go('account')">
           {{ user ? '👤 Profile' : 'Sign in / Register' }}
         </button>
-        <button type="button" role="menuitem" class="user-menu-item"
-                :class="{ current: activeTab === 'settings' }" @click="go('settings')">
-          ⚙ Settings
+        <button type="button" role="menuitem" class="user-menu-item" v-if="user" @click="go('account:dashboard')">
+          ⚙ Dashboard settings
         </button>
 
         <template v-if="user">
