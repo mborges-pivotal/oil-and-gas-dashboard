@@ -168,8 +168,11 @@ async function buildBoard(periodId) {
   const before = prevEnd ? rank(prevEnd) : new Map();
   const names = new Map();
   const rows = [...now.entries()].map(([e, { rank: r, r: ret }]) => {
-    if (!names.has(e.userId)) names.set(e.userId, (db.getProfile(e.userId)?.displayName || '').trim() || 'Anonymous investor');
-    const display = names.get(e.userId);
+    if (!names.has(e.userId)) {
+      const p = db.getProfile(e.userId);
+      names.set(e.userId, { name: (p?.displayName || '').trim() || 'Anonymous investor', avatar: p?.avatar ?? null });
+    }
+    const { name: display, avatar } = names.get(e.userId);
     const prev = before.get(e);
     return {
       rank: r,
@@ -178,6 +181,7 @@ async function buildBoard(periodId) {
       owner: display,
       initials: initialsOf(display),
       color: (e.userId * 5) % COLORS + 1,
+      avatar, // { preset: { emoji, color }, image: url | null } — the photo URL uses a random key, not the user ID
       returnPct: Math.round(ret * 100) / 100,
       userId: e.userId,
     };

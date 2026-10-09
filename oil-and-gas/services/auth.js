@@ -54,3 +54,12 @@ export async function updateProfile(fields) {
 export async function changePassword(currentPassword, newPassword) {
   await request('PUT', '/api/profile/password', { currentPassword, newPassword });
 }
+
+/** Avatar: { preset: { emoji, color } } or { image: dataUrl } → the updated user. */
+export async function updateAvatar(fields) {
+  return (await request('PUT', '/api/profile/avatar', fields)).user;
+}
+/** Remove the uploaded photo (back to the preset) → the updated user. */
+export async function removeAvatarPhoto() {
+  return (await request('DELETE', '/api/profile/avatar')).user;
+}

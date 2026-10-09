@@ -236,6 +236,7 @@ async function register(req, res) {
   let userId;
   try {
     userId = db.createUser(email, await hashPassword(password), displayName);
+    require('./avatars').ensureAvatar(userId); // a random preset avatar to start with
   } catch (err) {
     // Lost a race with a concurrent registration for the same email
     if (String(err.message).includes('UNIQUE')) throw new HttpError(409, 'An account with that email already exists');

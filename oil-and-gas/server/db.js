@@ -239,7 +239,25 @@ function migrateAlertEventAck() {
 }
 migrateAlertEventAck();
 
+// One-time migration: profile avatars — a preset ({ emoji, color } JSON) or an
+// uploaded photo (a small data URL), served at /api/avatar/<avatar_key>.
+function migrateAvatars() {
+  const cols = db.prepare('PRAGMA table_info(profiles)').all().map(c => c.name);
+  if (!cols.includes('avatar_preset')) db.exec('ALTER TABLE profiles ADD COLUMN avatar_preset TEXT');
+  if (!cols.includes('avatar_image')) db.exec('ALTER TABLE profiles ADD COLUMN avatar_image TEXT');
+  if (!cols.includes('avatar_key')) db.exec('ALTER TABLE profiles ADD COLUMN avatar_key TEXT');
+  if (!cols.includes('avatar_updated')) db.exec('ALTER TABLE profiles ADD COLUMN avatar_updated TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS profiles_avatar_key ON profiles(avatar_key)');
+}
+migrateAvatars();
+
 const stmts = {
+  setAvatarPreset: db.prepare(`UPDATE profiles SET avatar_preset = ?, avatar_image = NULL, avatar_updated = datetime('now') WHERE user_id = ?`),
+  setAvatarImage: db.prepare(`UPDATE profiles SET avatar_image = ?, avatar_updated = datetime('now') WHERE user_id = ?`),
+  clearAvatarImage: db.prepare(`UPDATE profiles SET avatar_image = NULL, avatar_updated = datetime('now') WHERE user_id = ?`),
+  setAvatarKey: db.prepare('UPDATE profiles SET avatar_key = ? WHERE user_id = ?'),
+  avatarByKey: db.prepare('SELECT avatar_image FROM profiles WHERE avatar_key = ?'),
+  profilesWithoutAvatar: db.prepare('SELECT user_id FROM profiles WHERE avatar_preset IS NULL OR avatar_key IS NULL'),
   portfolioIdOwner: db.prepare('SELECT user_id FROM portfolio_ids WHERE id = ?'),
   insertPortfolioId: db.prepare('INSERT OR IGNORE INTO portfolio_ids (id, user_id) VALUES (?, ?)'),
   userPortfolioIds: db.prepare('SELECT id FROM portfolio_ids WHERE user_id = ?'),
@@ -286,7 +304,8 @@ const stmts = {
   updatePassword: db.prepare('UPDATE users SET password_hash = ? WHERE id = ?'),
 
   profile: db.prepare(`
-    SELECT u.id, u.email, u.created_at, p.display_name, p.settings, p.updated_at
+    SELECT u.id, u.email, u.created_at, p.display_name, p.settings, p.updated_at,
+           p.avatar_preset, p.avatar_key, p.avatar_updated, (p.avatar_image IS NOT NULL) AS has_avatar_image
     FROM users u JOIN profiles p ON p.user_id = u.id
     WHERE u.id = ?
   `),
@@ -370,6 +389,16 @@ function toIso(sqliteDate) {
   return `${sqliteDate.replace(' ', 'T')}Z`;
 }
 
+// { preset: { emoji, color }, image: url | null } — the photo, when there is one, wins.
+function avatarOf(row) {
+  let preset = null;
+  try { preset = row.avatar_preset ? JSON.parse(row.avatar_preset) : null; } catch { /* fall back below */ }
+  return {
+    preset: preset ?? { emoji: '🙂', color: 1 },
+    image: row.has_avatar_image && row.avatar_key ? `/api/avatar/${row.avatar_key}?v=${encodeURIComponent(row.avatar_updated ?? '')}` : null,
+  };
+}
+
 function getProfile(userId) {
   const row = stmts.profile.get(userId);
   if (!row) return null;
@@ -378,6 +407,7 @@ function getProfile(userId) {
     email: row.email,
     displayName: row.display_name,
     settings: row.settings ? JSON.parse(row.settings) : null,
+    avatar: avatarOf(row),
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
   };
@@ -505,6 +535,12 @@ function toAlertEvent(row) {
 }
 
 module.exports = {
+  setAvatarPreset: (userId, preset) => stmts.setAvatarPreset.run(JSON.stringify(preset), userId),
+  setAvatarImage: (userId, dataUrl) => stmts.setAvatarImage.run(dataUrl, userId),
+  clearAvatarImage: userId => stmts.clearAvatarImage.run(userId),
+  setAvatarKey: (userId, key) => stmts.setAvatarKey.run(key, userId),
+  avatarImageByKey: key => stmts.avatarByKey.get(key)?.avatar_image ?? null,
+  profilesWithoutAvatar: () => stmts.profilesWithoutAvatar.all().map(r => r.user_id),
   portfolioIdOwner: id => stmts.portfolioIdOwner.get(id)?.user_id ?? null,
   /** Claim `id` for `userId`; false if someone already has it. */
   registerPortfolioId: (id, userId) => {

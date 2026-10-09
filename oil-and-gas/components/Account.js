@@ -4,13 +4,15 @@ import { formatDate } from '../utils/formatters.js';
 import LabelsManager from './LabelsManager.js';
 import AlertsManager from './AlertsManager.js';
 import BankAccounts from './BankAccounts.js';
+import AvatarEditor from './AvatarEditor.js';
+import Avatar from './Avatar.js';
 
 // Signed-in sections, shown as a side navigation (a tab row on phones).
 const SECTIONS = [
   { id: 'profile', label: 'Profile', icon: '👤' },
   { id: 'labels',  label: 'Labels',  icon: '🏷' },
   { id: 'alerts',  label: 'Alerts',  icon: '🔔' },
-  { id: 'banks',   label: 'Bank accounts', icon: '🏦' },
+  { id: 'banks',   label: 'Bank accounts', short: 'Banks', icon: '🏦' },
 ];
 
 const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
@@ -25,7 +27,7 @@ const MIN_PASSWORD_LENGTH = 8; // keep in sync with server/auth.js
  */
 export default {
   name: 'Account',
-  components: { LabelsManager, AlertsManager, BankAccounts },
+  components: { LabelsManager, AlertsManager, BankAccounts, AvatarEditor, Avatar },
   // section: which signed-in section to show (v-model:section from app.js).
   // config: dashboard settings (Alerts uses your watchlist and holdings).
   props: { user: Object, config: Object, section: { type: String, default: 'profile' } },
@@ -181,13 +183,14 @@ export default {
       <div v-else class="profile-layout">
         <nav class="profile-nav" aria-label="Profile sections">
           <div class="profile-nav-user">
+            <Avatar class="profile-nav-avatar" :avatar="user.avatar" :name="user.displayName || user.email" :size="40" />
             <div class="profile-nav-name">{{ user.displayName || 'Your profile' }}</div>
             <div class="text-muted text-sm profile-nav-email">{{ user.email }}</div>
           </div>
           <button v-for="s in sections" :key="s.id" type="button" class="profile-nav-item"
                   :class="{ active: section === s.id }" :aria-current="section === s.id ? 'page' : null"
                   @click="$emit('update:section', s.id)">
-            <span class="profile-nav-icon" aria-hidden="true">{{ s.icon }}</span>{{ s.label }}
+            <span class="profile-nav-icon" aria-hidden="true">{{ s.icon }}</span><span class="label-full">{{ s.label }}</span><span class="label-short" aria-hidden="true">{{ s.short ?? s.label }}</span>
           </button>
         </nav>
 
@@ -201,6 +204,8 @@ export default {
           <div class="section-header" style="margin-bottom:0">Profile</div>
           <button class="danger" @click="signOut">Sign Out</button>
         </div>
+
+        <AvatarEditor :user="user" @updated="$emit('updated', $event)" />
 
         <div class="card account-card mb-16">
           <div class="card-title">Profile</div>

@@ -57,6 +57,10 @@ const { handleEventsApi } = require('./server/events');
 const { handleBankAccountsApi } = require('./server/bankAccounts');
 const { handlePortfoliosApi } = require('./server/portfoliosApi');
 const { handleLeaderboardApi } = require('./server/leaderboard');
+const { handleAvatarApi, assignMissingAvatars } = require('./server/avatars');
+// Avatars: everyone without one (accounts from before avatars) gets a random preset.
+const newAvatars = assignMissingAvatars();
+if (newAvatars) console.log(`Avatars: assigned ${newAvatars} random avatar(s)`);
 // Portfolio IDs: register every profile's and make them unique across accounts.
 const fixedProfiles = require('./server/portfolioIds').normalizeAllProfiles();
 if (fixedProfiles) console.log(`Portfolio IDs: updated ${fixedProfiles} profile(s)`);
@@ -231,6 +235,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/alerts' || reqUrl.pathname.startsWith('/api/alerts/')) {
     handleAlertsApi(req, res, reqUrl);
+    return;
+  }
+
+  if (reqUrl.pathname === '/api/profile/avatar' || reqUrl.pathname.startsWith('/api/avatar/')) {
+    handleAvatarApi(req, res, reqUrl);
     return;
   }
 

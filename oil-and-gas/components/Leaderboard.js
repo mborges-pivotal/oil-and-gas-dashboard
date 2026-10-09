@@ -1,5 +1,6 @@
 const { ref, watch, onMounted } = Vue;
 import { formatPct, formatDate } from '../utils/formatters.js';
+import Avatar from './Avatar.js';
 
 /**
  * Leaderboard (top bar, signed in): public portfolios (any account) ranked by return
@@ -21,6 +22,7 @@ const KEY = 'oilgas_leaderboard_period';
 
 export default {
   name: 'Leaderboard',
+  components: { Avatar },
   props: { publicCount: { type: Number, default: 0 } },
   emits: ['make-public'],
   setup() {
@@ -85,7 +87,7 @@ export default {
             <template v-else-if="r.movement === null">NEW</template>
             <template v-else>–</template>
           </span>
-          <span class="lb-avatar" :style="{ background: 'var(--series-' + r.color + ')', color: 'var(--series-' + r.color + '-ink)' }" aria-hidden="true">{{ r.initials }}</span>
+          <Avatar class="lb-avatar" :avatar="r.avatar" :name="r.owner" :size="34" />
           <span class="lb-names">
             <span class="lb-portfolio">{{ r.portfolio }}<span class="lb-you" v-if="r.mine">You</span></span>
             <span class="lb-owner text-muted">{{ r.owner }}</span>

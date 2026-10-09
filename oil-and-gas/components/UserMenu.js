@@ -1,3 +1,4 @@
+import Avatar from './Avatar.js';
 const { ref, computed, watch, nextTick, onUnmounted } = Vue;
 
 /**
@@ -9,6 +10,7 @@ const { ref, computed, watch, nextTick, onUnmounted } = Vue;
  */
 export default {
   name: 'UserMenu',
+  components: { Avatar },
   props: ['user', 'activeTab', 'themeOptions', 'themePreference', 'themeDisabled'],
   emits: ['navigate', 'sign-out', 'set-theme'],
   setup(props, { emit }) {
@@ -114,7 +116,7 @@ export default {
         @click="toggle"
         @keydown="onButtonKeydown"
       >
-        <span class="user-menu-avatar" v-if="user">{{ initials }}</span>
+        <Avatar v-if="user" class="user-menu-avatar-img" :avatar="user.avatar" :name="user.displayName || user.email" :size="28" />
         <svg v-else class="user-menu-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="2"/>
           <path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
