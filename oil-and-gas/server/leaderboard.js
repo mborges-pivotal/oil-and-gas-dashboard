@@ -4,7 +4,7 @@
  * A portfolio is on it when its owner marks it Public (settings.portfolios[].
  * visibility). Only the rank, movement, portfolio name, the owner's display
  * name and initials, and the return % leave the server — never amounts,
- * holdings or email addresses.
+ * holdings or email addresses. Each row shows the portfolio's picture (or its initials).
  *
  * Periods: today, 1w, 1m, 3m, ytd, 1y, all.
  * Returns are on stocks and funds (cash holdings and option contracts are
@@ -133,7 +133,6 @@ function periodReturn(holdings, hist, period, end, prevOf) {
   return ((vEnd - vStart - flows) / base) * 100;
 }
 
-const COLORS = 8;
 const initialsOf = name => (name.match(/\b\p{L}/gu) ?? []).slice(0, 2).join('').toUpperCase() || '?';
 
 // ── The board ──
@@ -170,18 +169,18 @@ async function buildBoard(periodId) {
   const rows = [...now.entries()].map(([e, { rank: r, r: ret }]) => {
     if (!names.has(e.userId)) {
       const p = db.getProfile(e.userId);
-      names.set(e.userId, { name: (p?.displayName || '').trim() || 'Anonymous investor', avatar: p?.avatar ?? null });
+      names.set(e.userId, (p?.displayName || '').trim() || 'Anonymous investor');
     }
-    const { name: display, avatar } = names.get(e.userId);
+    const display = names.get(e.userId);
     const prev = before.get(e);
     return {
       rank: r,
       movement: prev ? prev.rank - r : null, // + up, − down, null = new
       portfolio: e.pf.name,
       owner: display,
-      initials: initialsOf(display),
-      color: (e.userId * 5) % COLORS + 1,
-      avatar, // { preset: { emoji, color }, image: url | null } — the photo URL uses a random key, not the user ID
+      initials: initialsOf(e.pf.name), // the portfolio's, shown when it has no picture
+      // The portfolio's picture (Account → Portfolios → Edit) — its URL uses a random key, not an ID.
+      image: typeof e.pf.image === 'string' && /^\/api\/portfolio-image\/[A-Za-z0-9_-]+(\?v=[^\s"]*)?$/.test(e.pf.image) ? e.pf.image : null,
       returnPct: Math.round(ret * 100) / 100,
       userId: e.userId,
     };

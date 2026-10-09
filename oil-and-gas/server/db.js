@@ -127,6 +127,17 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS portfolio_ids_user_id ON portfolio_ids(user_id);
 
+  -- A portfolio's picture (Account → Portfolios → Edit): a small square data
+  -- URL, served at /api/portfolio-image/<key>. Gone when the portfolio's ID is
+  -- freed (the portfolio was deleted).
+  CREATE TABLE IF NOT EXISTS portfolio_images (
+    portfolio_id TEXT PRIMARY KEY REFERENCES portfolio_ids(id) ON DELETE CASCADE,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    image        TEXT NOT NULL,
+    image_key    TEXT NOT NULL UNIQUE,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   -- External bank accounts (Profile → Bank accounts), the source of deposits
   -- into the account's cash. Only the last 4 digits of the number are kept.
   -- Nothing is verified yet: status is set by the user.
@@ -252,6 +263,11 @@ function migrateAvatars() {
 migrateAvatars();
 
 const stmts = {
+  upsertPortfolioImage: db.prepare(`INSERT INTO portfolio_images (portfolio_id, user_id, image, image_key) VALUES (?, ?, ?, ?)
+    ON CONFLICT(portfolio_id) DO UPDATE SET image = excluded.image, updated_at = datetime('now')`),
+  portfolioImageMeta: db.prepare('SELECT image_key, updated_at FROM portfolio_images WHERE portfolio_id = ?'),
+  portfolioImageByKey: db.prepare('SELECT image FROM portfolio_images WHERE image_key = ?'),
+  deletePortfolioImage: db.prepare('DELETE FROM portfolio_images WHERE portfolio_id = ? AND user_id = ?'),
   setAvatarPreset: db.prepare(`UPDATE profiles SET avatar_preset = ?, avatar_image = NULL, avatar_updated = datetime('now') WHERE user_id = ?`),
   setAvatarImage: db.prepare(`UPDATE profiles SET avatar_image = ?, avatar_updated = datetime('now') WHERE user_id = ?`),
   clearAvatarImage: db.prepare(`UPDATE profiles SET avatar_image = NULL, avatar_updated = datetime('now') WHERE user_id = ?`),
@@ -535,6 +551,13 @@ function toAlertEvent(row) {
 }
 
 module.exports = {
+  setPortfolioImage: (portfolioId, userId, dataUrl, newKey) => {
+    stmts.upsertPortfolioImage.run(portfolioId, userId, dataUrl, newKey);
+    const m = stmts.portfolioImageMeta.get(portfolioId);
+    return `/api/portfolio-image/${m.image_key}?v=${encodeURIComponent(m.updated_at)}`;
+  },
+  portfolioImageByKey: key => stmts.portfolioImageByKey.get(key)?.image ?? null,
+  deletePortfolioImage: (portfolioId, userId) => stmts.deletePortfolioImage.run(portfolioId, userId).changes > 0,
   setAvatarPreset: (userId, preset) => stmts.setAvatarPreset.run(JSON.stringify(preset), userId),
   setAvatarImage: (userId, dataUrl) => stmts.setAvatarImage.run(dataUrl, userId),
   clearAvatarImage: userId => stmts.clearAvatarImage.run(userId),

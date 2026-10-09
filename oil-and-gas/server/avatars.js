@@ -95,4 +95,4 @@ async function handleAvatarApi(req, res, reqUrl) {
   sendJson(res, 404, { error: 'Not found' });
 }
 
-module.exports = { handleAvatarApi, ensureAvatar, assignMissingAvatars, EMOJIS, COLORS };
+module.exports = { handleAvatarApi, ensureAvatar, assignMissingAvatars, validImage, IMAGE_RE, EMOJIS, COLORS };

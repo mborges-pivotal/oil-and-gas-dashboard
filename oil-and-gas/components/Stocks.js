@@ -25,7 +25,8 @@ import PortfolioOverview from './PortfolioOverview.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
 import { portfolioList, mergePortfolios, emptyPortfolio, summarizePortfolio, DEFAULT_PORTFOLIO_NAME } from '../utils/portfolios.js';
-import { suggestPortfolioId, claimPortfolioId } from '../services/portfolios.js';
+import { suggestPortfolioId, claimPortfolioId, setPortfolioImage, removePortfolioImage } from '../services/portfolios.js';
+import ImagePicker from './ImagePicker.js';
 import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
@@ -396,7 +397,7 @@ const TRANSFER_PICKER = `
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview, ImagePicker },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   // startTab: the Account sub-tab to open on (else the last one used).
@@ -529,6 +530,7 @@ export default {
       const cur = mode === 'edit' ? openPf.value : null;
       pfForm.value = {
         mode, name: cur?.name ?? '', visibility: cur?.visibility === 'public' ? 'public' : 'private',
+        image: null, // create: a picked picture (data URL), uploaded once the portfolio has its ID
         id: '', idEdited: false, idState: null, busy: false, error: null,
       };
     }
@@ -568,7 +570,16 @@ export default {
       f.busy = true;
       try {
         const id = await claimPortfolioId(name, f.idEdited ? f.id : '');
-        emit('set-portfolios', [...portfolios.value, { ...emptyPortfolio(name, id), visibility: f.visibility }]);
+        let image = null;
+        if (f.image) {
+          try {
+            image = await setPortfolioImage(id, f.image);
+          } catch (e) {
+            // The portfolio is still worth creating; the picture can be added with Edit.
+            pfImageError.value = `The portfolio was created, but its picture couldn't be saved: ${e.message}`;
+          }
+        }
+        emit('set-portfolios', [...portfolios.value, { ...emptyPortfolio(name, id), visibility: f.visibility, ...(image ? { image } : {}) }]);
         pfForm.value = null;
       } catch (e) {
         f.error = e.message + (e.suggestion ? ` — try "${e.suggestion}".` : '');
@@ -576,6 +587,39 @@ export default {
         f.busy = false;
       }
     }
+    // A portfolio's picture (Edit): saved on the server, its URL kept on the portfolio.
+    const pfImageBusy = ref(false);
+    const pfImageError = ref(null);
+    async function changePortfolioImage(dataUrl) {
+      const pf = openPf.value;
+      if (!pf) return;
+      pfImageBusy.value = true;
+      pfImageError.value = null;
+      try {
+        const url = await setPortfolioImage(pf.id, dataUrl);
+        emit('set-portfolios', portfolios.value.map(p => (p.id === pf.id ? { ...p, image: url } : p)));
+      } catch (e) {
+        pfImageError.value = `Couldn't save the picture: ${e.message}`;
+      } finally {
+        pfImageBusy.value = false;
+      }
+    }
+    async function clearPortfolioImage() {
+      const pf = openPf.value;
+      if (!pf || !confirm(`Remove the picture from "${pf.name}"?`)) return;
+      pfImageBusy.value = true;
+      pfImageError.value = null;
+      try {
+        await removePortfolioImage(pf.id);
+        emit('set-portfolios', portfolios.value.map(p => (p.id === pf.id ? { ...p, image: null } : p)));
+      } catch (e) {
+        pfImageError.value = `Couldn't remove the picture: ${e.message}`;
+      } finally {
+        pfImageBusy.value = false;
+      }
+    }
+    const pfInitials = name => ((name || '').trim().split(/\s+/).filter(Boolean).map(w => w[0]).slice(0, 2).join('') || '?').toUpperCase();
+
     function deletePortfolio() {
       const pf = openPf.value;
       if (!pf) return;
@@ -3065,6 +3109,7 @@ export default {
       openOptionSymbols, tickers, PORTFOLIO_TABS, pfTab, onPositions,
       portfolios, openPf, openPfId, pfFor, pfChoice, choosePortfolio, holdsIn, DEFAULT_PORTFOLIO_NAME,
       pfForm, openPfForm, submitPfForm, onPfFormInput, deletePortfolio, pfMetrics, pfError, accountMetrics,
+      pfImageBusy, pfImageError, changePortfolioImage, clearPortfolioImage, pfInitials,
       accountCash, cashName, ACCOUNT_CASH, cashReserved, depositForm, startDeposit, connectedBanks, depositBankFor, saveDeposit, deleteDeposit,
       depositsShown, showAllDeposits, bankAccounts, BANK_TYPES,
       overviewHoldings, viewPf,
@@ -3332,6 +3377,7 @@ export default {
       <section class="pf-cards" v-if="portfolioOnly && pfTab === 'portfolios' && !openPf" aria-label="Portfolios">
         <button v-for="p in portfolios" :key="p.id" type="button" class="card pf-card" @click="openPfId = p.id">
           <template v-for="m in [pfMetrics(p)]" :key="p.id + '-m'">
+            <span class="pf-thumb" aria-hidden="true"><img v-if="p.image" :src="p.image" alt="" /><template v-else>{{ pfInitials(p.name) }}</template></span>
             <span class="pf-card-name">{{ p.name }} <span class="pf-card-id">{{ p.id }}</span> <span class="pf-vis-badge" :class="p.visibility === 'public' ? 'public' : ''" :title="p.visibility === 'public' ? 'Public — on the Leaderboard' : 'Private'">{{ p.visibility === 'public' ? '🌐' : '🔒' }}</span></span>
             <span class="pf-card-label">Position</span>
             <span class="pf-card-value">{{ m.value != null ? formatUSD(m.value) : (m.positions ? '…' : formatUSD(0)) }}</span>
@@ -3360,6 +3406,14 @@ export default {
               <template v-else-if="pfForm.idState?.taken">Taken — pick another</template>
               <template v-else>Derived from the name; unique across all accounts</template>
             </span>
+            <div class="pf-image-field pf-image-new">
+              <span class="pf-thumb pf-thumb-lg" aria-hidden="true"><img v-if="pfForm.image" :src="pfForm.image" alt="" /><template v-else>{{ pfInitials(pfForm.name) }}</template></span>
+              <div>
+                <div class="pf-card-label">Picture <span class="text-muted" style="text-transform:none;letter-spacing:0;font-weight:500">(optional)</span></div>
+                <ImagePicker :busy="pfForm.busy" :has-image="!!pfForm.image" remove-label="Remove"
+                             @picked="pfForm.image = $event" @remove="pfForm.image = null" />
+              </div>
+            </div>
             <div class="pf-card-new-actions">
               <button type="submit" class="primary" :disabled="pfForm.busy">{{ pfForm.busy ? 'Creating…' : 'Create' }}</button>
               <button type="button" @click="pfForm = null">Cancel</button>
@@ -3368,6 +3422,7 @@ export default {
           </form>
           <button v-else type="button" class="pf-card-new-btn" @click="openPfForm('create')">＋ New portfolio</button>
         </div>
+        <div class="notice error pf-cards-note" v-if="pfImageError && !openPf">{{ pfImageError }}</div>
         <p class="text-muted text-sm pf-cards-note" v-if="!portfolios.length">
           No portfolios yet. Create one here, or add a purchase from any stock's Portfolio tab on Markets → Stocks.
         </p>
@@ -3386,9 +3441,19 @@ export default {
             <button type="submit" class="primary">Save</button>
             <button type="button" @click="pfForm = null">Cancel</button>
             <span class="negative text-sm" v-if="pfForm.error">{{ pfForm.error }}</span>
+            <div class="pf-image-field">
+              <span class="pf-thumb pf-thumb-lg" aria-hidden="true"><img v-if="openPf.image" :src="openPf.image" alt="" /><template v-else>{{ pfInitials(pfForm.name || openPf.name) }}</template></span>
+              <div>
+                <div class="pf-card-label">Picture</div>
+                <ImagePicker :busy="pfImageBusy" :has-image="!!openPf.image" remove-label="Remove picture"
+                             @picked="changePortfolioImage" @remove="clearPortfolioImage" />
+                <div class="notice error" v-if="pfImageError" style="margin:6px 0 0">{{ pfImageError }}</div>
+              </div>
+            </div>
             <span class="text-muted text-sm pf-visibility-note">Public portfolios appear on the Leaderboard with their name, your display name and their return % — never amounts or holdings.</span>
           </form>
           <template v-else>
+            <span class="pf-thumb pf-thumb-lg" aria-hidden="true"><img v-if="openPf.image" :src="openPf.image" alt="" /><template v-else>{{ pfInitials(openPf.name) }}</template></span>
             <h3 class="pf-detail-name">{{ openPf.name }} <span class="pf-vis-badge" :class="openPf.visibility === 'public' ? 'public' : ''">{{ openPf.visibility === 'public' ? '🌐 Public' : '🔒 Private' }}</span> <span class="pf-card-id" title="Portfolio ID — unique across accounts; stays the same if you rename it">{{ openPf.id }}</span></h3>
             <span class="pf-detail-actions">
               <button type="button" class="link-button" @click="openPfForm('edit')">Edit</button>

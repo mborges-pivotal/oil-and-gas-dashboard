@@ -1,13 +1,12 @@
 const { ref, watch, onMounted } = Vue;
 import { formatPct, formatDate } from '../utils/formatters.js';
-import Avatar from './Avatar.js';
 
 /**
  * Leaderboard (top bar, signed in): public portfolios (any account) ranked by return
  * for a period — Today, 1W, 1M, 3M, YTD, 1Y, All-Time (server/leaderboard.js).
  * Each row: rank, movement since the previous trading day's standings (▲ up
- * in green, ▼ down in red, NEW), the owner's profile icon (initials), the
- * portfolio and profile names, and the return. Your own rows are highlighted.
+ * in green, ▼ down in red, NEW), the portfolio's picture (its initials when
+ * it has none), the portfolio and profile names, and the return. Your own rows are highlighted.
  */
 const PERIODS = [
   { id: 'today', label: 'Today' },
@@ -22,7 +21,6 @@ const KEY = 'oilgas_leaderboard_period';
 
 export default {
   name: 'Leaderboard',
-  components: { Avatar },
   props: { publicCount: { type: Number, default: 0 } },
   emits: ['make-public'],
   setup() {
@@ -87,7 +85,7 @@ export default {
             <template v-else-if="r.movement === null">NEW</template>
             <template v-else>–</template>
           </span>
-          <Avatar class="lb-avatar" :avatar="r.avatar" :name="r.owner" :size="34" />
+          <span class="pf-thumb lb-thumb" aria-hidden="true"><img v-if="r.image" :src="r.image" alt="" /><template v-else>{{ r.initials }}</template></span>
           <span class="lb-names">
             <span class="lb-portfolio">{{ r.portfolio }}<span class="lb-you" v-if="r.mine">You</span></span>
             <span class="lb-owner text-muted">{{ r.owner }}</span>

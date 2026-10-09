@@ -22,3 +22,11 @@ export async function claimPortfolioId(name, id) {
   }
   return body.id;
 }
+
+/** Set a portfolio's picture (a square data URL) → its URL, to keep on the portfolio. */
+export async function setPortfolioImage(id, image) {
+  return (await request('PUT', `/api/portfolios/${encodeURIComponent(id)}/image`, { image })).image;
+}
+export async function removePortfolioImage(id) {
+  await request('DELETE', `/api/portfolios/${encodeURIComponent(id)}/image`);
+}
