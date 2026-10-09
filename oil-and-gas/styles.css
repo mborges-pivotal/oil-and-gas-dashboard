@@ -163,7 +163,13 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   letter-spacing: 0.02em;
   white-space: nowrap;
   flex-shrink: 0;
+  text-decoration: none;
+  cursor: pointer;
+  border-radius: 6px;
 }
+/* The logo is the link home (Markets). */
+.app-header .logo:hover { text-decoration: none; opacity: .85; }
+.app-header .logo:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .app-header .logo-accent { color: var(--accent); }
 .app-header .logo-icon { display: none; border-radius: 6px; }
 
@@ -198,6 +204,56 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   margin-bottom: 20px;
 }
 .label-short { display: none; }
+/* App subheader (app.js): My Account + Markets' sections, and Markets'
+   "Updated …" on the right — full width and frozen right under the app
+   header (52px tall), on every page. The first tab's label lines up with
+   the logo (same side padding as the header). */
+.app-subheader {
+  position: sticky;
+  top: 52px;
+  z-index: 9; /* under the app header and its menus */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+.app-subheader .subtab-bar { border-bottom: none; margin-bottom: 0; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.app-subheader .subtab-btn { white-space: nowrap; flex-shrink: 0; }
+.app-subheader .subtab-btn:first-child { padding-left: 0; }
+.app-subheader .subtab-account { margin-right: 10px; } /* a little apart from Markets' sections */
+.subheader-updated { white-space: nowrap; flex-shrink: 0; }
+/* Right end of the subheader: Markets' "Updated …" and the theme button. */
+.subheader-right { display: flex; align-items: center; gap: 12px; flex-shrink: 0; margin-left: auto; }
+.theme-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--border); background: transparent; color: var(--text-muted);
+  font-size: 15px; line-height: 1;
+}
+.theme-toggle:hover:not(:disabled) { background: var(--surface-2); color: var(--accent); }
+.theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.subheader-updated-below { display: none; margin: -8px 0 12px; text-align: right; }
+@media (max-width: 900px) {
+  .subheader-updated { display: none; }
+  .subheader-updated-below { display: block; }
+}
+@media (max-width: 768px) {
+  .app-subheader { padding: 0 12px; }
+}
+/* Sticky bars inside pages stop under the subheader (52px header + ~41px subheader). */
+.tab-content .wl-bulk-bar { top: 101px; }
+@media (max-width: 480px) {
+  /* Short labels sharing the row; it scrolls sideways only if they can't fit. */
+  .app-subheader { padding: 0 8px 0 4px; gap: 6px; }
+  .theme-toggle { width: 28px; height: 28px; font-size: 14px; }
+  .app-subheader .subtab-bar { flex: 1; }
+  .app-subheader .subtab-btn { flex: 1 0 auto; }
+  .app-subheader .subtab-btn:first-child { padding-left: 4px; }
+  .app-subheader .subtab-account { margin-right: 0; }
+}
 /* Markets sub-tab change by swipe: the new section slides in from the side
    the finger came from. */
 .markets-content.slide-from-right { animation: slide-from-right 180ms ease-out; }
@@ -1242,11 +1298,11 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
   .range-btn-group { flex-wrap: nowrap; width: 100%; gap: 3px; }
   .range-btn { flex: 1 1 0; min-width: 0; padding: 5px 0; text-align: center; }
   .app-header .logo { font-size: 13px; }
-  /* Room for Markets · News · Portfolio + the account menu on one row. */
+  /* Room for the tabs + the account menu on one row. */
   .app-header .logo-accent { display: none; }
 }
 /* Narrow phones: the drop icon stands in for the name, so up to four tabs
-   (Markets · News · Portfolio · Notes) fit beside the account menu. */
+   (Account · Inbox · 🏆) fit beside the account menu. */
 @media (max-width: 420px) {
   .app-header .logo-text { display: none; }
   .app-header .logo-icon { display: block; }
@@ -1266,7 +1322,7 @@ label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom
 .account-page.signed-in { max-width: 860px; }
 /* Signed-in profile: side navigation + section content */
 .profile-layout { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 24px; align-items: start; }
-.profile-nav { position: sticky; top: 68px; display: flex; flex-direction: column; gap: 2px; }
+.profile-nav { position: sticky; top: 109px; /* under the header + subheader */ display: flex; flex-direction: column; gap: 2px; }
 .profile-nav-user { padding: 4px 10px 12px; margin-bottom: 6px; border-bottom: 1px solid var(--border); min-width: 0; }
 .profile-nav-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-nav-email { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1386,12 +1442,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    Settings, Sign out; plus the theme switch on phones. */
 .user-menu { position: relative; flex-shrink: 0; margin-left: 12px; }
 .user-menu-button {
+  /* Just a circle: the profile picture (signed in) or a person icon. */
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 6px 3px 4px;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 50%;
+  overflow: hidden;
   background: transparent;
   color: var(--text-muted);
   line-height: 1;
@@ -1399,6 +1459,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .user-menu-button:hover,
 .user-menu-button[aria-expanded="true"] { background: var(--surface-2); color: var(--text); }
 .user-menu-button.active { border-color: var(--accent); color: var(--accent); }
+/* Signed in: the picture fills the circle; hover / open / current page show as a ring. */
+.user-menu-button.signed-in { border: none; }
+.user-menu-button.signed-in:hover,
+.user-menu-button.signed-in[aria-expanded="true"] { background: transparent; box-shadow: 0 0 0 2px var(--border); }
+.user-menu-button.signed-in.active { box-shadow: 0 0 0 2px var(--accent); }
+.user-menu-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .user-menu-icon { display: block; margin: 2px; }
 .user-menu-avatar {
   display: inline-flex;
@@ -1413,7 +1479,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 700;
   letter-spacing: 0.02em;
 }
-.user-menu-caret { font-size: 10px; }
 .user-menu-panel {
   position: absolute;
   right: 0;
@@ -1445,13 +1510,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .user-menu-item.current { color: var(--accent); }
 .user-menu-sep { height: 1px; background: var(--border); margin: 4px 0; }
 .user-menu-label { padding: 4px 10px 6px; font-size: 11px; color: var(--text-muted); }
-/* Theme switch inside the menu: phones only (the header copy shows on desktop). */
-.user-menu-theme { display: none; }
-.user-menu-theme .theme-switch { display: flex; margin: 0 6px 6px; }
-.user-menu-theme .theme-switch button { flex: 1; padding: 6px 4px; font-size: 12px; }
 @media (max-width: 768px) {
-  .header-theme-switch { display: none; }
-  .user-menu-theme { display: block; }
   .user-menu { margin-left: 8px; }
 }
 
@@ -1883,7 +1942,10 @@ button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(
   .tab-btn .label-short { display: inline; }
   .account-tabs .label-full { display: none; }
   .account-tabs .label-short { display: inline; }
-  .account-tabs .subtab-btn { padding-left: 10px; padding-right: 10px; }
+  /* Four sub-tabs (Summary · Watchlist · Portfolios · Transactions) share the row. */
+  .account-tabs { gap: 0; }
+  .account-tabs .subtab-btn { flex: 1 1 auto; padding-left: 4px; padding-right: 4px; }
+  .account-tabs { overflow-x: auto; scrollbar-width: none; } /* the narrowest phones: scroll rather than overflow */
 }
 .lb-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 10px; }
 .lb-periods { flex-wrap: nowrap; }
@@ -2263,4 +2325,32 @@ button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(
   .discover-item { grid-template-columns: 40px minmax(0, 1fr) auto; }
   .discover-actions { grid-column: 1 / -1; justify-content: flex-end; }
   .post-time { margin-left: 0; }
+}
+@media (max-width: 360px) {
+  .account-tabs .subtab-btn { font-size: 11.5px; padding-left: 3px; padding-right: 3px; }
+}
+/* Markets → Energy: Oil Price Indexes · Retail Gas Prices */
+@media (max-width: 480px) {
+  .energy-tabs .label-full { display: none; }
+  .energy-tabs .label-short { display: inline; }
+  .energy-tabs .subtab-btn { flex: 1 1 0; text-align: center; }
+}
+/* My Account → ✉ (Inbox): an icon tab with its unread badge */
+.subtab-icon .subtab-icon-glyph { font-size: 21px; line-height: 1; vertical-align: -3px; }
+.account-tabs .subtab-btn.subtab-icon { flex: 0 0 auto; }
+/* Leaderboard rows open the portfolio's profile */
+.lb-row.linked { cursor: pointer; }
+.lb-row.linked:hover { background: var(--surface-2); border-radius: 8px; }
+.lb-row.linked:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
+/* A public portfolio's profile (Leaderboard → a portfolio) */
+.pf-profile-back { margin-bottom: 12px; }
+.pf-profile-head { display: grid; grid-template-columns: 56px minmax(0, 1fr) auto auto; align-items: center; gap: 14px; margin-bottom: 16px; }
+.pf-profile-name { margin: 0 0 2px; font-size: 20px; }
+.pf-profile-return { text-align: right; font-variant-numeric: tabular-nums; font-size: 20px; }
+.pf-profile-return .pf-card-label { display: block; font-size: 11px; }
+.pf-profile-actions { display: flex; align-items: center; gap: 6px; }
+.pf-profile-note { margin-top: 12px; }
+@media (max-width: 600px) {
+  .pf-profile-head { grid-template-columns: 56px minmax(0, 1fr) auto; }
+  .pf-profile-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }

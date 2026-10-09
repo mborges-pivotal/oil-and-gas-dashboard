@@ -31,7 +31,8 @@ export default {
   name: 'AllocationChart',
   // mode: 'pct' (default) labels the ring with percentages; 'usd' with
   // compact dollars, and the legend leads with the dollar amount.
-  props: { slices: Array, label: String, mode: { type: String, default: 'pct' } },
+  // pctOnly: percentages only, never dollar values (a public portfolio's profile)
+  props: { slices: Array, label: String, mode: { type: String, default: 'pct' }, pctOnly: Boolean },
   setup(props) {
     const SIZE = 180;
     const C = SIZE / 2;
@@ -122,34 +123,34 @@ export default {
         <div class="allocation-center" aria-live="polite">
           <template v-if="activeArc">
             <div class="allocation-center-label">{{ activeArc.label }}</div>
-            <div class="allocation-center-value">{{ formatUSD(activeArc.value) }}</div>
+            <div class="allocation-center-value">{{ pctOnly ? pctText(activeArc.pct) : formatUSD(activeArc.value) }}</div>
             <div class="allocation-center-symbols" v-if="activeArc.symbols.length">{{ activeArc.symbols.join(', ') }}</div>
           </template>
           <template v-else>
-            <div class="allocation-center-label">Total</div>
-            <div class="allocation-center-value">{{ formatUSD(total) }}</div>
+            <div class="allocation-center-label">{{ pctOnly ? 'Groups' : 'Total' }}</div>
+            <div class="allocation-center-value">{{ pctOnly ? arcs.length : formatUSD(total) }}</div>
           </template>
         </div>
       </div>
 
       <ul class="allocation-legend" aria-hidden="true">
-        <li v-for="a in arcs" :key="a.key" :title="a.label + ' — ' + formatUSD(a.value) + (a.symbols.length ? ' (' + a.symbols.join(', ') + ')' : '')"
+        <li v-for="a in arcs" :key="a.key" :title="a.label + ' — ' + (pctOnly ? pctText(a.pct) : formatUSD(a.value)) + (a.symbols.length ? ' (' + a.symbols.join(', ') + ')' : '')"
             :class="{ active: active === a.key, dim: active && active !== a.key }"
             @mouseenter="active = a.key" @click="toggle(a.key)">
           <span class="allocation-swatch" :style="{ background: a.color }"></span>
           <span class="allocation-name">{{ a.name }}</span>
           <span class="allocation-pct">{{ mode === 'usd' ? compactUSD(a.value) : pctText(a.pct) }}</span>
-          <span class="allocation-value">{{ mode === 'usd' ? pctText(a.pct) : compactUSD(a.value) }}</span>
+          <span class="allocation-value" v-if="!pctOnly">{{ mode === 'usd' ? pctText(a.pct) : compactUSD(a.value) }}</span>
         </li>
       </ul>
 
       <!-- Full data for screen readers (the chart and legend above are hidden from them) -->
       <table class="sr-only">
         <caption>{{ ariaLabel }}</caption>
-        <thead><tr><th>Group</th><th>Holdings</th><th>Value</th><th>Share</th></tr></thead>
+        <thead><tr><th>Group</th><th>Holdings</th><th v-if="!pctOnly">Value</th><th>Share</th></tr></thead>
         <tbody>
           <tr v-for="a in arcs" :key="'t' + a.key">
-            <td>{{ a.label }}</td><td>{{ a.symbols.join(', ') }}</td><td>{{ formatUSD(a.value) }}</td><td>{{ pctText(a.pct) }}</td>
+            <td>{{ a.label }}</td><td>{{ a.symbols.join(', ') }}</td><td v-if="!pctOnly">{{ formatUSD(a.value) }}</td><td>{{ pctText(a.pct) }}</td>
           </tr>
         </tbody>
       </table>

@@ -2,7 +2,7 @@
  * Portfolio pictures (Account → Portfolios → a portfolio → Edit). The
  * browser sends a square, shrunk image (as for avatars); it's stored against
  * the portfolio's ID (only the portfolio's owner can set it) and served by an
- * unguessable key to signed-in users. The returned URL goes into the
+ * unguessable key to anyone (the Leaderboard and portfolio profiles are public). The returned URL goes into the
  * portfolio's settings (portfolio.image) so cards can show it.
  *
  *   PUT    /api/portfolios/:id/image   { image: 'data:image/…;base64,…' } → { image: url }
@@ -32,12 +32,11 @@ function removeImage(req, res, id) {
   sendJson(res, 204);
 }
 function serve(req, res, key) {
-  requireUser(req);
   const dataUrl = db.portfolioImageByKey(key);
   const m = dataUrl && IMAGE_RE.exec(dataUrl);
   if (!m) throw new HttpError(404, 'No such image');
   const bytes = Buffer.from(m[2], 'base64');
-  res.writeHead(200, { 'Content-Type': `image/${m[1]}`, 'Content-Length': bytes.length, 'Cache-Control': 'private, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
+  res.writeHead(200, { 'Content-Type': `image/${m[1]}`, 'Content-Length': bytes.length, 'Cache-Control': 'public, max-age=31536000, immutable', 'X-Content-Type-Options': 'nosniff' });
   res.end(bytes);
 }
 

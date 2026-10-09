@@ -71,3 +71,11 @@ export async function copyText(text) {
     return ok;
   }
 }
+
+/** A public portfolio's profile (no sign-in needed): { portfolio, positions } — positions scaled to a cost of 100. */
+export async function fetchPortfolioProfile(id) {
+  const res = await fetch(`/api/portfolios/${enc(id)}/profile`, { credentials: 'same-origin' });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+  return body;
+}

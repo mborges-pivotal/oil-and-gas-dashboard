@@ -341,4 +341,4 @@ async function dispatch(req, res, reqUrl, handler) {
   }
 }
 
-module.exports = { handleApi, dispatch, requireUser, readJsonBody, sendJson, HttpError };
+module.exports = { handleApi, dispatch, requireUser, currentUserId, readJsonBody, sendJson, HttpError };

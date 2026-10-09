@@ -3,7 +3,7 @@ import { formatPrice, formatPct } from '../utils/formatters.js';
 
 /**
  * Top movers card: the biggest gainers and losers by today's % change
- * across the selected lists. On Markets → Stocks the lists are your
+ * across the selected lists. On My Account → Watchlist the lists are your
  * watchlists, toggled as chips in the card (any combination, at least one;
  * v-model:selected-ids); on the Portfolio page there's a single source,
  * your holdings, and no selector. Quotes come from the parent, which keeps

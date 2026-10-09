@@ -31,18 +31,6 @@ import ImagePicker from './ImagePicker.js';
 import { MULTIPLIER, optionable, occSymbol, parseOcc, optionLabel, daysToExpiry, moneyness, breakeven, nextMonthlyExpiry, nearStrike } from '../utils/options.js';
 import { notesStore, findNote, addNote } from '../utils/notesStore.js';
 
-const INDEX_LABELS = {
-  '^GSPC': 'S&P 500',
-  '^DJI': 'Dow Jones',
-  '^IXIC': 'Nasdaq Composite',
-  '^RUT': 'Russell 2000',
-  '^VIX': 'VIX (Volatility)',
-};
-// Matches config.json's marketIndexes.symbols — used as a fallback for
-// anyone whose localStorage-persisted config predates this field (loadConfig
-// only pulls in config.json's *new* top-level fields on a first-ever visit,
-// not for a returning visitor who already has a saved config).
-const DEFAULT_INDEX_SYMBOLS = Object.keys(INDEX_LABELS);
 
 const FORM_TABS = [
   { id: '10-K',    label: '10-K Annual' },
@@ -431,8 +419,8 @@ export default {
       customLists.value.find(l => String(l.id) === activeListId.value) ?? null
     );
     // ── Portfolios (config.portfolios — see utils/portfolios.js) ──
-    // The Account page (portfolioOnly) has sub-tabs Summary · Portfolios ·
-    // Transactions; under Portfolios, a card per portfolio, and an opened one
+    // The Account page (portfolioOnly) has sub-tabs Summary · Watchlist · Portfolios ·
+    // Transactions; Watchlist is this component again in its watchlist mode (not portfolioOnly); under Portfolios, a card per portfolio, and an opened one
     // shows its holdings, options and closed positions. On Markets, each
     // stock's Portfolio tab works in one portfolio at a time, chosen there.
     const portfolios = computed(() => portfolioList(props.config));
@@ -441,6 +429,7 @@ export default {
 
     const PORTFOLIO_TABS = [
       { id: 'summary',    label: 'Summary' },
+      { id: 'watchlist',  label: 'Watchlist' },
       { id: 'portfolios', label: 'Portfolios' },
       { id: 'activity',   label: 'Transactions' }, // id kept: a remembered tab still opens it
     ];
@@ -1320,25 +1309,8 @@ export default {
       lastUpdated.value = new Date().toLocaleTimeString();
     }
 
-    // ── Major market indexes — symbol → { price, change, pctChange, loading, error } ──
-    const indexSymbols = computed(() => props.config.marketIndexes?.symbols ?? DEFAULT_INDEX_SYMBOLS);
-    const indexes = reactive({});
-
-    async function fetchIndexes() {
-      await Promise.all(indexSymbols.value.map(async (sym) => {
-        if (!indexes[sym]) indexes[sym] = { price: null, change: null, pctChange: null, loading: true, error: null };
-        else indexes[sym].loading = true;
-        try {
-          const q = await fetchQuote(sym);
-          indexes[sym] = { ...q, loading: false, error: null };
-        } catch (e) {
-          indexes[sym] = { price: null, change: null, pctChange: null, loading: false, error: e.message };
-        }
-      }));
-    }
-
     // ── Top movers card ──
-    // Markets → Stocks: any combination of your watchlists (Default + yours),
+    // My Account → Watchlist: any combination of your watchlists (Default + yours),
     // remembered per browser. Portfolio page: just your holdings.
     const MOVERS_KEY = 'oilgas_movers_lists';
     const moverSources = computed(() => (props.portfolioOnly
@@ -1383,7 +1355,7 @@ export default {
       // The list shown plus whatever Top movers ranks (they can differ).
       // …and the stocks behind open options (moneyness, intrinsic value).
       const symbols = [...new Set([...tickers.value, ...moverSymbols.value, ...optionUnderlyings.value])];
-      await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), props.portfolioOnly ? null : fetchIndexes(), loadEarnings(tickers.value)]);
+      await Promise.all([fetchStockQuotes(symbols), fetchOptionQuotes(), loadEarnings(tickers.value)]);
     }
 
     // Switching lists or adding a ticker: fetch whatever has no quote yet.
@@ -3100,7 +3072,6 @@ export default {
       searchShown, searchInput, openSearch, closeSearch,
       watchlistEl, draggingTicker,
       onHandlePointerDown, onHandleKeydown, onCardPointerDown, onCardContextMenu,
-      indexSymbols, indexes, INDEX_LABELS,
       details, toggleDetail, setDetailTab, setDocsTab, filingsForTab, filteredChartData, keyStats, onNewsImageError,
       intraday, FORM_TABS, STOCK_RANGE_OPTIONS,
       positionForms, positionFor, positionSummary, formatShares, signedUSD,
@@ -3235,30 +3206,7 @@ export default {
         </p>
       </div>
 
-      <template v-if="!portfolioOnly">
-      <!-- Major Market Indexes -->
-      <div class="card-title" style="margin-bottom:10px">Major Market Indexes</div>
-      <div class="price-grid mb-24">
-        <div class="price-card" v-for="sym in indexSymbols" :key="sym">
-          <div class="label">{{ INDEX_LABELS[sym] ?? sym }}</div>
-          <template v-if="indexes[sym]?.loading && indexes[sym]?.price == null">
-            <div class="skeleton" style="width:80%;height:28px;margin-top:4px"></div>
-            <div class="skeleton" style="width:50%;height:14px;margin-top:6px"></div>
-          </template>
-          <template v-else-if="indexes[sym]?.error">
-            <div class="text-muted text-sm">Unavailable</div>
-          </template>
-          <template v-else>
-            <div class="price">{{ formatNumber(indexes[sym]?.price) }}</div>
-            <div class="change" :class="changeClass(indexes[sym]?.change)">
-              {{ formatNumber(indexes[sym]?.change, { signed: true }) }} ({{ formatPct(indexes[sym]?.pctChange) }})
-            </div>
-          </template>
-        </div>
-      </div>
-      </template>
-
-      <!-- Top movers (Markets → Stocks: under the indexes) -->
+      <!-- Top movers (My Account → Watchlist: above the list) -->
       <TopMovers v-if="!portfolioOnly" :sources="moverSources" v-model:selected-ids="moverSelected"
                  :quotes="stockQuotes" @select="openMover" />
 
@@ -3433,7 +3381,7 @@ export default {
         </div>
         <div class="notice error pf-cards-note" v-if="pfImageError && !openPf">{{ pfImageError }}</div>
         <p class="text-muted text-sm pf-cards-note" v-if="!portfolios.length">
-          No portfolios yet. Create one here, or add a purchase from any stock's Portfolio tab on Markets → Stocks.
+          No portfolios yet. Create one here, or add a purchase from any stock's Portfolio tab on the Watchlist tab.
         </p>
       </section>
       <DiscoverPortfolios v-if="portfolioOnly && pfTab === 'portfolios' && !openPf && user" :initial-query="discoverQuery ?? ''"
@@ -3483,7 +3431,7 @@ export default {
       <div class="notice" v-if="listsLoading && !tickers.length">Loading your watchlists…</div>
       <div class="notice" v-else-if="isPortfolioList && (pfTab === 'summary' ? portfolios.length : openPf) && !tickers.length && !openOptionSymbols.length">
         <template v-if="closedPositions.length">No open positions — sold ones are under Closed positions.</template>
-        <template v-else>No positions yet. Open a stock on Markets → Stocks and use its Portfolio tab to add a purchase{{ openPf ? ' to ' + openPf.name : '' }}.</template>
+        <template v-else>No positions yet. Open a stock on the Watchlist tab and use its Portfolio tab to add a purchase{{ openPf ? ' to ' + openPf.name : '' }}.</template>
       </div>
       <div class="notice" v-else-if="!isPortfolioList && tickers.length === 0">
         This watchlist is empty — search above to add stocks.
@@ -3492,7 +3440,7 @@ export default {
       <!-- Watchlist as accordions — expand a ticker to see its SEC filings; -->
       <!-- drag a card by its handle to reorder (saved to settings). -->
       <!-- Portfolio page: holdings as one collapsible card — header row, then a
-           row per stock (on Markets → Stocks this wrapper adds nothing) -->
+           row per stock (on the Watchlist this wrapper adds nothing) -->
       <div :class="{ 'holdings-card': portfolioOnly && tickers.length, collapsed: portfolioOnly && !holdingsOpen }" v-show="onPositions">
       <button type="button" class="holdings-toggle" v-if="portfolioOnly && tickers.length"
               :aria-expanded="holdingsOpen" aria-controls="portfolio-holdings" @click="holdingsOpen = !holdingsOpen">
@@ -4456,6 +4404,11 @@ ${OPTION_FORM}
           </li>
         </ul>
       </div>
+
+      <!-- Account → Watchlist: this component in its watchlist mode (lists, Top movers, stock cards) -->
+      <Stocks v-if="portfolioOnly && pfTab === 'watchlist'" :config="config" :user="user"
+              @set-tickers="$emit('set-tickers', $event)" @set-position="$emit('set-position', $event)"
+              @set-portfolios="$emit('set-portfolios', $event)" @go-account="$emit('go-account')" @go-notes="$emit('go-notes')" />
 
       <!-- Account → Transactions: the trade history -->
       <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :portfolios="portfolios" :account-cash="accountCash" :transfers="config.transfers ?? []"

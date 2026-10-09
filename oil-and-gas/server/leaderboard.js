@@ -20,7 +20,7 @@
  * Cached for 5 minutes per period; cleared when any settings are saved.
  */
 const db = require('./db');
-const { dispatch, requireUser, sendJson, HttpError } = require('./auth');
+const { dispatch, currentUserId, sendJson, HttpError } = require('./auth');
 
 const PERIODS = {
   today: { label: 'Today', days: 'prev' },
@@ -206,7 +206,7 @@ async function handleLeaderboardApi(req, res, reqUrl) {
     return;
   }
   await dispatch(req, res, reqUrl, async () => {
-    const me = requireUser(req);
+    const me = currentUserId(req); // public — signed out, nothing is yours
     const periodId = reqUrl.searchParams.get('period') || 'all';
     if (!PERIODS[periodId]) throw new HttpError(400, `period must be one of: ${Object.keys(PERIODS).join(', ')}`);
     const board = await getBoard(periodId);

@@ -219,7 +219,7 @@ export default {
       </template>
 
       <div class="notice" v-else-if="notesStore.loaded && !notesStore.notes.length && !creating">
-        No notes yet. Write one with <strong>＋ New note</strong>, or open a stock on Markets → Stocks, go to its
+        No notes yet. Write one with <strong>＋ New note</strong>, or open a stock in My Account → Watchlist, go to its
         <strong>News</strong> tab, and use <strong>Save to notes</strong> on an article to keep it here with labels and your note.
       </div>
 

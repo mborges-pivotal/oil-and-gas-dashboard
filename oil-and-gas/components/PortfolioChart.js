@@ -9,7 +9,8 @@ import { formatPct, formatDate } from '../utils/formatters.js';
  * funds held then, rebuilt from their trades and daily closes (Yahoo). The
  * range buttons pick the span shown; 1D uses today's 5-minute prices.
  * Positions entered as totals (no trades) count as held throughout; cash
- * holdings and option contracts aren't charted.
+ * holdings and option contracts aren't charted. The range picked is
+ * remembered per browser, per `storageKey` (Summary and Portfolios each keep their own).
  */
 const RANGES = [
   { id: '1D',  label: '1D' },
@@ -37,9 +38,14 @@ export default {
     isCash: { type: Function, default: () => false },
     embedded: Boolean, // inside PortfolioOverview's card: no card of its own
     title: { type: String, default: 'All-time gain' },
+    storageKey: { type: String, default: 'oilgas_pf_chart_range' },
   },
   setup(props) {
-    const range = ref('ALL');
+    const range = ref((() => {
+      try { const v = localStorage.getItem(props.storageKey); if (RANGES.some(r => r.id === v)) return v; } catch { /* none saved */ }
+      return 'ALL';
+    })());
+    watch(range, v => { try { localStorage.setItem(props.storageKey, v); } catch { /* per-browser only */ } });
     const histories = ref({});   // symbol → { dates, close }
     const loading = ref(false);
     const error = ref(null);

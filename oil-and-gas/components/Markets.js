@@ -1,42 +1,51 @@
 const { ref, reactive, computed, watch, nextTick } = Vue;
 import EconomicIndicators from './EconomicIndicators.js';
 import OilGasMarkets from './OilGasMarkets.js';
-import Stocks from './Stocks.js';
+import MarketIndexes from './MarketIndexes.js';
 import News from './News.js';
 
-// `short` is shown on phones so all five sub-tabs fit without scrolling.
-const SECTIONS = [
-  { id: 'stocks', label: 'Stocks',              short: 'Stocks' },
-  { id: 'news',   label: 'News',                short: 'News' },
-  { id: 'econ',   label: 'Economic Indicators', short: 'Economy' },
-  { id: 'oil',    label: 'Oil Price Indexes',   short: 'Oil' },
-  { id: 'gas',    label: 'Retail Gas Prices',   short: 'Gas' },
+// `short` is shown on phones so all the sub-tabs fit without scrolling.
+// Shown in the app's subheader (app.js), after My Account.
+export const SECTIONS = [
+  { id: 'markets', label: 'Markets', short: 'Markets' },
+  { id: 'econ',    label: 'Economy', short: 'Economy' },
+  { id: 'energy',  label: 'Energy',  short: 'Energy' },
 ];
+// Energy's own tabs (remembered per browser).
+const ENERGY_TABS = [
+  { id: 'oil', label: 'Oil Price Indexes', short: 'Oil prices' },
+  { id: 'gas', label: 'Retail Gas Prices', short: 'Gas prices' },
+];
+const ENERGY_KEY = 'oilgas_energy_tab';
 
 /**
- * Markets tab — Stocks, News, Economic Indicators and Oil & Gas Markets under one
- * sub-tab bar (on touch screens, swipe the content left/right to switch). Oil and Gas share a single OilGasMarkets instance (it fetches
- * both on mount), so switching between those two doesn't refetch.
+ * Markets (the home page) — Markets (the major indexes, with News under them), Economy and Energy;
+ * watchlists are in My Account → Watchlist. The sub-tabs live in the app's
+ * frozen subheader (app.js), which owns the open section (v-model:section) and
+ * shows the last-updated time this reports (updated-time); on touch screens,
+ * swipe the content left/right to switch. Energy has its own tabs — Oil Price
+ * Indexes · Retail Gas Prices — sharing a single OilGasMarkets instance (it
+ * fetches both on mount), so switching between them doesn't refetch.
  */
 export default {
   name: 'Markets',
-  components: { EconomicIndicators, OilGasMarkets, Stocks, News },
-  props: ['config', 'user'],
-  emits: ['set-tickers', 'set-position', 'set-portfolios', 'go-account', 'go-notes'],
-  setup() {
-    const activeSection = ref('stocks'); // the first sub-tab
-    // Last refresh time reported by each child, shown in the header row.
-    const updated = reactive({ econ: null, oilgas: null, stocks: null, news: null });
-    const lastUpdated = computed(() => {
-      const s = activeSection.value;
-      return s === 'oil' || s === 'gas' ? updated.oilgas : updated[s];
+  components: { EconomicIndicators, OilGasMarkets, MarketIndexes, News },
+  props: { config: Object, user: Object, section: { type: String, default: 'markets' } },
+  emits: ['update:section', 'updated-time'],
+  setup(props, { emit }) {
+    const activeSection = computed({
+      get: () => (SECTIONS.some(s => s.id === props.section) ? props.section : 'markets'),
+      set: id => emit('update:section', id),
     });
-    // On a phone the sub-tab row scrolls sideways — keep the active one visible.
-    const subtabBar = ref(null);
-    watch(activeSection, () => nextTick(() => {
-      subtabBar.value?.querySelector('.subtab-btn.active')
-        ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    }));
+    // Last refresh time reported by each child, shown in the header row.
+    const updated = reactive({ econ: null, energy: null, markets: null });
+    const lastUpdated = computed(() => updated[activeSection.value]);
+    const energyTab = ref((() => {
+      try { const v = localStorage.getItem(ENERGY_KEY); if (ENERGY_TABS.some(t => t.id === v)) return v; } catch { /* none saved */ }
+      return 'oil';
+    })());
+    watch(energyTab, v => { try { localStorage.setItem(ENERGY_KEY, v); } catch { /* per-browser only */ } });
+    watch(lastUpdated, t => emit('updated-time', t), { immediate: true });
 
     // ── Swipe left/right on the content to change sub-tab (touch screens) ──
     // Touch events rather than pointer events: the page keeps its normal
@@ -88,51 +97,41 @@ export default {
       if (!next) return;
       slideFrom.value = dx < 0 ? 'right' : 'left';
       activeSection.value = next.id;
-      // If the sub-tab row has scrolled away, bring it back so the new
-      // section is seen from its top.
+      // Scrolled down: bring the new section's top up to just under the
+      // (frozen) subheader so it's seen from the start.
       nextTick(() => {
-        const bar = subtabBar.value;
-        const header = document.querySelector('.app-header');
-        if (!bar) return;
-        const top = bar.getBoundingClientRect().top - (header?.offsetHeight ?? 0) - 8;
+        const sub = document.querySelector('.app-subheader');
+        const content = document.querySelector('.markets-content');
+        if (!sub || !content) return;
+        const top = content.getBoundingClientRect().top - sub.getBoundingClientRect().bottom - 12;
         if (top < 0) window.scrollBy({ top, behavior: 'instant' });
       });
     }
 
     return {
-      SECTIONS, activeSection, updated, lastUpdated, subtabBar,
+      SECTIONS, ENERGY_TABS, energyTab, activeSection, updated, lastUpdated,
       slideFrom, onTouchStart, onTouchEnd,
     };
   },
   template: `
     <div>
-      <div class="flex-between mb-16">
-        <div class="section-header" style="margin-bottom:0">Markets</div>
-        <div class="text-muted text-sm" v-if="lastUpdated">Updated {{ lastUpdated }}</div>
-      </div>
-
-      <div class="subtab-bar subtab-bar-fit" ref="subtabBar">
-        <button
-          v-for="s in SECTIONS" :key="s.id"
-          class="subtab-btn" :class="{ active: activeSection === s.id }"
-          :aria-label="s.label" :title="s.label"
-          @click="activeSection = s.id"
-        ><span class="label-full">{{ s.label }}</span><span class="label-short" aria-hidden="true">{{ s.short }}</span></button>
-      </div>
-
       <div class="markets-content" :class="slideFrom && 'slide-from-' + slideFrom"
            @touchstart.passive="onTouchStart" @touchend.passive="onTouchEnd"
            @animationend.self="slideFrom = ''">
         <EconomicIndicators v-if="activeSection === 'econ'" :config="config"
           @updated="updated.econ = $event" />
-        <Stocks v-else-if="activeSection === 'stocks'" :config="config" :user="user"
-          @updated="updated.stocks = $event"
-          @set-tickers="$emit('set-tickers', $event)"
-          @set-position="$emit('set-position', $event)" @set-portfolios="$emit('set-portfolios', $event)"
-          @go-account="$emit('go-account')" @go-notes="$emit('go-notes')" />
-        <News v-else-if="activeSection === 'news'" :config="config" embedded @updated="updated.news = $event" />
-        <OilGasMarkets v-else :config="config" :section="activeSection"
-          @updated="updated.oilgas = $event" />
+        <template v-else-if="activeSection === 'markets'">
+          <MarketIndexes :config="config" @updated="updated.markets = $event" />
+          <News :config="config" embedded />
+        </template>
+        <template v-else>
+          <div class="subtab-bar energy-tabs" role="tablist" aria-label="Energy">
+            <button v-for="t in ENERGY_TABS" :key="t.id" type="button" role="tab" class="subtab-btn"
+                    :class="{ active: energyTab === t.id }" :aria-selected="energyTab === t.id" :aria-label="t.label"
+                    @click="energyTab = t.id"><span class="label-full">{{ t.label }}</span><span class="label-short" aria-hidden="true">{{ t.short }}</span></button>
+          </div>
+          <OilGasMarkets :config="config" :section="energyTab" @updated="updated.energy = $event" />
+        </template>
       </div>
     </div>
   `,

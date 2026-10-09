@@ -12,6 +12,7 @@
  *  - Forward is a link (copied in the browser) — nothing is sent to anyone.
  *
  *   GET    /api/portfolios/public?q=           public portfolios (Discover)
+ *   GET    /api/portfolios/:id/profile         a public portfolio's profile — no sign-in needed (Leaderboard)
  *   POST   /api/portfolios/:id/follow          follow   DELETE … unfollow
  *   POST   /api/posts                          { portfolioId, trades: [{ action, symbol }], message }
  *   GET    /api/posts/:id                      one update (a forwarded link)
@@ -24,7 +25,7 @@
  *   DELETE /api/replies/:id                    (the reply's author or the post's author)
  */
 const db = require('./db');
-const { dispatch, requireUser, readJsonBody, sendJson, HttpError } = require('./auth');
+const { dispatch, requireUser, currentUserId, readJsonBody, sendJson, HttpError } = require('./auth');
 
 const sql = () => db.raw();
 const MAX_MESSAGE = 500;
@@ -127,6 +128,48 @@ async function discover(req, res, reqUrl) {
     .sort((a, b) => (b.returnPct ?? -Infinity) - (a.returnPct ?? -Infinity) || a.name.localeCompare(b.name))
     .slice(0, 50);
   sendJson(res, 200, { portfolios: rows });
+}
+
+/**
+ * A public portfolio's profile: its holdings and trades **scaled so the cost
+ * of what's held is 100** — enough for percentages (weights, sectors, the
+ * all-time gain chart, movers) but no dollar amounts or share counts. Option
+ * contracts and closed positions are left out; trades carry only type, date,
+ * (scaled) quantity and price.
+ */
+async function profile(req, res, pid) {
+  const me = currentUserId(req);
+  const meta = portfolioIndex().get(pid);
+  if (!meta || !meta.public) throw new HttpError(404, 'Portfolio not found');
+  const pf = (db.getProfile(meta.ownerId)?.settings?.portfolios ?? []).find(p => p?.id === pid);
+  if (!pf) throw new HttpError(404, 'Portfolio not found');
+  const open = Object.entries(pf.portfolio ?? {}).filter(([, p]) => Number(p?.quantity) > 0);
+  const cost = open.reduce((s, [, p]) => s + Number(p.quantity) * (Number(p.avgCost) || 0), 0);
+  const f = cost > 0 ? 100 / cost : 0;
+  const KEEP = new Set(['buy', 'sell', 'transfer-in', 'transfer-out']);
+  const positions = {};
+  for (const [sym, p] of open) {
+    positions[sym] = {
+      quantity: Number(p.quantity) * f,
+      avgCost: Number(p.avgCost) || 0,
+      ...(p.category ? { category: p.category } : {}),
+      transactions: (p.transactions ?? []).filter(t => KEEP.has(t?.type) && t.date)
+        .map(t => ({ type: t.type, date: t.date, quantity: Number(t.quantity) * f, price: Number(t.price) || 0 })),
+    };
+  }
+  let returnPct = null;
+  try {
+    const board = await require('./leaderboard').getBoard('all');
+    returnPct = board.rows.find(r => r.portfolioId === pid)?.returnPct ?? null;
+  } catch { /* returns unavailable */ }
+  const followers = sql().prepare('SELECT COUNT(*) AS n FROM portfolio_follows WHERE portfolio_id = ?').get(pid).n;
+  sendJson(res, 200, {
+    portfolio: {
+      id: pid, name: meta.name, image: meta.image, owner: ownerName(meta.ownerId), returnPct, followers,
+      mine: meta.ownerId === me, following: !!(me && followRow(me, pid)), signedIn: !!me,
+    },
+    positions,
+  });
 }
 
 function follow(req, res, pid, on) {
@@ -279,6 +322,7 @@ async function handleSocialApi(req, res, reqUrl) {
   let m;
   const run = h => dispatch(req, res, reqUrl, h);
   if (path === '/api/portfolios/public' && M === 'GET') return run((rq, rs) => discover(rq, rs, reqUrl));
+  if ((m = path.match(/^\/api\/portfolios\/([a-z0-9-]{2,40})\/profile$/)) && M === 'GET') return run((rq, rs) => profile(rq, rs, m[1]));
   if ((m = path.match(/^\/api\/portfolios\/([a-z0-9-]{2,40})\/follow$/)) && (M === 'POST' || M === 'DELETE')) return run((rq, rs) => follow(rq, rs, m[1], M === 'POST'));
   if (path === '/api/posts' && M === 'POST') return run(createPost);
   if ((m = path.match(/^\/api\/posts\/(\d+)$/))) {
@@ -297,5 +341,5 @@ async function handleSocialApi(req, res, reqUrl) {
   sendJson(res, 404, { error: 'Not found' });
 }
 
-const SOCIAL_PATH = /^\/api\/(posts|replies|feed)(\/|$)|^\/api\/portfolios\/(public$|[a-z0-9-]{2,40}\/follow$)/;
+const SOCIAL_PATH = /^\/api\/(posts|replies|feed)(\/|$)|^\/api\/portfolios\/(public$|[a-z0-9-]{2,40}\/(follow|profile)$)/;
 module.exports = { handleSocialApi, clearSocialCache, clearNames, SOCIAL_PATH };

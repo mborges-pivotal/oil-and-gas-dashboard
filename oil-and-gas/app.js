@@ -6,10 +6,10 @@ import { THEME_OPTIONS, applyTheme, normalizeTheme } from './utils/theme.js';
 import { OPEN_ARTICLES_IN_DEFAULT } from './utils/articleViewer.js';
 
 // Lazy-loaded components — imported as strings for Vue CDN defineAsyncComponent pattern
-import MarketsComponent from './components/Markets.js';
+import MarketsComponent, { SECTIONS as MARKET_SECTIONS } from './components/Markets.js';
 import StocksComponent from './components/Stocks.js';
-import InboxComponent from './components/Inbox.js';
 import Leaderboard from './components/Leaderboard.js';
+import InboxComponent from './components/Inbox.js';
 import { loadNotes, clearNotes } from './utils/notesStore.js';
 import { unreadTotal, defaultInboxSection, clearInbox, onMarkRead, refreshActivity } from './utils/inboxStore.js';
 import { loadAlerts, clearAlerts, checkNow, persistAlertsRead } from './utils/alertsStore.js';
@@ -17,7 +17,7 @@ import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
 import UserMenu from './components/UserMenu.js';
 
-const { createApp, ref, reactive, computed, provide, onMounted, watch } = Vue;
+const { createApp, ref, reactive, computed, provide, onMounted, watch, nextTick } = Vue;
 
 // ── Settings Panel component ────────────────────────────────────────────────
 const SettingsPanel = {
@@ -304,7 +304,7 @@ const SettingsPanel = {
             popup offers to open the article in a new tab instead. Cmd/Ctrl-click always opens a new tab.
           </p>
           <div class="settings-row" style="margin-top:10px">
-            <label style="display:inline;margin:0;margin-right:8px">Economic Indicators news cards: show articles from the last</label>
+            <label style="display:inline;margin:0;margin-right:8px">Economy news cards: show articles from the last</label>
             <input v-model.number="local.news.economicNewsDays" type="number" min="1" max="90" style="width:60px" />
             <span class="text-muted text-sm">days</span>
           </div>
@@ -320,8 +320,8 @@ const App = {
   components: {
     Markets: MarketsComponent,
     Stocks: StocksComponent,
-    Inbox: InboxComponent,
     Leaderboard,
+    Inbox: InboxComponent,
     Account: AccountComponent,
     ArticleViewer,
     SettingsPanel,
@@ -340,24 +340,31 @@ const App = {
     // pick up the reset values instead of showing stale form state.
     const settingsKey = ref(0);
 
-    // Content tabs only — Settings and Sign In / Profile are pages reached
-    // from the header's account menu (UserMenu).
+    // Content tabs only — Markets is the home page (the logo goes there), and
+    // Settings and Sign In / Profile are pages reached from the header's account menu (UserMenu).
     // Account (your portfolios) appears when signed in — positions need an
     // account, and that's where portfolios are created.
     const hasPositions = computed(() => !!user.value);
     const tabs = computed(() => [
-      { id: 'markets',   label: 'Markets' },
-      ...(hasPositions.value ? [{ id: 'portfolio', label: 'Account' }] : []),
-      // Inbox (signed in): Notes · Alerts · Activity (messages), badged with unread alerts + messages.
+      // Inbox (signed in; next to the profile): Notes · Alerts · Activity, badged with unread alerts + activity.
       ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
-      // Leaderboard (signed in): public portfolios from every account, ranked by return.
-      ...(user.value ? [{ id: 'leaderboard', label: 'Leaderboard', short: '🏆' }] : []), // phones: just the trophy
     ]);
 
-    // Inbox sub-tab. Opening Inbox lands on unread alerts, then unread
-    // messages, else Notes; links from a saved news item go to Notes.
+    // Inbox (header, next to the profile): Notes · Alerts · Activity. Opening it
+    // lands on unread alerts, then new activity, else Notes; links (a saved
+    // news item, a forwarded update…) open it on a given section instead.
     const inboxSection = ref('notes');
-    const accountStartTab = ref(null); // Account sub-tab to open on (from the Leaderboard)
+    const accountStartTab = ref(null); // Account sub-tab to open on (links from other pages)
+    // Open My Account on one of its tabs (even if it's already showing another).
+    function goAccountTab(tab) {
+      accountStartTab.value = null;
+      activeTab.value = 'portfolio';
+      nextTick(() => { accountStartTab.value = tab; });
+    }
+    function openInbox(section) {
+      inboxSection.value = section;
+      activeTab.value = 'inbox';
+    }
     // Social: a forwarded update (#post=<id>) on top of Inbox → Activity; a
     // forwarded portfolio (#portfolio=<id>) searched in Account → Portfolios → Discover;
     // Inbox → Activity → Share update opens Account → Transactions in share mode.
@@ -366,34 +373,82 @@ const App = {
     const startShare = ref(false);
     function openActivity(tab) {
       if (tab) try { localStorage.setItem('oilgas_activity_tab', tab); } catch { /* per-browser only */ }
-      inboxSection.value = 'messages';
-      activeTab.value = 'inbox';
+      openInbox('messages');
     }
     function openDiscover(q = null) {
       discoverQuery.value = q;
-      accountStartTab.value = 'portfolios';
-      activeTab.value = 'portfolio';
+      goAccountTab('portfolios');
     }
     function openShare() {
       startShare.value = true;
-      accountStartTab.value = 'activity';
-      activeTab.value = 'portfolio';
+      goAccountTab('activity');
       setTimeout(() => { startShare.value = false; }); // once: later visits to Transactions open normally
     }
-    // Links need an account: handled now if signed in, else right after signing in.
+    // A forwarded portfolio opens its public profile (no account needed); an
+    // update needs one — handled now if signed in, else right after signing in.
     function openLinkFromHash() {
       const m = /^#(post|portfolio)=([A-Za-z0-9-]{1,40})$/.exec(location.hash);
-      if (!m || !user.value) return;
+      if (!m || (m[1] === 'post' && !user.value)) return;
       history.replaceState(null, '', location.pathname + location.search);
       if (m[1] === 'post') {
         focusPost.value = Number(m[2]) || null;
         openActivity();
       } else {
-        openDiscover(m[2]);
+        openProfile(m[2]);
       }
+    }
+    // Leaderboard (open to everyone): the list, or one portfolio's profile.
+    const leaderboardProfile = ref(null);
+    function openProfile(id) {
+      leaderboardProfile.value = id;
+      activeTab.value = 'leaderboard';
+      window.scrollTo({ top: 0 });
+    }
+    function openSignIn() {
+      accountSection.value = 'profile';
+      activeTab.value = 'account';
     }
     window.addEventListener('hashchange', openLinkFromHash);
 
+    // The subheader (frozen under the header, on every page): My Account,
+    // then Markets' sections. My Account opens Account signed in, else the sign-in page.
+    const marketsSection = ref('markets');
+    const marketsUpdated = ref(null); // Markets' last refresh time, shown in the subheader
+    const subTabs = computed(() => [
+      { id: 'my-account', label: 'My Account', short: 'Account' },
+      ...MARKET_SECTIONS,
+      { id: 'leaderboard', label: 'Leaderboard', short: '🏆' }, // phones: just the trophy
+    ]);
+    function selectSubTab(id) {
+      if (id === 'leaderboard') {
+        leaderboardProfile.value = null; // the list
+        selectTab('leaderboard');
+        return;
+      }
+      if (id === 'my-account') {
+        if (user.value) selectTab('portfolio');
+        else { accountSection.value = 'profile'; selectTab('account'); }
+        return;
+      }
+      marketsSection.value = id;
+      if (activeTab.value !== 'markets') selectTab('markets');
+    }
+    const subTabActive = id => (id === 'my-account'
+      ? activeTab.value === 'portfolio' || (!user.value && activeTab.value === 'account')
+      : id === 'leaderboard' ? activeTab.value === 'leaderboard'
+      : activeTab.value === 'markets' && marketsSection.value === id);
+    // On a phone the row can scroll sideways — keep the active one visible.
+    const subtabBar = ref(null);
+    watch([activeTab, marketsSection], () => nextTick(() => {
+      subtabBar.value?.querySelector('.subtab-btn.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }));
+
+    // The logo (icon + name): back to the home page, Markets → Markets.
+    function goHome() {
+      marketsSection.value = 'markets';
+      selectTab('markets');
+      window.scrollTo({ top: 0 });
+    }
     function selectTab(id) {
       accountStartTab.value = null; // Account opens on its last-used sub-tab
       discoverQuery.value = null;
@@ -414,8 +469,7 @@ const App = {
     }
 
     function openNotes() {
-      inboxSection.value = 'notes';
-      activeTab.value = 'inbox';
+      openInbox('notes');
     }
     // Notes and alerts are per account (DB): load on sign-in, drop on sign-out.
     // Alerts are evaluated by the server whenever quotes refresh — on load
@@ -441,13 +495,14 @@ const App = {
         clearAlerts();
         clearInbox();
         if (activeTab.value === 'inbox') activeTab.value = 'markets';
+        openLinkFromHash(); // a forwarded portfolio opens signed out too (an update waits for sign-in)
       }
     }, { immediate: true });
     // A changed refresh interval (Settings) re-times the checks.
     watch(() => config.value?.ui?.refreshIntervalSeconds, () => { if (user.value) startAlertChecks(); });
     // Signed out while on Account.
     watch(hasPositions, has => {
-      if (!has && (activeTab.value === 'portfolio' || activeTab.value === 'leaderboard')) activeTab.value = 'markets';
+      if (!has && activeTab.value === 'portfolio') activeTab.value = 'markets';
     });
 
     function showNotice(message) {
@@ -533,6 +588,8 @@ const App = {
       } catch (err) {
         saveError.value = `Signed in, but couldn't load your profile settings: ${err.message}`;
       }
+      // From the sign-in page, on to My Account (not the Profile page).
+      if (activeTab.value === 'account') selectTab('portfolio');
     }
 
     async function onSignedOut() {
@@ -570,13 +627,19 @@ const App = {
 
     // Header light/dark/system switch
     const themePreference = computed(() => normalizeTheme(config.value?.ui?.theme));
+    // The theme button: System → Dark → Light → System…
+    const THEME_CYCLE = ['system', 'dark', 'light'];
+    const themeOf = v => THEME_OPTIONS.find(o => o.value === v) ?? THEME_OPTIONS[0];
+    const themeNow = computed(() => themeOf(themePreference.value));
+    const themeNext = computed(() => themeOf(THEME_CYCLE[(THEME_CYCLE.indexOf(themePreference.value) + 1) % THEME_CYCLE.length]));
+    function cycleTheme() { setTheme(themeNext.value.value); }
     function setTheme(theme) {
       if (theme === themePreference.value) return;
       applyTheme(theme);
       persistConfig({ ...config.value, ui: { ...config.value.ui, theme } }, 'Theme');
     }
 
-    // Default stock watchlist changed on Markets → Stocks (reordered, or a
+    // Default stock watchlist changed on My Account → Watchlist (reordered, or a
     // stock added via search / removed in Edit mode). Additional watchlists
     // are saved to the DB by the Stocks component itself.
     function onSetTickers(tickers) {
@@ -658,8 +721,7 @@ const App = {
 
     // Leaderboard → "make one public": Account opened on its Portfolios sub-tab.
     function openAccountPortfolios() {
-      accountStartTab.value = 'portfolios';
-      activeTab.value = 'portfolio';
+      goAccountTab('portfolios');
     }
     const publicPortfolios = computed(() => (config.value?.portfolios ?? []).filter(p => p.visibility === 'public').length);
 
@@ -674,20 +736,21 @@ const App = {
 
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
-      inboxSection, selectTab, openNotes, focusPost, discoverQuery, startShare, openActivity, openDiscover, openShare, accountSection, openLabels, openAlertsManager,
+      inboxSection, selectTab, goHome, openNotes, marketsSection, marketsUpdated, subTabs, selectSubTab, subTabActive, subtabBar, focusPost, discoverQuery, startShare, openActivity, openDiscover, openShare, accountSection, openLabels, openAlertsManager,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
-      themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios,
-      accountStartTab, openAccountPortfolios, publicPortfolios, onSetAccountCash, openBankAccounts,
+      themeOptions: THEME_OPTIONS, themePreference, setTheme, themeNow, themeNext, cycleTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios,
+      accountStartTab, openAccountPortfolios, leaderboardProfile, openProfile, openSignIn, publicPortfolios, onSetAccountCash, openBankAccounts,
     };
   },
   template: `
     <div id="app">
       <header class="app-header">
-        <div class="logo" aria-label="Oil &amp; Gas Dashboard">
+        <a class="logo" href="./" aria-label="Oil &amp; Gas Dashboard — home (Markets)" title="Home — Markets"
+           :aria-current="activeTab === 'markets' ? 'page' : null" @click.prevent="goHome">
           <img class="logo-icon" src="./favicon.svg" alt="" width="24" height="24" />
           <span class="logo-text" aria-hidden="true">Oil &amp; Gas <span class="logo-accent">Dashboard</span></span>
-        </div>
+        </a>
         <nav class="tab-bar">
           <button
             v-for="tab in tabs"
@@ -698,30 +761,35 @@ const App = {
             @click="selectTab(tab.id)"
           ><span class="label-full">{{ tab.label }}</span><span class="label-short" aria-hidden="true">{{ tab.short ?? tab.label }}</span><span class="count-badge" v-if="tab.badge" aria-hidden="true">{{ tab.badge > 99 ? '99+' : tab.badge }}</span></button>
         </nav>
-        <div class="theme-switch header-theme-switch" role="group" aria-label="Color theme">
-          <button
-            v-for="opt in themeOptions"
-            :key="opt.value"
-            type="button"
-            :aria-pressed="themePreference === opt.value"
-            :title="opt.label + ' theme'"
-            :disabled="!configLoaded"
-            @click="setTheme(opt.value)"
-          >{{ opt.icon }}</button>
-        </div>
         <UserMenu
           :user="user"
           :active-tab="activeTab"
-          :theme-options="themeOptions"
-          :theme-preference="themePreference"
-          :theme-disabled="!configLoaded"
           @navigate="accountSection = 'profile'; activeTab = $event"
-          @set-theme="setTheme"
           @sign-out="onMenuSignOut"
         />
       </header>
 
+      <!-- Subheader: My Account + Markets' sections, frozen under the header on every page -->
+      <div class="app-subheader">
+        <nav class="subtab-bar subtab-bar-fit" ref="subtabBar" aria-label="Sections">
+          <button v-for="s in subTabs" :key="s.id" type="button"
+                  class="subtab-btn" :class="{ active: subTabActive(s.id), 'subtab-account': s.id === 'my-account' }"
+                  :aria-label="s.badge ? s.label + ', ' + s.badge + ' unread in Inbox' : s.label" :title="s.label" :aria-current="subTabActive(s.id) ? 'page' : null"
+                  @click="selectSubTab(s.id)"
+          ><span class="label-full">{{ s.label }}</span><span class="label-short" aria-hidden="true">{{ s.short }}</span><span class="count-badge" v-if="s.badge" aria-hidden="true">{{ s.badge > 99 ? '99+' : s.badge }}</span></button>
+        </nav>
+        <div class="subheader-right">
+          <div class="text-muted text-sm subheader-updated" v-if="activeTab === 'markets' && marketsUpdated">Updated {{ marketsUpdated }}</div>
+          <!-- Theme: one button cycling System → Dark → Light -->
+          <button type="button" class="theme-toggle" :disabled="!configLoaded" @click="cycleTheme"
+                  :aria-label="'Theme: ' + themeNow.label + ' — switch to ' + themeNext.label" :title="'Theme: ' + themeNow.label + ' (click for ' + themeNext.label + ')'"
+          ><span aria-hidden="true">{{ themeNow.icon }}</span></button>
+        </div>
+      </div>
+
       <main class="tab-content">
+        <!-- Narrow screens: the tabs need the whole row, so Markets' time sits here (not frozen) -->
+        <div class="text-muted text-sm subheader-updated-below" v-if="activeTab === 'markets' && marketsUpdated">Updated {{ marketsUpdated }}</div>
         <template v-if="!configLoaded">
           <div class="loading-text">Loading…</div>
         </template>
@@ -730,11 +798,12 @@ const App = {
           <div v-if="saveError" class="notice error" style="margin-bottom:16px">✗ {{ saveError }}</div>
 
           <Markets       v-if="activeTab === 'markets'"   :config="config" :user="user"
-            @set-tickers="onSetTickers" @set-position="onSetPosition" @set-portfolios="onSetPortfolios" @go-account="activeTab = 'account'"
-            @go-notes="openNotes" />
-          <Leaderboard   v-if="activeTab === 'leaderboard'" :public-count="publicPortfolios" @make-public="openAccountPortfolios" />
+            v-model:section="marketsSection" @updated-time="marketsUpdated = $event" />
+          <Leaderboard   v-if="activeTab === 'leaderboard'" :public-count="publicPortfolios" @make-public="openAccountPortfolios"
+            :signed-in="!!user" v-model:profile="leaderboardProfile" @sign-in="openSignIn"
+            :refresh-seconds="config.ui?.refreshIntervalSeconds ?? 60" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only :start-tab="accountStartTab"
-            :discover-query="discoverQuery" :start-share="startShare" @go-activity="openActivity"
+            :discover-query="discoverQuery" :start-share="startShare" @go-activity="openActivity" @set-tickers="onSetTickers"
             @set-position="onSetPosition" @move-position="onMovePosition" @set-portfolios="onSetPortfolios" @set-account-cash="onSetAccountCash"
             @go-bank-accounts="openBankAccounts" @go-notes="openNotes" />
           <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager"

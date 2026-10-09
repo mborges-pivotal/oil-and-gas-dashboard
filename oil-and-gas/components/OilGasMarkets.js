@@ -39,7 +39,7 @@ const HISTORY_MAX_WEEKS = 270; // ~5 years + buffer
 export default {
   name: 'OilGasMarkets',
   components: { DualLineChart, HistoryChart },
-  // `section` ('oil' | 'gas') is picked by the Markets tab's sub-tab bar.
+  // `section` ('oil' | 'gas') is picked by Markets → Energy's tabs.
   props: ['config', 'section'],
   emits: ['updated'],
   setup(props, { emit }) {
