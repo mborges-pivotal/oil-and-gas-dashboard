@@ -22,6 +22,7 @@ import AlertForm from './AlertForm.js';
 import TopMovers from './TopMovers.js';
 import PortfolioActivity from './PortfolioActivity.js';
 import PortfolioOverview from './PortfolioOverview.js';
+import DiscoverPortfolios from './DiscoverPortfolios.js';
 import { alertsStore, alertsFor, saveAlert, setAlertActive, removeAlert } from '../utils/alertsStore.js';
 import { describeAlert, alertPresets, alertStatus, optionAlertPresets, alertSubject } from '../utils/alerts.js';
 import { portfolioList, mergePortfolios, emptyPortfolio, summarizePortfolio, DEFAULT_PORTFOLIO_NAME } from '../utils/portfolios.js';
@@ -397,16 +398,22 @@ const TRANSFER_PICKER = `
 
 export default {
   name: 'Stocks',
-  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview, ImagePicker },
+  components: { HistoryChart, AllocationChart, NoteForm, AlertForm, TopMovers, PortfolioActivity, PortfolioOverview, ImagePicker, DiscoverPortfolios },
   // portfolioOnly: render as the top-level Portfolio page (app.js) — just
   // the stocks you hold a position in, with totals; no indexes or list picker.
   // startTab: the Account sub-tab to open on (else the last one used).
-  props: { config: Object, user: Object, portfolioOnly: Boolean, startTab: { type: String, default: null } },
+  // discoverQuery: a forwarded portfolio link's @id, searched in Portfolios → Discover.
+  // startShare: open Transactions in "Share update" mode (from Inbox → Activity).
+  props: {
+    config: Object, user: Object, portfolioOnly: Boolean, startTab: { type: String, default: null },
+    discoverQuery: { type: String, default: null }, startShare: Boolean,
+  },
   // set-tickers: new order/contents for the default watchlist (config.stocks.tickers)
   // set-position: { symbol, position: { quantity, avgCost, category?, transactions? } | null }
   //   or { updates: { SYMBOL: position | null } } to save several together — for config.portfolio
   // go-notes: open the Notes tab (from a news item already saved there)
-  emits: ['set-tickers', 'set-position', 'move-position', 'set-portfolios', 'set-account-cash', 'updated', 'go-account', 'go-notes', 'go-bank-accounts'],
+  // go-activity: open Inbox → Activity (tab: 'you' | 'following')
+  emits: ['set-tickers', 'set-position', 'move-position', 'set-portfolios', 'set-account-cash', 'updated', 'go-account', 'go-notes', 'go-bank-accounts', 'go-activity'],
   setup(props, { emit }) {
     const configTickers = computed(() => props.config.stocks?.tickers ?? []);
 
@@ -425,7 +432,7 @@ export default {
     );
     // ── Portfolios (config.portfolios — see utils/portfolios.js) ──
     // The Account page (portfolioOnly) has sub-tabs Summary · Portfolios ·
-    // Activity; under Portfolios, a card per portfolio, and an opened one
+    // Transactions; under Portfolios, a card per portfolio, and an opened one
     // shows its holdings, options and closed positions. On Markets, each
     // stock's Portfolio tab works in one portfolio at a time, chosen there.
     const portfolios = computed(() => portfolioList(props.config));
@@ -435,7 +442,7 @@ export default {
     const PORTFOLIO_TABS = [
       { id: 'summary',    label: 'Summary' },
       { id: 'portfolios', label: 'Portfolios' },
-      { id: 'activity',   label: 'Activity' },
+      { id: 'activity',   label: 'Transactions' }, // id kept: a remembered tab still opens it
     ];
     const PF_TAB_KEY = 'oilgas_portfolio_tab';
     const pfTab = ref((() => {
@@ -456,6 +463,8 @@ export default {
     // Holdings / Options / Closed positions (and their quotes) — inside an opened portfolio.
     const onPositions = computed(() => !props.portfolioOnly || !!openPf.value);
     watch(pfTab, () => { openPfId.value = null; });
+    // Sent to a sub-tab while Account is already open (a forwarded link, Inbox → Share update).
+    watch(() => props.startTab, t => { if (t && PORTFOLIO_TABS.some(x => x.id === t)) pfTab.value = t; });
 
     // Markets → a stock's Portfolio tab: which portfolio it's working in.
     // { id } or { id: null, newName } for "＋ New portfolio" (created on the first save).
@@ -2049,7 +2058,7 @@ export default {
     // cost ("Transfer in"); the source's average doesn't change. Nothing is
     // sold — no realized G/L, no cash. Option contracts on the stock can go
     // too; shares covering calls only move with those calls. Each move is
-    // logged in config.transfers (Account → Activity) and can be undone.
+    // logged in config.transfers (Account → Transactions) and can be undone.
     const moveForms = reactive({}); // ticker → { to, newName, shares, withOptions, error }
     const isTransfer = tx => tx.type === 'transfer-in' || tx.type === 'transfer-out';
     function startMove(ticker) {
@@ -3427,6 +3436,8 @@ export default {
           No portfolios yet. Create one here, or add a purchase from any stock's Portfolio tab on Markets → Stocks.
         </p>
       </section>
+      <DiscoverPortfolios v-if="portfolioOnly && pfTab === 'portfolios' && !openPf && user" :initial-query="discoverQuery ?? ''"
+                          @go-activity="$emit('go-activity', 'following')" />
 
       <!-- An opened portfolio: its header, the all-time gain chart, then what used to be Positions -->
       <template v-if="openPf">
@@ -4446,8 +4457,9 @@ ${OPTION_FORM}
         </ul>
       </div>
 
-      <!-- Portfolio → Activity: the trade history -->
-      <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :portfolios="portfolios" :account-cash="accountCash" :transfers="config.transfers ?? []" />
+      <!-- Account → Transactions: the trade history -->
+      <PortfolioActivity v-if="portfolioOnly && pfTab === 'activity'" :portfolios="portfolios" :account-cash="accountCash" :transfers="config.transfers ?? []"
+                         :start-share="startShare" @go-activity="$emit('go-activity', 'you')" />
 
       <!-- After a copy / move / remove in edit mode: what happened, with Undo -->
       <div class="wl-toast" v-if="transferToast" role="status">

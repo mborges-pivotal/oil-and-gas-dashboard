@@ -277,7 +277,10 @@ function me(req, res) {
 async function updateProfile(req, res) {
   const userId = requireUser(req);
   const body = await readJsonBody(req);
-  if ('displayName' in body) db.updateDisplayName(userId, validateDisplayName(body.displayName));
+  if ('displayName' in body) {
+    db.updateDisplayName(userId, validateDisplayName(body.displayName));
+    require('./social').clearNames();
+  }
   if ('settings' in body) {
     const settings = validateSettings(body.settings);
     // Portfolio IDs must be unique across accounts — fix any that aren't (the
@@ -285,6 +288,7 @@ async function updateProfile(req, res) {
     require('./portfolioIds').normalizeSettings(userId, settings);
     db.updateSettings(userId, settings);
     require('./leaderboard').clearLeaderboardCache(); // visibility or positions may have changed
+    require('./social').clearSocialCache();
   }
   sendJson(res, 200, { user: db.getProfile(userId) });
 }

@@ -138,6 +138,49 @@ db.exec(`
     updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Portfolio updates (Account → Transactions → Share update) and the
+  -- discussion around them (Inbox → Activity). trades: JSON snapshot of
+  -- [{ action: 'buy'|'sell', symbol }] — action and ticker only, never amounts.
+  -- Everything goes with the portfolio's ID (deleted portfolio) or the user.
+  CREATE TABLE IF NOT EXISTS posts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    portfolio_id TEXT NOT NULL REFERENCES portfolio_ids(id) ON DELETE CASCADE,
+    trades       TEXT NOT NULL,
+    message      TEXT NOT NULL DEFAULT '',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS posts_portfolio ON posts(portfolio_id, created_at);
+  CREATE INDEX IF NOT EXISTS posts_user ON posts(user_id, created_at);
+  CREATE TABLE IF NOT EXISTS post_likes (
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (post_id, user_id)
+  );
+  CREATE TABLE IF NOT EXISTS post_replies (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id    INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS post_replies_post ON post_replies(post_id, created_at);
+  -- Following a public portfolio: its updates posted after created_at reach the follower.
+  CREATE TABLE IF NOT EXISTS portfolio_follows (
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    portfolio_id TEXT NOT NULL REFERENCES portfolio_ids(id) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (user_id, portfolio_id)
+  );
+  -- When the user last looked at Inbox → Activity's tabs (unread counts).
+  CREATE TABLE IF NOT EXISTS feed_reads (
+    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tab       TEXT NOT NULL,
+    read_at   TEXT NOT NULL,
+    PRIMARY KEY (user_id, tab)
+  );
+
   -- External bank accounts (Profile → Bank accounts), the source of deposits
   -- into the account's cash. Only the last 4 digits of the number are kept.
   -- Nothing is verified yet: status is set by the user.
@@ -551,6 +594,7 @@ function toAlertEvent(row) {
 }
 
 module.exports = {
+  raw: () => db, // the connection, for server/social.js's own queries
   setPortfolioImage: (portfolioId, userId, dataUrl, newKey) => {
     stmts.upsertPortfolioImage.run(portfolioId, userId, dataUrl, newKey);
     const m = stmts.portfolioImageMeta.get(portfolioId);

@@ -59,6 +59,7 @@ const { handlePortfoliosApi } = require('./server/portfoliosApi');
 const { handleLeaderboardApi } = require('./server/leaderboard');
 const { handleAvatarApi, assignMissingAvatars } = require('./server/avatars');
 const { handlePortfolioImagesApi } = require('./server/portfolioImages');
+const { handleSocialApi, SOCIAL_PATH } = require('./server/social');
 // Avatars: everyone without one (accounts from before avatars) gets a random preset.
 const newAvatars = assignMissingAvatars();
 if (newAvatars) console.log(`Avatars: assigned ${newAvatars} random avatar(s)`);
@@ -246,6 +247,11 @@ const server = http.createServer((req, res) => {
 
   if (reqUrl.pathname === '/api/leaderboard') {
     handleLeaderboardApi(req, res, reqUrl);
+    return;
+  }
+
+  if (SOCIAL_PATH.test(reqUrl.pathname.replace(/\/+$/, ''))) {
+    handleSocialApi(req, res, reqUrl);
     return;
   }
 

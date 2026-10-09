@@ -177,6 +177,7 @@ async function buildBoard(periodId) {
       rank: r,
       movement: prev ? prev.rank - r : null, // + up, − down, null = new
       portfolio: e.pf.name,
+      portfolioId: e.pf.id, // its public @handle
       owner: display,
       initials: initialsOf(e.pf.name), // the portfolio's, shown when it has no picture
       // The portfolio's picture (Account → Portfolios → Edit) — its URL uses a random key, not an ID.
@@ -214,4 +215,4 @@ async function handleLeaderboardApi(req, res, reqUrl) {
   });
 }
 
-module.exports = { handleLeaderboardApi, clearLeaderboardCache, periodReturn, holdingsOf, PERIODS };
+module.exports = { handleLeaderboardApi, clearLeaderboardCache, getBoard, periodReturn, holdingsOf, PERIODS };

@@ -2181,3 +2181,86 @@ button.pf-card:hover { border-color: var(--accent); box-shadow: 0 2px 10px rgba(
 .note-actions .link-button { padding: 0; }
 .link-button.danger-link { color: var(--negative); }
 .stock-news-title { font-size: 14px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+
+/* ── Social: Share update (Transactions), Inbox → Activity feed, Discover ── */
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 32px);
+  background: var(--text); color: var(--bg); padding: 9px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+
+/* Transactions → Share update */
+.share-composer { margin-top: 12px; padding: 12px; border: 1px solid var(--accent); border-radius: var(--radius); background: var(--surface-2); display: flex; flex-direction: column; gap: 10px; }
+.share-composer textarea { width: 100%; resize: vertical; font: inherit; }
+.share-composer-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.share-composer-buttons { margin-left: auto; display: flex; gap: 8px; }
+.share-private { color: var(--warning); }
+.share-done { margin-top: 12px; }
+.activity-row.sharing { grid-template-columns: 22px 96px minmax(0, 1fr) 120px 110px; cursor: pointer; }
+.activity-row.sharing.unpickable { opacity: .45; cursor: default; }
+.activity-row.picked { background: var(--surface-2); box-shadow: inset 3px 0 0 var(--accent); }
+.share-check { margin: 0; width: 16px; height: 16px; }
+@media (max-width: 600px) {
+  .activity-row.sharing { grid-template-columns: 22px 1fr auto auto; }
+  .activity-row.sharing .activity-date { grid-column: 2 / -1; }
+  .activity-row.sharing .share-check { grid-row: span 2; }
+}
+
+/* Post header: BUY/SELL chips + tickers, then the @handle */
+.post-head { display: flex; flex-direction: column; gap: 6px; }
+.post-trades { display: flex; flex-wrap: wrap; gap: 6px 12px; }
+.post-trade { display: inline-flex; align-items: center; gap: 6px; }
+.post-action { font-size: 11px; font-weight: 800; letter-spacing: .04em; padding: 1px 7px; border-radius: 4px; line-height: 16px; }
+.post-action.buy { color: var(--positive); background: var(--positive-fill); }
+.post-action.sell { color: var(--negative); background: var(--negative-fill); }
+.post-ticker { font-weight: 800; font-size: 15px; }
+.post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.post-handle { color: var(--accent); font-weight: 700; background: color-mix(in srgb, var(--accent) 12%, transparent); padding: 0 6px; border-radius: 4px; white-space: nowrap; }
+.post-thumb { width: 24px; height: 24px; font-size: 10px; border-radius: 6px; margin: 0; }
+.post-time { margin-left: auto; white-space: nowrap; }
+.post-private { color: var(--warning); white-space: nowrap; }
+
+/* Inbox → Activity */
+.activity-feed-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-bottom: 12px; }
+.activity-feed-links { display: flex; align-items: center; gap: 12px; }
+.activity-feed .note-chip .count-badge { margin-left: 6px; }
+.post-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.post-card { padding: 14px; margin: 0; }
+.post-message { margin: 10px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
+.post-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.post-btn { background: transparent; border: 1px solid transparent; color: var(--text-muted); padding: 4px 8px; border-radius: 999px; font-size: 13px; font-variant-numeric: tabular-nums; }
+.post-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.post-btn:disabled { opacity: .55; cursor: default; }
+.post-btn.liked { color: var(--negative); }
+.post-delete { margin-left: auto; font-size: 13px; }
+.post-focus { margin-bottom: 14px; }
+.post-focus .post-card { border-color: var(--accent); }
+.post-focus-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.post-thread { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.reply-list { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.reply { display: flex; gap: 8px; align-items: flex-start; }
+.reply-body { min-width: 0; flex: 1; }
+.reply-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; margin-top: 2px; }
+.reply-delete { margin-left: 6px; font-size: 12px; }
+.post-owner-tag { font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--accent); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+.reply-form textarea { width: 100%; resize: vertical; font: inherit; }
+.reply-form-foot { display: flex; justify-content: flex-end; align-items: center; gap: 10px; margin-top: 6px; }
+
+/* Account → Portfolios → Discover */
+.discover { margin-top: 24px; }
+.discover-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; }
+.discover-title { margin: 0; font-size: 16px; }
+.discover-search { flex: 0 1 340px; min-width: 0; }
+.discover-note { margin: 6px 0 12px; }
+.discover-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.discover-list.stale { opacity: .6; }
+.discover-item { display: grid; grid-template-columns: 40px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; margin: 0; }
+.discover-item .pf-thumb { margin: 0; }
+.discover-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.discover-return { text-align: right; font-variant-numeric: tabular-nums; }
+.discover-return .pf-card-label { display: block; }
+.discover-actions { display: flex; align-items: center; gap: 6px; }
+.following-btn { color: var(--positive); border-color: var(--positive); background: transparent; }
+@media (max-width: 600px) {
+  .discover-search { flex-basis: 100%; }
+  .discover-item { grid-template-columns: 40px minmax(0, 1fr) auto; }
+  .discover-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .post-time { margin-left: 0; }
+}

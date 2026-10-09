@@ -12,7 +12,7 @@ import StocksComponent from './components/Stocks.js';
 import InboxComponent from './components/Inbox.js';
 import Leaderboard from './components/Leaderboard.js';
 import { loadNotes, clearNotes } from './utils/notesStore.js';
-import { unreadTotal, defaultInboxSection, clearInbox, onMarkRead } from './utils/inboxStore.js';
+import { unreadTotal, defaultInboxSection, clearInbox, onMarkRead, refreshActivity } from './utils/inboxStore.js';
 import { loadAlerts, clearAlerts, checkNow, persistAlertsRead } from './utils/alertsStore.js';
 import AccountComponent from './components/Account.js';
 import ArticleViewer from './components/ArticleViewer.js';
@@ -351,18 +351,56 @@ const App = {
       { id: 'markets',   label: 'Markets' },
       { id: 'news',      label: 'News' },
       ...(hasPositions.value ? [{ id: 'portfolio', label: 'Account' }] : []),
+      // Inbox (signed in): Notes · Alerts · Activity (messages), badged with unread alerts + messages.
+      ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
       // Leaderboard (signed in): public portfolios from every account, ranked by return.
       ...(user.value ? [{ id: 'leaderboard', label: 'Leaderboard', short: '🏆' }] : []), // phones: just the trophy
-      // Inbox (signed in): Notes · Alerts · Messages, badged with unread alerts + messages.
-      ...(user.value ? [{ id: 'inbox', label: 'Inbox', badge: unreadTotal() }] : []),
     ]);
 
     // Inbox sub-tab. Opening Inbox lands on unread alerts, then unread
     // messages, else Notes; links from a saved news item go to Notes.
     const inboxSection = ref('notes');
     const accountStartTab = ref(null); // Account sub-tab to open on (from the Leaderboard)
+    // Social: a forwarded update (#post=<id>) on top of Inbox → Activity; a
+    // forwarded portfolio (#portfolio=<id>) searched in Account → Portfolios → Discover;
+    // Inbox → Activity → Share update opens Account → Transactions in share mode.
+    const focusPost = ref(null);
+    const discoverQuery = ref(null);
+    const startShare = ref(false);
+    function openActivity(tab) {
+      if (tab) try { localStorage.setItem('oilgas_activity_tab', tab); } catch { /* per-browser only */ }
+      inboxSection.value = 'messages';
+      activeTab.value = 'inbox';
+    }
+    function openDiscover(q = null) {
+      discoverQuery.value = q;
+      accountStartTab.value = 'portfolios';
+      activeTab.value = 'portfolio';
+    }
+    function openShare() {
+      startShare.value = true;
+      accountStartTab.value = 'activity';
+      activeTab.value = 'portfolio';
+      setTimeout(() => { startShare.value = false; }); // once: later visits to Transactions open normally
+    }
+    // Links need an account: handled now if signed in, else right after signing in.
+    function openLinkFromHash() {
+      const m = /^#(post|portfolio)=([A-Za-z0-9-]{1,40})$/.exec(location.hash);
+      if (!m || !user.value) return;
+      history.replaceState(null, '', location.pathname + location.search);
+      if (m[1] === 'post') {
+        focusPost.value = Number(m[2]) || null;
+        openActivity();
+      } else {
+        openDiscover(m[2]);
+      }
+    }
+    window.addEventListener('hashchange', openLinkFromHash);
+
     function selectTab(id) {
       accountStartTab.value = null; // Account opens on its last-used sub-tab
+      discoverQuery.value = null;
+      focusPost.value = null;
       if (id === 'inbox' && activeTab.value !== 'inbox') inboxSection.value = defaultInboxSection();
       activeTab.value = id;
     }
@@ -390,7 +428,7 @@ const App = {
     function startAlertChecks() {
       clearInterval(alertTimer);
       const interval = Math.max(30, config.value?.ui?.refreshIntervalSeconds ?? 60) * 1000;
-      alertTimer = setInterval(checkNow, interval);
+      alertTimer = setInterval(() => { checkNow(); refreshActivity(); }, interval);
     }
     watch(() => user.value?.id ?? null, async id => {
       clearInterval(alertTimer);
@@ -398,7 +436,9 @@ const App = {
         loadNotes();
         await loadAlerts();
         checkNow();
+        refreshActivity();
         startAlertChecks();
+        openLinkFromHash();
       } else {
         clearNotes();
         clearAlerts();
@@ -593,7 +633,7 @@ const App = {
     }
 
     // A position moved between portfolios — every portfolio's change in one
-    // save, plus its entry in config.transfers (Account → Activity). Undo sends
+    // save, plus its entry in config.transfers (Account → Transactions). Undo sends
     // the "before" state with removeTransferId (and removePortfolioId when the
     // move had created that portfolio).
     function onMovePosition({ changes, transfer, removeTransferId, removePortfolioId }) {
@@ -637,7 +677,7 @@ const App = {
 
     return {
       config, user, configLoaded, activeTab, tabs, saveNotice, saveError, settingsKey,
-      inboxSection, selectTab, openNotes, accountSection, openLabels, openAlertsManager,
+      inboxSection, selectTab, openNotes, focusPost, discoverQuery, startShare, openActivity, openDiscover, openShare, accountSection, openLabels, openAlertsManager,
       onSaveConfig, onResetConfig, onExportConfig,
       onSignedIn, onSignedOut, onUserUpdated, onMenuSignOut,
       themeOptions: THEME_OPTIONS, themePreference, setTheme, onSetTickers, onSetPosition, onMovePosition, onSetPortfolios,
@@ -698,9 +738,11 @@ const App = {
           <News          v-if="activeTab === 'news'"      :config="config" />
           <Leaderboard   v-if="activeTab === 'leaderboard'" :public-count="publicPortfolios" @make-public="openAccountPortfolios" />
           <Stocks        v-if="activeTab === 'portfolio'" :config="config" :user="user" portfolio-only :start-tab="accountStartTab"
+            :discover-query="discoverQuery" :start-share="startShare" @go-activity="openActivity"
             @set-position="onSetPosition" @move-position="onMovePosition" @set-portfolios="onSetPortfolios" @set-account-cash="onSetAccountCash"
             @go-bank-accounts="openBankAccounts" @go-notes="openNotes" />
-          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager" />
+          <Inbox         v-if="activeTab === 'inbox'"     :config="config" v-model:section="inboxSection" @manage-labels="openLabels" @manage-alerts="openAlertsManager"
+            :focus-post="focusPost" @discover="openDiscover()" @share="openShare" @clear-focus="focusPost = null" />
 
           <SettingsPanel v-if="activeTab === 'settings'" :key="settingsKey" :config="config" :user="user"
             @save="onSaveConfig"

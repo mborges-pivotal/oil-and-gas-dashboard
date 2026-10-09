@@ -1,6 +1,7 @@
 const { ref, computed, watch } = Vue;
 import Notes from './Notes.js';
 import AlertComposer from './AlertComposer.js';
+import ActivityFeed from './ActivityFeed.js';
 import { inboxStore, unreadAlerts, unreadMessages, markRead, markAllRead } from '../utils/inboxStore.js';
 import { formatRelativeTime } from '../utils/formatters.js';
 import { ackAlertItems } from '../utils/alertsStore.js';
@@ -8,19 +9,19 @@ import { ackAlertItems } from '../utils/alertsStore.js';
 const SECTIONS = [
   { id: 'notes',    label: 'Notes' },
   { id: 'alerts',   label: 'Alerts' },
-  { id: 'messages', label: 'Messages' },
+  { id: 'messages', label: 'Activity' }, // portfolio updates (ActivityFeed) — id kept
 ];
 
 /**
- * Inbox tab (signed in): Notes · Alerts · Messages. The open sub-tab is
+ * Inbox tab (signed in): Notes · Alerts · Activity (portfolio updates: You / Following). The open sub-tab is
  * owned by app.js (`section` / update:section) so it can pick the default
  * — unread alerts, then messages, else Notes — each time Inbox opens.
  */
 export default {
   name: 'Inbox',
-  components: { Notes, AlertComposer },
-  props: { config: Object, section: { type: String, default: 'notes' } },
-  emits: ['update:section', 'manage-labels', 'manage-alerts'],
+  components: { Notes, AlertComposer, ActivityFeed },
+  props: { config: Object, section: { type: String, default: 'notes' }, focusPost: { type: [Number, String], default: null } },
+  emits: ['update:section', 'manage-labels', 'manage-alerts', 'discover', 'share', 'clear-focus'],
   setup() {
     const counts = computed(() => ({ notes: 0, alerts: unreadAlerts(), messages: unreadMessages() }));
     // Alerts: those still to deal with; acknowledged ones sit in a collapsible group below.
@@ -63,6 +64,8 @@ export default {
       </div>
 
       <Notes v-if="section === 'notes'" :config="config" embedded @manage-labels="$emit('manage-labels')" />
+      <ActivityFeed v-else-if="section === 'messages'" :focus-post="focusPost"
+                    @discover="$emit('discover')" @share="$emit('share')" @clear-focus="$emit('clear-focus')" />
 
       <template v-else>
         <div class="inbox-list-head" v-if="counts[section] || section === 'alerts'">
@@ -94,10 +97,6 @@ export default {
             Nothing has triggered yet. Use <strong>＋ New alert</strong> to set one up for any group of stocks
             (or from a stock's <strong>🔔</strong> tab) — when it triggers, it shows up here and the Inbox tab shows
             how many are unread.
-          </template>
-          <template v-else>
-            No messages yet. Once groups are available, messages from your groups will show up here,
-            and the Inbox tab will show how many are unread.
           </template>
         </div>
         <ul class="inbox-list" v-if="items[section].length">
